@@ -171,7 +171,8 @@ the ACTUAL singing — the instrumental intro is trimmed off and the clean lyric
 the vocals (only the lines the model actually sang). Without one, captions fall back to step times.
 Use --no-captions to skip them. Needs the
 'claude' CLI plus a lyrics-capable music model: the local ACE-Step server (see $DAILIES_ACESTEP_URL)
-or a Gemini key (Lyria). Combine with --prompt to steer the genre.
+or a Gemini key (Lyria). Combine with --prompt to steer the genre — that override is yours to ask
+for; an agent running the session should leave it off and let the theme be drawn.
 
   --song              score the video with a sung song instead of narration (implies --cinematic)
   --prompt "<text>"   steer theme/tone/style in your own words (implies --cinematic);

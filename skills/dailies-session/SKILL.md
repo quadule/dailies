@@ -353,8 +353,11 @@ last-opened tab and binds it to that step in the report. So:
   as you would otherwise; they're the clearest signal of WHY each step matters.
 - Want a music video instead of spoken narration? `session end --song` scores the whole run with
   one AI-generated song whose lyrics are written about the steps, captions timed to the singing
-  (still record with `session start --cinematic` to suppress overlays). Steer it with
-  `--prompt "<genre/vibe>"`; `--no-captions` drops the burned lyric subtitles. Needs the `claude`
+  (still record with `session start --cinematic` to suppress overlays). The random theme is the
+  point, so do NOT pass `--prompt` on your own initiative — omit it and let it draw. Pass
+  `--prompt "<their words>"` only when the user asked for a specific genre or vibe, and pass their
+  words through rather than inventing a theme for them. `--no-captions` drops the burned lyric
+  subtitles. Needs the `claude`
   CLI plus a lyrics-capable music model — a local/remote ACE-Step server (`$DAILIES_ACESTEP_URL`) or
   a Gemini key. Captions are timed to the actual vocals when a transcriber is found on PATH
   (autodetected, English-only: `whisperx` → `mlx_whisper` → whisper.cpp `whisper-cli`; models come
