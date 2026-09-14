@@ -267,6 +267,22 @@ Examples:
 
 Stop the browser and daemon when you're done: \`dailies stop\`.`;
 
+export const CI_LONG_ABOUT = `Pieces a CI pipeline needs, exposed so it does not need a checkout.
+
+The nightly demo workflow is meant to be COPIED into an app repo. Two steps used to import this
+project's TypeScript directly, which only works from a source checkout — these are those steps.
+
+  decide    Should this PR be demoed, and how? Merges .dailies/config.json with the PR body's
+            overrides and asks the agent on the borderline cases. One line of JSON, for \`jq\`.
+  metrics   Render the metric lines for a PR comment, each against the previous demo's value.
+            The same formatter that wrote the marker being compared against, so they cannot drift.
+  previous-metrics
+            Read the last demo comment's metrics back out, to feed in as --previous.
+
+Examples:
+  dailies ci decide --cwd . --body-file pr.md --changed-file changed.txt --head-sha "$SHA"
+  dailies ci metrics --current "$(cat metrics.txt)" --previous "$PREV" --prefix "- "`;
+
 export const INSTALL_LONG_ABOUT = `Install the embedded daemon runtime: Chromium plus the Playwright + QuickJS
 sandbox, into ~/.dailies. Run once before your first session (downloads ~150 MB).`;
 

@@ -433,12 +433,21 @@ function parseComments(raw: string): string[] {
   }
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+// The decision as the CLI exposes it (`dailies ci decide`), reading the same
+// file inputs the direct `tsx src/ci/demo-request.ts` invocation took. Exported
+// so a pipeline outside this repo can reach it through the published binary
+// instead of needing a source checkout.
+export async function runDecide(args: {
+  bodyFile?: string;
+  changedFile?: string;
+  commentsFile?: string;
+  cwd?: string;
+  headSha?: string;
+}): Promise<string> {
   const [body, changed, comments] = await Promise.all([
-    readOrEmpty(args["body-file"]),
-    readOrEmpty(args["changed-file"]),
-    readOrEmpty(args["comments-file"]),
+    readOrEmpty(args.bodyFile),
+    readOrEmpty(args.changedFile),
+    readOrEmpty(args.commentsFile),
   ]);
   const { config } = await loadProject(args.cwd ?? process.cwd());
   const decision = await decideDemoWithAgent({
@@ -446,9 +455,21 @@ async function main(): Promise<void> {
     changedPaths: changed.split(/\r?\n/),
     comments: parseComments(comments),
     config,
-    headSha: args["head-sha"] ?? "",
+    headSha: args.headSha ?? "",
   });
-  process.stdout.write(`${JSON.stringify(decision)}\n`);
+  return JSON.stringify(decision);
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+  const json = await runDecide({
+    bodyFile: args["body-file"],
+    changedFile: args["changed-file"],
+    commentsFile: args["comments-file"],
+    cwd: args.cwd,
+    headSha: args["head-sha"],
+  });
+  process.stdout.write(`${json}\n`);
 }
 
 // Run main only when invoked directly (not when imported by the test).

@@ -11,9 +11,11 @@ const { Command, InvalidArgumentError } = commander as unknown as {
   InvalidArgumentError: typeof commander.InvalidArgumentError;
 };
 
+import { ciDecide, ciMetrics, ciPreviousMetrics } from "./commands/ci.js";
 import { daemonStop } from "./commands/daemon-stop.js";
 import { execScript } from "./commands/exec.js";
 import {
+  CI_LONG_ABOUT,
   CLI_LONG_ABOUT,
   EXEC_LONG_ABOUT,
   EXEC_SCRIPTING_GUIDE,
@@ -128,6 +130,20 @@ interface SessionEndOpts {
   scrubHar?: boolean;
   song?: boolean;
   stopDaemon?: boolean;
+}
+
+interface CiDecideOpts {
+  bodyFile?: string;
+  changedFile?: string;
+  commentsFile?: string;
+  cwd?: string;
+  headSha?: string;
+}
+
+interface CiMetricsOpts {
+  current: string;
+  prefix?: string;
+  previous?: string;
 }
 
 interface ExecOpts {
@@ -426,6 +442,68 @@ export function buildProgram(): CommandType {
         script,
         timeoutMs: (opts.timeout ?? 30) * 1000,
       });
+      throw new ExitCodeError(code);
+    });
+
+  const ci = program
+    .command("ci")
+    .description(
+      "Pieces a CI pipeline needs (decide whether to demo, render metrics)"
+    )
+    .addHelpText("before", `${CI_LONG_ABOUT}\n`);
+
+  ci.command("decide")
+    .description("Decide whether a PR should be demoed, as one line of JSON")
+    .option("--cwd <PATH>", "Repo root to read .dailies/config.json from")
+    .option("--body-file <PATH>", "File holding the PR description")
+    .option(
+      "--changed-file <PATH>",
+      "File holding the changed paths, one per line"
+    )
+    .option(
+      "--comments-file <PATH>",
+      "JSON array of existing PR comment bodies"
+    )
+    .option("--head-sha <SHA>", "The commit being considered")
+    .action(async (opts: CiDecideOpts) => {
+      const code = await ciDecide({
+        bodyFile: opts.bodyFile,
+        changedFile: opts.changedFile,
+        commentsFile: opts.commentsFile,
+        cwd: opts.cwd,
+        headSha: opts.headSha,
+      });
+      throw new ExitCodeError(code);
+    });
+
+  ci.command("metrics")
+    .description(
+      "Render metric lines for a PR comment, compared against the last demo"
+    )
+    .requiredOption("--current <TEXT>", 'This run\'s metrics ("name=value …")')
+    .option("--previous <TEXT>", "The last demo's metrics, for deltas")
+    .option(
+      "--prefix <TEXT>",
+      'Prefix each line (e.g. "- " for a markdown list)',
+      ""
+    )
+    .action((opts: CiMetricsOpts) => {
+      const code = ciMetrics({
+        current: opts.current,
+        previous: opts.previous,
+        prefix: opts.prefix ?? "",
+      });
+      throw new ExitCodeError(code);
+    });
+
+  ci.command("previous-metrics")
+    .description("The metrics from the last demo comment, for --previous")
+    .option(
+      "--comments-file <PATH>",
+      "JSON array of existing PR comment bodies"
+    )
+    .action(async (opts: { commentsFile?: string }) => {
+      const code = await ciPreviousMetrics({ commentsFile: opts.commentsFile });
       throw new ExitCodeError(code);
     });
 

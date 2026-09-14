@@ -81,15 +81,18 @@ jobs:
       matrix: ${{ steps.pick.outputs.matrix }}
       count: ${{ steps.pick.outputs.count }}
     steps:
+      # Checked out for `.dailies/config.json` — the repo's own demo defaults,
+      # which `dailies ci decide` reads from the working directory. An app repo
+      # copying this file has its own. What is NOT needed any more is a pnpm
+      # workspace install: the decision logic is behind the published CLI.
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+
+      # TODO(before launch): pin an exact version here and in the demo job.
+      - name: Install the dailies CLI
+        run: npm install -g dailies-cli
 
       - name: Pick the PRs worth demoing
         id: pick
@@ -134,7 +137,7 @@ jobs:
             # metric comparison still wants the real previous numbers.
             if [ "${FORCE:-false}" = "true" ]; then COMMENTS=/dev/null; fi
 
-            DECISION=$(pnpm --filter dailies-cli exec tsx src/ci/demo-request.ts \
+            DECISION=$(dailies ci decide \
               --head-sha "$SHA" \
               --body-file /tmp/dailies-pick/"$N".body \
               --changed-file /tmp/dailies-pick/"$N".changed \
@@ -146,13 +149,7 @@ jobs:
             if [ "$(echo "$DECISION" | jq -r '.run')" = "true" ]; then
               # `prevMetrics` is the previous demo comment's marker payload —
               # the comment step diffs this run's numbers against it.
-              PREV=$(pnpm --filter dailies-cli exec tsx -e "
-                import { previousMetrics } from './src/ci/demo-request.ts';
-                import { serializeMetrics } from './src/session/metrics.ts';
-                import { readFileSync } from 'node:fs';
-                const c = JSON.parse(readFileSync('$COMMENTS_ALL', 'utf8'));
-                process.stdout.write(serializeMetrics(previousMetrics(c)));
-              " 2>/dev/null || true)
+              PREV=$(dailies ci previous-metrics --comments-file "$COMMENTS_ALL" 2>/dev/null || true)
               MATRIX=$(jq -c --argjson d "$DECISION" --arg n "$N" --arg sha "$SHA" \
                         --arg prev "$PREV" \
                 '. + [{pr: ($n|tonumber), sha: $sha, target: $d.target,
@@ -414,12 +411,8 @@ jobs:
           # Metric lines with a delta against the previous demo comment, e.g.
           # "coverage 42.5 (+3.2 since 39.3)". Rendered by the same tested code
           # that wrote the marker being compared against.
-          METRIC_LINES=$(pnpm --filter dailies-cli exec tsx -e "
-            import { deserializeMetrics, formatMetricLines } from './src/session/metrics.ts';
-            const cur = deserializeMetrics(process.env.METRICS ?? '');
-            const prev = deserializeMetrics(process.env.PREV_METRICS ?? '');
-            process.stdout.write(formatMetricLines(cur, prev).map((l) => '- ' + l).join('\n'));
-          " 2>/dev/null || true)
+          METRIC_LINES=$(dailies ci metrics \
+            --current "${METRICS:-}" --previous "${PREV_METRICS:-}" --prefix "- " 2>/dev/null || true)
 
           BODY=$(mktemp)
           {
