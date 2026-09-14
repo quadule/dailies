@@ -89,6 +89,24 @@ jobs:
       # `npm stage approve <stage-id>` (2FA) or discards it with
       # `npm stage reject <stage-id>`. That human gate is the point — CI can
       # never make a release public on its own.
+      # Temporary: trusted-publishing failures surface as a bare ENEEDAUTH with
+      # no diagnostic (npm/cli#9088), so confirm the preconditions explicitly.
+      - name: Diagnose OIDC preconditions
+        run: |
+          echo "npm:  $(npm --version)   node: $(node --version)"
+          echo "OIDC request URL set:   ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}"
+          echo "OIDC request token set: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}"
+          echo "registry:   $(npm config get registry)"
+          echo "userconfig: $(npm config get userconfig)"
+          for f in "$(npm config get userconfig)" "$HOME/.npmrc" ./.npmrc; do
+            if [ -f "$f" ]; then
+              echo "## $f"
+              sed 's/\(_authToken=\).*/\1<redacted>/' "$f"
+            else
+              echo "## $f (absent)"
+            fi
+          done
+
       - name: Stage the release on npm (trusted publishing, no token)
         run: npm stage publish --access public --provenance
         working-directory: apps/dailies
