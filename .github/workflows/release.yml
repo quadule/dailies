@@ -68,15 +68,30 @@ jobs:
       # deps and no `workspace:*`, so pnpm's rewriting has nothing to do and
       # plain `npm publish` from the package dir is equivalent.
       #
-      # npm's bundled version on Node 22 is 10.x; trusted publishing needs
-      # >= 11.5.1, so upgrade it first. Pinned to the 11.x line rather than
-      # `@latest` so a new npm major cannot silently change release behavior.
+      # npm's bundled version on Node 22 is 10.x. Trusted publishing needs
+      # >= 11.5.1 and STAGED publishing >= 11.15.0, so the higher floor wins.
+      # Pinned to the 11.x line rather than `@latest` so a new npm major cannot
+      # silently change release behavior.
       #
       # apps/dailies/LICENSE is materialized by `pnpm build` above (npm, unlike
       # pnpm, will not copy the workspace-root LICENSE into the tarball).
       - name: Upgrade npm for trusted publishing
-        run: npm install -g npm@^11.5.1
+        run: npm install -g npm@^11.15.0
 
-      - name: Publish to npm (trusted publishing, no token)
-        run: npm publish --access public
+      # STAGED, not live: the trusted publisher is configured to allow
+      # `npm stage publish` only, so this uploads the tarball to npm in a
+      # non-public holding state. A maintainer then promotes it with
+      # `npm stage approve <stage-id>` (2FA) or discards it with
+      # `npm stage reject <stage-id>`. That human gate is the point — CI can
+      # never make a release public on its own.
+      - name: Stage the release on npm (trusted publishing, no token)
+        run: npm stage publish --access public --provenance
         working-directory: apps/dailies
+
+      - name: Where to find the staged release
+        run: |
+          echo "Staged. Review and promote it with:"
+          echo "  npm stage list dailies-cli"
+          echo "  npm stage view <stage-id>"
+          echo "  npm stage approve <stage-id>   # 2FA — makes it public"
+          echo "  npm stage reject <stage-id>    # discards it"

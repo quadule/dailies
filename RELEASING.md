@@ -30,6 +30,10 @@ binary on your PATH. Everything else is private: bundled or embedded into it.
    | Repository | `dailies` |
    | Workflow filename | `release.yml` (filename only, not a path) |
    | Environment | *(leave blank)* |
+   | Allowed actions | **`npm stage publish` only** |
+
+   Stage-only is deliberate: CI can upload a release but cannot make it public. A maintainer
+   promotes it with 2FA, so a compromised workflow still can't ship to users.
 
    Note the bootstrapping order: a trusted publisher attaches to a package that already
    exists, so the **first** publish of any new package needs a token with write access to
@@ -80,14 +84,32 @@ gh workflow run release.yml -f version=0.2.0
 
 (or run **Release** from the Actions tab and type the version). The workflow refuses to continue
 unless the version you typed matches the workspace version, then runs `pnpm build` (topo-ordered)
-and publishes with `npm publish` from `apps/dailies`.
+and runs `npm stage publish` from `apps/dailies`. That does **not** make the release public —
+see *Promoting a staged release* below.
 
 Publishing uses **npm**, not `pnpm -r publish`, because OIDC landed natively in pnpm 10 and this
 repo is pinned to pnpm 9.15 (pnpm 10 stopped running dependency build scripts by default, which
 esbuild/sharp/Playwright need). With a single public package that has zero runtime deps and no
 `workspace:*`, pnpm's rewriting has nothing to do, so the two are equivalent here. The workflow
-upgrades npm to the 11.x line first — trusted publishing needs npm >= 11.5.1 and Node >= 22.14,
-and Node 22 ships npm 10.x.
+upgrades npm to the 11.x line first — trusted publishing needs npm >= 11.5.1, staged publishing
+needs >= 11.15.0, and Node 22 ships npm 10.x. Node must be >= 22.14.
+
+## Promoting a staged release
+
+The workflow leaves the version staged: uploaded to npm, not installable. Promote it yourself:
+
+```bash
+npm stage list dailies-cli      # find the stage id
+npm stage view <stage-id>       # inspect what CI built
+npm stage download <stage-id>   # or pull the tarball and look inside
+npm stage approve <stage-id>    # 2FA prompt — this is what makes it public
+npm stage reject <stage-id>     # discard it instead
+```
+
+Staging needs no 2FA; approving does. Staged versions occupy the same version-uniqueness index as
+published ones, so a staged 1.2.3 blocks publishing 1.2.3 while it sits there. npm's docs don't say
+whether rejecting frees the number again — assume it may not, and move to the next patch rather
+than fighting it.
 
 One consequence worth knowing: `pnpm publish` used to copy the workspace-root `LICENSE` into the
 tarball for free. `npm publish` does not — it only includes a `LICENSE` in the package directory,
