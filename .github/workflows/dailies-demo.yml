@@ -1,10 +1,17 @@
 # Dailies demo — nightly video demos of pull requests.
 #
-# Label a PR `dailies` and this records a browser demo of the change, finalizes
-# it as a cinematic cut, and posts it back to the PR. It runs on a nightly
-# schedule and only demos a PR whose head has actually moved since its last demo
-# and whose changed files look user-facing, so a labeled PR that sat untouched
-# overnight costs nothing.
+# Records a browser demo of a pull request, finalizes it as a cinematic cut, and
+# posts it back to the PR. Two ways in:
+#
+#   NIGHTLY   label a PR `dailies` and the scheduled run picks it up. It only
+#             demos a PR whose head has moved since its last demo and whose
+#             changed files look user-facing, so a labeled PR that sat untouched
+#             overnight costs nothing.
+#   ON DEMAND comment `/dailies` on the PR. Anything after it is direction for
+#             this run — "/dailies record the vendor payment flow" — and beats
+#             the flow the decide step would have chosen. Markers work too, so
+#             "/dailies dailies-theme: noir detective" re-themes a single cut.
+#             Restricted to commenters who already have write access.
 #
 # This is meant to be COPIED into an app repo, not just used here. What it needs
 # from that repo:
@@ -61,9 +68,12 @@ on:
         required: false
         type: boolean
         default: false
-  # Demo as soon as the label goes on, rather than waiting for the nightly run.
-  pull_request:
-    types: [labeled]
+  # On demand: comment `/dailies` on a pull request. Anything after it is
+  # direction for the run — "/dailies record the vendor payment flow", or a
+  # `dailies-theme:` marker. The nightly sweep still goes by the `dailies`
+  # LABEL; this is the "do it now, and here is what I want" path.
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -75,7 +85,17 @@ jobs:
     # discovery step itself (they get a read-only token and no secrets, so they
     # can neither run the agent nor comment) — and a fork's `.dailies/` would be
     # untrusted input that becomes agent instructions.
-    if: github.event_name != 'pull_request' || github.event.label.name == 'dailies'
+    # A comment trigger is a write-privileged action taken by whoever typed it,
+    # so it is gated three ways: it must be a PR (issue_comment fires on plain
+    # issues too), the comment must start with `/dailies`, and the author must
+    # already have write access. Without the last one, anyone who can comment
+    # could spend our agent budget and run a browser against our app.
+    if: >-
+      github.event_name != 'issue_comment' || (
+        github.event.issue.pull_request &&
+        startsWith(github.event.comment.body, '/dailies') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      )
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.pick.outputs.matrix }}
@@ -103,20 +123,41 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
-          LABEL_PR: ${{ github.event.pull_request.number }}
+          COMMENT_PR: ${{ github.event.issue.number }}
+          # Through the environment, never interpolated into the script: a
+          # comment body is attacker-controlled text and `${{ }}` inside `run:`
+          # is a shell injection.
+          COMMENT_BODY: ${{ github.event.comment.body }}
           INPUT_PR: ${{ inputs.pr }}
           FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" = "pull_request" ]; then
-            NUMBERS="$LABEL_PR"
+          mkdir -p /tmp/dailies-pick
+          ASK=""
+          if [ "$EVENT" = "issue_comment" ]; then
+            NUMBERS="$COMMENT_PR"
+            # Everything after `/dailies` is the human's direction for this run.
+            # Kept as a file for the same reason as the PR body: it reaches the
+            # agent as data, not as part of a command line.
+            # Strip the `/dailies` trigger, then drop marker lines: those are
+            # settings (theme, target), not a description of a flow to drive.
+            # They still reach the decision through the body file below, so
+            # "/dailies dailies-theme: noir" re-themes without also becoming the
+            # thing the agent tries to record.
+            printf '%s' "${COMMENT_BODY:-}" \
+              | sed '1s|^[[:space:]]*/dailies[[:space:]]*||' \
+              | sed -E '/^[[:space:]]*(dailies-url|dailies-target|dailies-theme|dailies-prompt|demo url|demo target|theme)[[:space:]]*:/Id' \
+              | sed -e '/./,$!d' > /tmp/dailies-pick/ask.txt
+            if [ -s /tmp/dailies-pick/ask.txt ] && grep -q '[^[:space:]]' /tmp/dailies-pick/ask.txt; then
+              ASK="$(cat /tmp/dailies-pick/ask.txt)"
+              echo "Asked for: $ASK"
+            fi
           elif [ -n "${INPUT_PR:-}" ]; then
             NUMBERS="$INPUT_PR"
           else
             NUMBERS=$(gh pr list --label dailies --state open --json number -q '.[].number')
           fi
 
-          mkdir -p /tmp/dailies-pick
           MATRIX='[]'
           for N in $NUMBERS; do
             META="/tmp/dailies-pick/$N.json"
@@ -128,7 +169,14 @@ jobs:
             fi
 
             SHA=$(jq -r '.headRefOid' "$META")
-            jq -r '.body // ""' "$META" > /tmp/dailies-pick/"$N".body
+            # The comment goes FIRST: markerValue takes the first match, so an
+            # explicit `dailies-theme:` in the comment beats a stale one in the
+            # PR description.
+            : > /tmp/dailies-pick/"$N".body
+            if [ -n "$ASK" ]; then
+              printf '%s\n\n' "$ASK" >> /tmp/dailies-pick/"$N".body
+            fi
+            jq -r '.body // ""' "$META" >> /tmp/dailies-pick/"$N".body
             # A JSON array of comment bodies — what --comments-file expects.
             jq '[.comments[].body]' "$META" > /tmp/dailies-pick/"$N".comments
             gh pr diff "$N" --name-only > /tmp/dailies-pick/"$N".changed || true
@@ -156,9 +204,11 @@ jobs:
               PREV=$(dailies ci previous-metrics --comments-file "$COMMENTS_ALL" 2>/dev/null || true)
               MATRIX=$(jq -c --argjson d "$DECISION" --arg n "$N" --arg sha "$SHA" \
                         --arg prev "$PREV" \
+                        --arg ask "$ASK" \
                 '. + [{pr: ($n|tonumber), sha: $sha, target: $d.target,
                        cinematic: $d.cinematic, prompt: ($d.prompt // ""),
-                       flow: ($d.flow // ""), prevMetrics: $prev}]' <<<"$MATRIX")
+                       flow: (if $ask != "" then $ask else ($d.flow // "") end),
+                       prevMetrics: $prev}]' <<<"$MATRIX")
             fi
           done
 
@@ -167,14 +217,15 @@ jobs:
           echo "matrix=$(jq -c '{include: .}' <<<"$MATRIX")" >> "$GITHUB_OUTPUT"
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
 
-      - name: Explain a label with nothing to demo
-        # Only on the label event: a nightly no-op should stay silent rather than
-        # commenting on every labeled PR every night.
-        if: github.event_name == 'pull_request' && steps.pick.outputs.count == '0'
+      - name: Answer a request with nothing to demo
+        # Only when someone asked directly. A nightly no-op stays silent rather
+        # than commenting on every labeled PR every night.
+        if: github.event_name == 'issue_comment' && steps.pick.outputs.count == '0'
         env:
           GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
         run: |
-          gh pr comment "${{ github.event.pull_request.number }}" --body \
+          gh pr comment "$PR" --body \
             "🎬 **Dailies**: nothing to demo yet. I need a target — set \`url\` in \`.dailies/config.json\`, or add \`dailies-url: <url>\` to this PR's description. If the target is set, this PR's changed files don't match \`demo.paths\`. See the run log for the exact reason."
 
   demo:
