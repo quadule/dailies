@@ -1119,6 +1119,56 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
       expect(result.scoped).not.toContain("NAVLINK_UNIQUE");
     });
 
+    it("reports snapshot size and hints only when the page is large", async () => {
+      // One <li> is ~40 chars of outline, so 2000 of them clears the 40k
+      // threshold comfortably while the small page stays far under it.
+      const bigHtml = `<main><h1>BigHeading</h1><ul>${Array.from(
+        { length: 2000 },
+        (_, i) => `<li>List entry number ${i}</li>`
+      ).join("")}</ul></main>`;
+
+      const result = await harness.runJson<{
+        smallChars: number;
+        smallHint?: string;
+        bigChars: number;
+        bigHint?: string;
+        trackedHint?: string;
+        bigFull: string;
+      }>(`
+        const page = await browser.getPage("snapshot-size-hint");
+        await page.setContent("<main><h1>SmallHeading</h1></main>", { waitUntil: "load" });
+        const small = await page.snapshotForAI();
+        await page.setContent(${JSON.stringify(bigHtml)}, { waitUntil: "load" });
+        const big = await page.snapshotForAI();
+        const tracked = await page.snapshotForAI({ track: "size-hint" });
+        console.log(JSON.stringify({
+          smallChars: small.chars,
+          smallHint: small.hint,
+          bigChars: big.chars,
+          bigHint: big.hint,
+          trackedHint: tracked.hint,
+          bigFull: big.full,
+        }));
+      `);
+
+      // `chars` is always the real size of `full`.
+      expect(result.bigChars).toBe(result.bigFull.length);
+      expect(result.smallChars).toBeLessThan(40_000);
+      expect(result.bigChars).toBeGreaterThanOrEqual(40_000);
+
+      // A small page gets no nag; a large one names the cheaper next look.
+      expect(result.smallHint).toBeUndefined();
+      expect(result.bigHint).toContain(String(result.bigChars));
+      expect(result.bigHint).toContain("track");
+
+      // The hint's advice IS `track`, so a tracked call never repeats it.
+      expect(result.trackedHint).toBeUndefined();
+
+      // Critically, the hint is not appended to `full` — an unchanged tracked
+      // diff must stay empty for emptiness to prove "nothing changed".
+      expect(result.bigFull).not.toContain("don't truncate it");
+    });
+
     it("returns an incremental diff when tracking across snapshots", async () => {
       const baselineHtml = `<main><h1>TrackHeading</h1><ul>${Array.from(
         { length: 40 },

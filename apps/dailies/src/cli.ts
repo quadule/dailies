@@ -56,6 +56,61 @@ function isJson(program: CommandType): boolean {
   return program.opts<{ json?: boolean }>().json === true;
 }
 
+// "session end", not "end" — the agent has to retype the whole path.
+function commandPath(cmd: CommandType): string {
+  const parts: string[] = [];
+  for (
+    let c: CommandType | null = cmd;
+    c?.parent;
+    c = c.parent as CommandType | null
+  ) {
+    parts.unshift(c.name());
+  }
+  return parts.join(" ");
+}
+
+// Walk the leading non-flag tokens down the command tree to find the command
+// the user actually invoked. Stops at the first token that isn't a subcommand,
+// so a positional argument (`session end <id>`) ends the walk rather than
+// derailing it.
+function resolveCommand(
+  program: CommandType,
+  args: readonly string[]
+): CommandType {
+  let cmd = program;
+  for (const token of args) {
+    if (token.startsWith("-")) {
+      break;
+    }
+    const sub = (cmd.commands as CommandType[]).find(
+      (c) => c.name() === token || c.aliases().includes(token)
+    );
+    if (!sub) {
+      break;
+    }
+    cmd = sub;
+  }
+  return cmd;
+}
+
+// An unknown flag is a two-turn correction by default: commander names the bad
+// flag, the agent runs `--help` to find the right one, and that help runs to
+// ~150 lines on `session end`. Fold the answer into the error so it corrects in
+// one turn. Flag names only — the full help is still there for the prose.
+function unknownFlagHelp(program: CommandType, cmd: CommandType): string {
+  const own = cmd.options.map((o) => o.flags.split(/[ ,]/)[0]);
+  // Root options parse in any position, so they're valid on every command —
+  // read them off the program rather than hardcoding a list that goes stale.
+  const globals =
+    cmd === program ? [] : program.options.map((o) => o.flags.split(/[ ,]/)[0]);
+  const path = commandPath(cmd) || cmd.name();
+  const globalNote =
+    globals.length > 0
+      ? ` (${[...globals, "--help"].join(", ")} valid on any command)`
+      : "";
+  return `help: valid flags for \`${path}\`: ${own.join(", ") || "(none)"}${globalNote}\n`;
+}
+
 // Map the --pass / --fail[reason] flags to a run verdict, or undefined when the
 // agent declared neither (then the report falls back to the per-step tally).
 // commander gives `fail` as `true` (bare --fail) or the reason string.
@@ -563,6 +618,38 @@ export function buildProgram(): CommandType {
   return program;
 }
 
+// Map a thrown CommanderError to an exit code, or undefined when the error
+// isn't commander's to explain. Commander has already written its own message
+// to stderr by the time it throws; this only adds what that message lacks.
+function exitCodeForCommanderError(
+  err: unknown,
+  program: CommandType,
+  argv: readonly string[]
+): number | undefined {
+  if (!(err && typeof err === "object" && "code" in err)) {
+    return;
+  }
+  const code = (err as { code?: string }).code;
+  if (typeof code !== "string" || !code.startsWith("commander.")) {
+    return;
+  }
+  if (
+    code === "commander.helpDisplayed" ||
+    code === "commander.help" ||
+    code === "commander.version"
+  ) {
+    return 0;
+  }
+  if (code === "commander.unknownOption") {
+    // Commander named the bad flag; add the valid set so the agent doesn't
+    // need a second call to find the right one.
+    process.stderr.write(
+      unknownFlagHelp(program, resolveCommand(program, argv.slice(2)))
+    );
+  }
+  return 2;
+}
+
 export async function execute(argv: readonly string[]): Promise<number> {
   const program = buildProgram();
   try {
@@ -572,17 +659,9 @@ export async function execute(argv: readonly string[]): Promise<number> {
     if (err instanceof ExitCodeError) {
       return err.code;
     }
-    if (err && typeof err === "object" && "code" in err) {
-      const code = (err as { code?: string }).code;
-      if (code === "commander.helpDisplayed" || code === "commander.help") {
-        return 0;
-      }
-      if (code === "commander.version") {
-        return 0;
-      }
-      if (typeof code === "string" && code.startsWith("commander.")) {
-        return 2;
-      }
+    const commanderCode = exitCodeForCommanderError(err, program, argv);
+    if (commanderCode !== undefined) {
+      return commanderCode;
     }
     logger.debug({ err }, "command failed");
     const message = err instanceof Error ? err.message : String(err);

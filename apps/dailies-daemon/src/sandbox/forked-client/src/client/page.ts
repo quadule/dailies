@@ -1141,7 +1141,12 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
       depth?: number;
       selector?: string;
     } = {}
-  ): Promise<{ full: string; incremental?: string }> {
+  ): Promise<{
+    full: string;
+    incremental?: string;
+    chars: number;
+    hint?: string;
+  }> {
     // Page.snapshotForAI was merged into Frame.ariaSnapshot(mode:"ai") in Playwright 1.60.
     // `selector` scopes the tree to one element (e.g. "main" to drop repeated
     // nav/sidebar chrome); `track` returns only what changed since the last
@@ -1159,13 +1164,29 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
       selector: options.selector,
       timeout: this._timeoutSettings.timeout(options),
     });
+    // A whole-page outline is the single most expensive thing a script can log
+    // — real pages measure 57k-133k chars — and nothing in the result told the
+    // agent that. `chars` always reports the size; `hint` names the cheaper
+    // next observation, but only once the page is actually big enough to care.
+    // Deliberately NOT appended to `full`: an unchanged `{ track }` diff is
+    // empty, and that emptiness is the proof the last interaction did nothing.
+    // 40k sits above a typical content page's chrome and below a dense app
+    // screen: quiet on small pages, fires where the cost is real.
+    const LARGE_SNAPSHOT_CHARS = 40_000;
+    const chars = snapshot.length;
+    // Suppress on tracked calls — the hint's advice is `track`, and the caller
+    // is already taking it.
+    const hint =
+      !options.track && chars >= LARGE_SNAPSHOT_CHARS
+        ? `snapshot is ${chars} chars. Read this one whole — don't truncate it. For a targeted re-check, \`locator.ariaSnapshot()\` scoped to one section/dialog costs a fraction of this. After an interaction, \`page.snapshotForAI({ track: "main" })\` returns just the diff — but its FIRST call with a new key re-reads the whole tree to set a baseline, so it only pays off from the second call on.`
+        : undefined;
     // The server returns a single string: with `track` it folds in the diff
     // once a baseline exists (the first tracked call returns the full tree to
     // establish it). Surface that string under `incremental` too so both
     // documented access patterns resolve to the server's chosen view.
     return options.track
-      ? { full: snapshot, incremental: snapshot }
-      : { full: snapshot };
+      ? { full: snapshot, incremental: snapshot, chars }
+      : { full: snapshot, chars, ...(hint ? { hint } : {}) };
   }
 
   async _setDockTile(image: Buffer) {
