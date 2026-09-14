@@ -16,14 +16,27 @@ binary on your PATH. Everything else is private: bundled or embedded into it.
 
 ## Prerequisites (one-time)
 
-1. **`NPM_TOKEN`** — an npm automation token with publish rights. Two places need it, and
-   they're independent:
-   - **The release workflow** (the normal path) reads it as a GitHub repo secret. As of
-     2026-09-14 the repo has only `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`, so CI cannot
-     publish until the secret is added.
-   - **Publishing locally** (escape hatch) needs it in your shell. Keep it in 1Password and
-     inject it per-command with `op run --env-file=…` rather than writing it to `~/.npmrc` —
-     a token in a dotfile outlives the command that needed it.
+1. **Trusted publishing (no token).** The release workflow authenticates to npm with
+   OIDC — there is no `NPM_TOKEN` secret, and there should not be one. GitHub mints a
+   short-lived token (`id-token: write`), npm checks it against the trusted publisher
+   configured on the package, and provenance is attested automatically.
+
+   Configured once on npmjs.com → `dailies-cli` → Settings → Trusted Publisher:
+
+   | Field | Value |
+   | --- | --- |
+   | Provider | GitHub Actions |
+   | Organization or user | `quadule` |
+   | Repository | `dailies` |
+   | Workflow filename | `release.yml` (filename only, not a path) |
+   | Environment | *(leave blank)* |
+
+   Note the bootstrapping order: a trusted publisher attaches to a package that already
+   exists, so the **first** publish of any new package needs a token with write access to
+   *all* packages — a granular token scoped to selected packages cannot name one that has
+   never been published, and fails with a misleading
+   `E403 … You may not perform that action with these credentials`. `dailies-cli` is past
+   that point; a future *new* package would hit it again.
 2. **The `dailies-cli` name** — unclaimed as of 2026-09-14. Note that the bare `dailies` name is
    taken by an unrelated package, so the first publish also tests npm's name-similarity check.
 3. **Provenance** — the release workflow sets `id-token: write` so npm records build provenance;
@@ -67,8 +80,19 @@ gh workflow run release.yml -f version=0.2.0
 
 (or run **Release** from the Actions tab and type the version). The workflow refuses to continue
 unless the version you typed matches the workspace version, then runs `pnpm build` (topo-ordered)
-and `pnpm -r publish --access public --provenance`. `pnpm -r publish` automatically skips private
-packages and rewrites `workspace:*` to the concrete version.
+and publishes with `npm publish` from `apps/dailies`.
+
+Publishing uses **npm**, not `pnpm -r publish`, because OIDC landed natively in pnpm 10 and this
+repo is pinned to pnpm 9.15 (pnpm 10 stopped running dependency build scripts by default, which
+esbuild/sharp/Playwright need). With a single public package that has zero runtime deps and no
+`workspace:*`, pnpm's rewriting has nothing to do, so the two are equivalent here. The workflow
+upgrades npm to the 11.x line first — trusted publishing needs npm >= 11.5.1 and Node >= 22.14,
+and Node 22 ships npm 10.x.
+
+One consequence worth knowing: `pnpm publish` used to copy the workspace-root `LICENSE` into the
+tarball for free. `npm publish` does not — it only includes a `LICENSE` in the package directory,
+and skips a symlinked one. `apps/dailies/scripts/build.mjs` therefore copies it in at build time
+(gitignored). If the published tarball ever loses `LICENSE`, that copy is why.
 
 ## How updates reach agents
 

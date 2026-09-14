@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmod, mkdir, readFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 // Build entry: bundles src/cli.ts into dist/cli.js with esbuild.
@@ -48,3 +48,11 @@ const esm = build({
 
 await esm;
 await chmod(resolve(dist, "cli.js"), 0o755);
+
+// The published tarball must carry the MIT notice and its Canary/Sawyer Hood
+// provenance. `pnpm publish` used to copy the workspace-root LICENSE in for
+// free; `npm publish` does not — it only picks up a LICENSE sitting in the
+// package directory, and it skips a symlinked one. So materialize it here
+// (gitignored, like the embedded daemon asset) rather than committing a second
+// copy that can drift from the root one.
+await copyFile(resolve(root, "..", "..", "LICENSE"), resolve(root, "LICENSE"));
