@@ -31,11 +31,16 @@ jobs:
         with:
           version: 9.15.0
 
+      # NB: deliberately NO `registry-url:` here. setup-node would write an
+      # .npmrc containing `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`,
+      # and with trusted publishing there is no NODE_AUTH_TOKEN — so npm sends
+      # an EMPTY token and the registry rejects the write with E401 instead of
+      # npm falling back to OIDC. (Provenance still signs fine, which makes the
+      # failure look unrelated to auth.) npm defaults to registry.npmjs.org.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-          registry-url: "https://registry.npmjs.org"
 
       - run: pnpm install --frozen-lockfile
 
