@@ -1,6 +1,6 @@
 {
   "name": "dailies",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "type": "module",
   "description": "Watchable proof your change works: an agent drives a real browser and hands back a narrated demo video, the full evidence (trace, video, HAR, console), and a replayable Playwright script.",

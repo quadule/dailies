@@ -1,6 +1,6 @@
 {
   "name": "dailies-daemon",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "type": "module",
   "description": "Dailies daemon — long-running Playwright host with QuickJS sandbox. Embedded into the dailies CLI at build time.",
