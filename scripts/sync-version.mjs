@@ -12,9 +12,13 @@
 // lockstep means `pnpm publish`'s workspace:* -> semver rewrite never pins a
 // stale internal version — and plugin marketplaces (which compare manifest
 // versions to detect updates) always see the new release.
+import { execFile } from "node:child_process";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const version = process.argv[2];
@@ -32,8 +36,42 @@ async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
+// Every JSON manifest this run rewrote, so they can be handed to the repo's
+// formatter at the end (see formatJson below).
+const rewrittenJson = [];
+
 async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
+  rewrittenJson.push(path);
+}
+
+// JSON.stringify's 2-space output is not Biome's: Biome collapses short arrays
+// onto one line, so a plain rewrite leaves files that `pnpm check` then fails
+// on — which used to mean every release needed a manual `pnpm format` wedged
+// between sync-version and the release commit. Rather than reimplement Biome's
+// rules here (and re-break whenever they change), hand the files it wrote to
+// the formatter the repo already configures.
+//
+// Best-effort: a checkout with no node_modules yet should still be able to set
+// versions, so a missing/failing formatter warns instead of failing the sync.
+async function formatJson(paths) {
+  if (paths.length === 0) {
+    return;
+  }
+  try {
+    await execFileAsync(
+      "pnpm",
+      ["exec", "biome", "format", "--write", ...paths],
+      {
+        cwd: root,
+      }
+    );
+  } catch (error) {
+    process.stderr.write(
+      `sync-version: could not format the rewritten manifests (${error.message.split("\n")[0]}).\n` +
+        "sync-version: versions were written — run `pnpm format` before committing.\n"
+    );
+  }
 }
 
 async function packageJsonPaths() {
@@ -157,5 +195,7 @@ try {
 } catch {
   // no skills directory
 }
+
+await formatJson(rewrittenJson);
 
 process.stdout.write(`sync-version: wrote ${version} to ${updated} files\n`);
