@@ -76,14 +76,14 @@ to watch, the evidence behind it, and the exact Playwright script that produced 
 ## Get started
 
 ```bash
-npm i -g dailies-cli dailies-ui   # puts `dailies` + `dailies-viewer` on your PATH
+npm i -g dailies-cli                     # puts `dailies` on your PATH
 dailies install                          # one-time: Chromium + the runtime into ~/.dailies (~150 MB)
 ```
 
-…or run the guided wizard, which offers to install all of the above for you:
+…or run the guided setup, which offers to install all of the above for you:
 
 ```bash
-npm create dailies@latest                # guided setup (Ink wizard)
+npx dailies-cli init                     # guided setup
 ```
 
 Record a session and open the report:
@@ -94,7 +94,7 @@ dailies run ./open.js   --session "$id" --step open
 dailies run ./submit.js --session "$id" --step submit
 dailies session end "$id"                # -> ~/.dailies/sessions/<id>/report.html
 
-dailies-viewer                           # browse every recorded session
+dailies session list                     # every recorded session
 dailies stop                             # shut the background daemon down when you're done
 ```
 
@@ -118,7 +118,7 @@ EOF
 ```
 
 > Prefer not to install? Every command also runs one-off via npx, e.g.
-> `npx dailies-cli session start …` and `npx dailies-ui`.
+> `npx dailies-cli session start …`.
 
 ## Everything your agent does, on the record
 
@@ -396,7 +396,6 @@ this package deliberately ships no runtime dependencies. It would slot in behind
 | ------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------- |
 | **CLI** `dailies-cli`        | `dailies`                           | Record capture-enabled QA sessions and render reports. The main, user-facing tool. |
 | **Engine** `dailies-browser` | `dailies-browser`                   | Drive a browser for quick, one-off automation — no recording, no report.           |
-| **Viewer** `dailies-ui`      | `dailies-viewer` · `npx dailies-ui` | Browse, search, organize, and replay every recorded session locally.            |
 
 Both CLIs share one background daemon (Playwright + a QuickJS sandbox) that starts automatically when
 needed. Stop it anytime with **`dailies stop`** (alias: `dailies daemon stop`, or `dailies-browser stop`) —
@@ -500,8 +499,8 @@ the `dailies-scripting` skill and its `references/REFERENCE.md` carry the full A
 Already installed? Grab the latest CLIs from npm, then refresh the runtime:
 
 ```bash
-npm i -g dailies-cli@latest dailies-ui@latest   # update dailies + dailies-viewer
-dailies install                                        # refresh the runtime (Chromium + Playwright)
+npm i -g dailies-cli@latest                     # update dailies
+dailies install                                 # refresh the runtime (Chromium + Playwright)
 ```
 
 `dailies install` is safe to re-run — it pulls the browser/runtime versions the new CLI pins. Running
@@ -535,9 +534,7 @@ dailies/
 ├── apps/
 │   ├── dailies/             # dailies-cli      bin: dailies          — session orchestrator (record QA sessions, render reports)
 │   ├── dailies-browser/     # dailies-browser  bin: dailies-browser  — browser-automation engine (one-off runs)
-│   ├── dailies-daemon/      # dailies-daemon   no bin               — Playwright + QuickJS runtime (embedded into the CLIs)
-│   ├── dailies-ui/          # dailies-ui       bin: dailies-viewer   — local session viewer (Astro); `dailies-viewer`
-│   └── create-dailies/      # create-dailies    bin: create-dailies   — `npm create dailies` setup wizard (Ink)
+│   └── dailies-daemon/      # dailies-daemon   no bin               — Playwright + QuickJS runtime (embedded into the CLIs)
 ├── packages/
 │   ├── protocol/           # dailies-protocol         IPC schemas (Zod), single source of truth
 │   ├── config/             # dailies-config           shared tsconfig bases
@@ -557,8 +554,7 @@ dailies/
 ```
 
 `dailies` (the orchestrator) and `dailies-browser` (the engine) both embed and supervise
-`dailies-daemon` (the long-running Playwright host). The viewer ships standalone — `dailies-viewer`
-(or one-off via `npx dailies-ui`).
+`dailies-daemon` (the long-running Playwright host).
 
 </details>
 

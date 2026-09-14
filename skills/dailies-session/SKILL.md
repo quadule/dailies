@@ -3,10 +3,7 @@ name: dailies-session
 description: Record a verifiable QA session with Dailies — explore a flow step by step against one persistent browser, each script a recorded step that captures a Playwright trace, video, network HAR, and console, then render a self-contained report.html. Use when the user wants to verify or QA a flow, produce evidence or a report, or capture a trace/video of a browser run. Trigger phrases — "record a session", "QA this flow", "verify the checkout", "capture a trace", "give me a report of this run".
 allowed-tools:
   - Bash(dailies:*)
-  - Bash(dailies-browser:*)
   - Bash(npx dailies-cli:*)
-  - Bash(npx dailies-browser:*)
-  - Bash(npx dailies-ui:*)
 license: MIT
 metadata:
   author: dailies
@@ -158,7 +155,7 @@ One session, small steps that reproduce it, `session end` — the report bundles
 8. End + render, declaring your verdict: `npx dailies-cli session end "$id" --pass` (or
    `--fail "<reason>"`) → `~/.dailies/sessions/<id>/report.html`. Your verdict sets the report's
    PASS/FAIL; a recovered/retried step failure stays as evidence but won't fail the run.
-9. Offer **dailies-review** (or `npx dailies-ui`) to browse it.
+9. Report the `report.html` path and the video path so the user can open them.
 10. Done? Leave the daemon running for the next session, or `npx dailies-cli stop` to shut it
     (and every browser) down — or pass `--stop-daemon` to step 8 (`session end --stop-daemon`).
 

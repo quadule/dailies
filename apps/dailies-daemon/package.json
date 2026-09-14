@@ -3,7 +3,7 @@
   "version": "0.4.4",
   "private": true,
   "type": "module",
-  "description": "Dailies daemon — long-running Playwright host with QuickJS sandbox. Embedded into dailies-browser at build time.",
+  "description": "Dailies daemon — long-running Playwright host with QuickJS sandbox. Embedded into the dailies CLI at build time.",
   "license": "MIT",
   "scripts": {
     "build": "pnpm bundle && pnpm bundle:sandbox-client",

@@ -1,11 +1,11 @@
-// Shared scripting-help prose for the `dailies` and `dailies-browser` CLIs.
+// Shared scripting-help prose for the `dailies` CLI's two script-running modes.
 // The factual content (sandbox rules, script API, workflow rules, shared
 // example bodies) is single-sourced from docs/snippets/ via the generated
 // ./snippets.generated.ts module (`make docs` re-stitches it), so it cannot
 // drift between the CLIs' --help, the agent skills, and the README. This file
 // is the presentation layer: headings, indentation, and the example-bearing
-// guide parameterized only by how each CLI is invoked (a heredoc to
-// `dailies-browser` vs `dailies run --session … --step …`).
+// guide parameterized only by how the script is invoked (a heredoc to
+// `dailies exec` vs `dailies run --session … --step …`).
 import {
   API_BROWSER,
   API_CONSOLE,
@@ -67,11 +67,11 @@ export type ExampleWrapper = (
   opts?: ExampleOptions
 ) => string;
 
-// dailies-browser: heredoc straight to the engine; `--connect` when the example
-// targets an already-running Chrome.
-export const browserExample: ExampleWrapper = (scriptBody, opts) =>
+// `dailies exec`: heredoc straight to the daemon, unrecorded; `--connect` when
+// the example targets an already-running Chrome.
+export const execExample: ExampleWrapper = (scriptBody, opts) =>
   [
-    `dailies-browser${opts?.connect === true ? " --connect" : ""} <<'EOF'`,
+    `dailies exec${opts?.connect === true ? " --connect" : ""} <<'EOF'`,
     scriptBody,
     "EOF",
   ].join("\n");
@@ -85,13 +85,13 @@ export const sessionExample: ExampleWrapper = (scriptBody, opts) =>
   ].join("\n");
 
 export interface ScriptingGuideOptions {
-  // Include dailies-browser-only material (PowerShell --connect piping, the
-  // "Connecting to a running Chrome instance" section, --browser/--connect/
-  // --headless tips). Must stay out of dailies's help. Default false.
-  browserExtras?: boolean;
   // How examples are invoked for this CLI.
   example: ExampleWrapper;
-  // Section heading: "LLM USAGE GUIDE:" (dailies-browser) / "SCRIPTING GUIDE:" (dailies).
+  // Include exec-only material (PowerShell --connect piping, the "Connecting to
+  // a running Chrome instance" section, --browser/--connect/--headless tips).
+  // Must stay out of `dailies run`'s help, which has no such flags. Default false.
+  execExtras?: boolean;
+  // Section heading, e.g. "SCRIPTING GUIDE:".
   heading: string;
 }
 
@@ -128,17 +128,17 @@ const POWERSHELL_BLOCK = `  On Windows/PowerShell, use here-strings to pipe mult
     @"
     const page = await browser.getPage("main");
     console.log(await page.title());
-    "@ | dailies-browser --connect`;
+    "@ | dailies exec --connect`;
 
 const CONNECTING_SECTION = `  Connecting to a running Chrome instance:
     Auto-discover Chrome with debugging enabled:
-      dailies-browser --connect <<'EOF'
+      dailies exec --connect <<'EOF'
         const page = await browser.getPage("main");
         console.log(await page.title());
       EOF
 
     Connect to a specific CDP endpoint:
-      dailies-browser --connect http://localhost:9222 <<'EOF'
+      dailies exec --connect http://localhost:9222 <<'EOF'
         const page = await browser.getPage("main");
         console.log(await page.title());
       EOF
@@ -153,7 +153,7 @@ const CONNECTING_SECTION = `  Connecting to a running Chrome instance:
 // rendered in the calling CLI's own invocation style.
 export function buildScriptingGuide(options: ScriptingGuideOptions): string {
   const { heading, example } = options;
-  const browserExtras = options.browserExtras === true;
+  const execExtras = options.execExtras === true;
 
   const intro = [
     `${heading}`,
@@ -162,7 +162,7 @@ export function buildScriptingGuide(options: ScriptingGuideOptions): string {
     '  Use descriptive page names like "login", "checkout", or "results" instead of "page1".',
     '  Named pages from browser.getPage("name") persist between script runs, so you usually do not need to re-navigate.',
     "  Inside page.evaluate(...), write plain JavaScript only - no TypeScript syntax in the browser context.",
-    ...(browserExtras ? [POWERSHELL_BLOCK] : []),
+    ...(execExtras ? [POWERSHELL_BLOCK] : []),
   ].join("\n");
 
   const quickInspection = [
@@ -227,14 +227,14 @@ export function buildScriptingGuide(options: ScriptingGuideOptions): string {
     "    - Use console.log(JSON.stringify(...)) for structured output.",
     "    - Prefer page.snapshotForAI() for structure; use screenshots when visual layout or styling matters.",
     "    - Keep page names stable across scripts so you can resume work after failures.",
-    ...(browserExtras
+    ...(execExtras
       ? [
           "    - Each --browser name maps to a separate daemon-managed browser instance.",
           "    - Use --connect to attach to an existing browser; omit the URL to auto-discover Chrome with debugging enabled.",
         ]
       : []),
     "    - Use short timeouts (--timeout 10) so scripts fail fast instead of hanging on missing elements.",
-    ...(browserExtras
+    ...(execExtras
       ? [
           "    - Add --headless for unattended automation; omit it when you want to watch the browser window.",
         ]
@@ -252,7 +252,7 @@ export function buildScriptingGuide(options: ScriptingGuideOptions): string {
     devServer,
     errorRecovery,
     playwrightMethods,
-    ...(browserExtras ? [CONNECTING_SECTION] : []),
+    ...(execExtras ? [CONNECTING_SECTION] : []),
     tips,
   ].join("\n\n");
 }

@@ -3,10 +3,7 @@ name: dailies-scripting
 description: The Dailies sandbox scripting API for browser automation. Use when writing or debugging a Dailies script — looking up how to open a page, click, fill, extract text, observe an unknown page with snapshotForAI, evaluate in the page, take a screenshot, persist data between steps, or understand sandbox limits (no imports, timeouts). Trigger phrases — "how do I click in dailies", "dailies page API", "what's on this page", "explore a page in dailies", "snapshotForAI", "saveScreenshot signature", "get text from the page", "why is my dailies script timing out", "open a new tab in dailies".
 allowed-tools:
   - Bash(dailies:*)
-  - Bash(dailies-browser:*)
   - Bash(npx dailies-cli:*)
-  - Bash(npx dailies-browser:*)
-  - Bash(npx dailies-ui:*)
 license: MIT
 metadata:
   author: dailies
@@ -22,7 +19,7 @@ metadata:
 # Dailies scripting API
 
 Dailies scripts are plain **async JavaScript** run in a QuickJS sandbox with a Playwright-like API.
-Both `dailies-browser run` (one-off) and `dailies run --session` (recorded step) execute the same way:
+Both `dailies exec` (one-off, unrecorded) and `dailies run --session` (recorded step) execute the same way:
 top-level `await`, with `browser`, `console`, and the file helpers available as globals.
 
 <!-- dailies:snippet rule-drive-with-dailies cli=npx-cli -->

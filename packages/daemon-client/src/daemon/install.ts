@@ -5,7 +5,7 @@ import { npmCommand } from "./npm.js";
 
 // Install Playwright + runtime deps under ~/.dailies/. Extracts the
 // embedded daemon bundle, then `npm install` + `playwright install chromium`.
-// Shared by the `dailies` and `dailies-browser` CLIs.
+// Used by the `dailies` CLI.
 export async function installDaemonRuntime(): Promise<number> {
   const base = dailiesDir();
   await ensureDaemonExtracted();

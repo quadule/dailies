@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "Dailies daemon client — IPC transport, endpoint/paths resolution, and daemon lifecycle/extract. Embeds the daemon bundle; shared by the dailies and dailies-browser CLIs.",
+  "description": "Dailies daemon client — IPC transport, endpoint/paths resolution, and daemon lifecycle/extract. Embeds the daemon bundle for the dailies CLI.",
   "exports": {
     ".": {
       "source": "./src/index.ts",

@@ -114,7 +114,7 @@ await saveScreenshot(await page.screenshot(), "signed-in.png");   // saveScreens
   `readFile(name)` to pass values between steps.
 
 The full reference is built into this CLI — run `dailies --help` or `dailies run --help`
-(the engine's `dailies-browser --help` documents the same API), or read the
+(`dailies exec --help` documents the same API), or read the
 [dailies-scripting reference](https://github.com/quadule/dailies/blob/main/skills/dailies-scripting/references/REFERENCE.md).
 
 ## Artifacts
@@ -141,8 +141,6 @@ an agent can plan and record QA for you:
 
 ## Related packages
 
-- [`dailies-browser`](https://www.npmjs.com/package/dailies-browser) — the engine for quick
-  one-off automation (no recording, no report).
 - [`dailies-ui`](https://www.npmjs.com/package/dailies-ui) — the `dailies-viewer` session browser.
 - [`create-dailies`](https://www.npmjs.com/package/create-dailies) — `npm create dailies` guided setup.
 

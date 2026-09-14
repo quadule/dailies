@@ -4,8 +4,8 @@ See [`AGENTS.md`](AGENTS.md) for project orientation, architecture, and validati
 
 ## Driving a browser
 
-Every browser interaction in this repo goes through Dailies's own CLI — `dailies` / `dailies-browser`
-(or `npx dailies-cli` / `npx dailies-browser`) and the scripts it runs. Do **not** use Claude
+Every browser interaction in this repo goes through Dailies's own CLI — `dailies`
+(or `npx dailies-cli`) and the scripts it runs. Do **not** use Claude
 in Chrome, a computer-use / screenshot tool, or any other browser automation to navigate, click,
 fill, read, or view a page here — those bypass Dailies's sandbox, the on-screen cursor, and the
 trace / video / HAR / report capture, so the run isn't recorded or verifiable. To QA or automate a

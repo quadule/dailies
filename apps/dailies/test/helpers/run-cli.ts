@@ -12,7 +12,7 @@ export interface CliResult {
 }
 
 // Spawn the built CLI and collect its output. Minimal sibling of
-// apps/dailies-browser/test/helpers/run-cli.ts (no fake-daemon machinery —
+// the former apps/dailies-browser helper (no fake-daemon machinery —
 // the snapshot tests here only exercise `--help`).
 export async function runCli(
   args: string[],

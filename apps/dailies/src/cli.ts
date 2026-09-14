@@ -1,6 +1,10 @@
 import type { Command as CommandType } from "commander";
 import * as commander from "commander";
 import { isMainModule } from "dailies-cli-kit";
+import {
+  collectInjectScriptPaths,
+  INJECT_SCRIPT_ENV_VAR,
+} from "./inject-scripts.js";
 
 const { Command, InvalidArgumentError } = commander as unknown as {
   Command: typeof commander.Command;
@@ -8,8 +12,11 @@ const { Command, InvalidArgumentError } = commander as unknown as {
 };
 
 import { daemonStop } from "./commands/daemon-stop.js";
+import { execScript } from "./commands/exec.js";
 import {
   CLI_LONG_ABOUT,
+  EXEC_LONG_ABOUT,
+  EXEC_SCRIPTING_GUIDE,
   INIT_LONG_ABOUT,
   INSTALL_LONG_ABOUT,
   RUN_LONG_ABOUT,
@@ -17,7 +24,6 @@ import {
   SESSION_END_LONG_ABOUT,
   SESSION_START_LONG_ABOUT,
   STOP_LONG_ABOUT,
-  UI_LONG_ABOUT,
   USAGE_GUIDE,
 } from "./commands/help-text.js";
 import { initCommand } from "./commands/init.js";
@@ -30,7 +36,6 @@ import { sessionStart } from "./commands/session-start.js";
 import { sessionTakeover } from "./commands/session-takeover.js";
 import { sessionUrl } from "./commands/session-url.js";
 import { statusCommand } from "./commands/status.js";
-import { uiCommand } from "./commands/ui.js";
 import { logger } from "./logger.js";
 
 // Injected at build time by scripts/build.mjs (esbuild `define`); falls back to
@@ -72,21 +77,6 @@ function parseTimeout(value: string): number {
   if (!Number.isFinite(parsed) || String(parsed) !== value || parsed < 1) {
     throw new InvalidArgumentError(
       `invalid value '${value}' for '--timeout <SECONDS>': must be at least 1`
-    );
-  }
-  return parsed;
-}
-
-function parsePort(value: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (
-    !Number.isFinite(parsed) ||
-    String(parsed) !== value ||
-    parsed < 1 ||
-    parsed > 65_535
-  ) {
-    throw new InvalidArgumentError(
-      `invalid value '${value}' for '--port <PORT>': must be 1-65535`
     );
   }
   return parsed;
@@ -140,11 +130,13 @@ interface SessionEndOpts {
   stopDaemon?: boolean;
 }
 
-interface UiOpts {
-  dir?: string;
-  host?: string;
-  open?: boolean;
-  port?: number;
+interface ExecOpts {
+  browser: string;
+  connect?: string;
+  headless?: boolean;
+  ignoreHttpsErrors?: boolean;
+  injectScript?: string[];
+  timeout?: number;
 }
 
 interface TakeoverOpts {
@@ -341,7 +333,9 @@ export function buildProgram(): CommandType {
 
   program
     .command("run")
-    .description("Run a script as a step inside a session")
+    .description(
+      "Run a script as a recorded step inside a session (see `exec` for a one-off)"
+    )
     .addHelpText("before", `${RUN_LONG_ABOUT}\n`)
     .addHelpText("after", `\n${RUN_SCRIPTING_GUIDE}`)
     .argument("[FILE]", "Path to a JavaScript file (reads stdin if omitted)")
@@ -373,6 +367,69 @@ export function buildProgram(): CommandType {
     });
 
   program
+    .command("exec")
+    .description("Run a script once, unrecorded and outside any session")
+    .addHelpText("before", `${EXEC_LONG_ABOUT}\n`)
+    .addHelpText("after", `\n${EXEC_SCRIPTING_GUIDE}`)
+    .argument("[FILE]", "Path to a JavaScript file (reads stdin if omitted)")
+    .option(
+      "--browser <NAME>",
+      "Use a named daemon-managed browser instance",
+      "default"
+    )
+    .addOption(
+      new commander.Option(
+        "--connect [URL]",
+        "Connect to a running Chrome instance"
+      )
+    )
+    .option(
+      "--headless",
+      "Launch daemon-managed Chromium without a visible window"
+    )
+    .option(
+      "--ignore-https-errors",
+      "Ignore HTTPS certificate errors for daemon-managed Chromium"
+    )
+    .option(
+      "--inject-script <PATH>",
+      "Pre-load a JavaScript file on every page in the browser context (repeatable)",
+      (value: string, previous: string[] = []) => [...previous, value],
+      [] as string[]
+    )
+    .option(
+      "--timeout <SECONDS>",
+      "Maximum script execution time in seconds",
+      parseTimeout,
+      30
+    )
+    .action(async (file: string | undefined, opts: ExecOpts) => {
+      let script: string | undefined;
+      if (!file) {
+        if (stdinIsTty()) {
+          program.outputHelp();
+          throw new ExitCodeError(2);
+        }
+        script = await readScriptFromStdin();
+      }
+      const code = await execScript({
+        browser: opts.browser,
+        connect: opts.connect,
+        file,
+        headless: opts.headless === true,
+        ignoreHttpsErrors: opts.ignoreHttpsErrors === true,
+        injectScriptPaths: collectInjectScriptPaths(
+          process.env[INJECT_SCRIPT_ENV_VAR],
+          opts.injectScript ?? []
+        ),
+        json: isJson(program),
+        script,
+        timeoutMs: (opts.timeout ?? 30) * 1000,
+      });
+      throw new ExitCodeError(code);
+    });
+
+  program
     .command("status")
     .description("Show session status (or daemon status without --session)")
     .option("--session <id>", "Session id")
@@ -380,34 +437,6 @@ export function buildProgram(): CommandType {
       const code = await statusCommand({
         sessionId: opts.session,
         json: isJson(program),
-      });
-      throw new ExitCodeError(code);
-    });
-
-  program
-    .command("ui")
-    .description(
-      "Launch the local web UI to browse, organize, and search recorded sessions"
-    )
-    .addHelpText("before", `${UI_LONG_ABOUT}\n`)
-    .option(
-      "--dir <PATH>",
-      "Source folder to open (default: ~/.dailies/sessions)"
-    )
-    .option(
-      "--port <PORT>",
-      "Port to listen on (default: an open port)",
-      parsePort
-    )
-    .option("--host <HOST>", "Host interface to bind (default: 127.0.0.1)")
-    .option("--no-open", "Do not open the browser automatically")
-    .action(async (opts: UiOpts) => {
-      const code = await uiCommand({
-        dir: opts.dir,
-        host: opts.host,
-        json: isJson(program),
-        open: opts.open !== false,
-        port: opts.port,
       });
       throw new ExitCodeError(code);
     });

@@ -12,7 +12,7 @@ them as starting points and update as needed.
 
 ```bash
 dailies install                        # once: downloads Chromium
-dailies-browser run examples/hacker-news/demo.js
+dailies exec examples/hacker-news/demo.js
 ```
 
 ## Record a session you can open in the viewer
@@ -21,7 +21,7 @@ dailies-browser run examples/hacker-news/demo.js
 id=$(dailies session start --name "Hacker News demo")
 dailies run examples/hacker-news/demo.js --session "$id" --step "browse"
 dailies session end "$id"
-dailies ui                             # browse the recorded session (in this repo); end users: dailies-viewer
+open ~/.dailies/sessions/<id>/report.html   # the self-contained report
 ```
 
 Demos: `hacker-news/`, `product-hunt/`, `github-trending/`, `wikipedia/`.

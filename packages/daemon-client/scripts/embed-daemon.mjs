@@ -7,7 +7,7 @@
 //   DAEMON_BUNDLE   apps/dailies-daemon/dist/daemon.bundle.mjs
 //   SANDBOX_CLIENT  apps/dailies-daemon/dist/sandbox-client.js
 //
-// (The LLM guide + skill markdown stay embedded in apps/dailies-browser; this
+// (The LLM guide + skill markdown stay in packages/cli-kit; this
 // package owns only the daemon runtime artifacts.)
 //
 // Fails fast if any source is missing, with a hint for how to produce it.

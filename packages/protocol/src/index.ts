@@ -1,7 +1,7 @@
 // Dailies daemon IPC protocol — single source of truth.
 //
 // All requests and responses on the daemon's named-pipe / Unix socket are
-// validated against these Zod schemas. CLIs (`dailies`, `dailies-browser`)
+// validated against these Zod schemas. The `dailies` CLI
 // import the inferred TypeScript types only; the daemon imports the schemas
 // for runtime validation.
 //

@@ -16,9 +16,7 @@ EXEC  := pnpm exec
 TURBO := $(EXEC) turbo
 
 # Workspace filter aliases.
-BROWSER := dailies-browser
 DAEMON  := dailies-daemon
-UI      := dailies-ui
 CLI     := dailies-cli
 
 .PHONY: help install hooks outdated clean reset \
@@ -57,14 +55,10 @@ reset: clean ## clean + remove all node_modules (full re-install needed after)
 dev: ## Run every workspace's dev script (turbo, parallel + persistent)
 	pnpm dev
 
-dev-browser: ## Run the dailies-browser CLI from source (tsx)
-	$(TURBO) run dev --filter=$(BROWSER)
 
 dev-daemon: ## Run the daemon from source (tsx)
 	$(TURBO) run dev --filter=$(DAEMON)
 
-dev-ui: ## Run the session viewer in dev mode (astro dev)
-	$(TURBO) run dev --filter=$(UI)
 
 dev-cli: ## Run the dailies session orchestrator from source (tsx)
 	$(TURBO) run dev --filter=$(CLI)
@@ -74,8 +68,6 @@ dev-cli: ## Run the dailies session orchestrator from source (tsx)
 build: ## Build all workspaces in topological order
 	pnpm build
 
-build-browser: ## Build dailies-browser (builds + embeds the daemon first)
-	$(TURBO) run build --filter=$(BROWSER)
 
 build-daemon: ## Build the daemon bundle + sandbox client
 	$(TURBO) run build --filter=$(DAEMON)
@@ -111,20 +103,14 @@ docs-check: ## Verify stitched docs are in sync with docs/snippets/ (CI)
 test: ## Run all tests
 	pnpm test
 
-test-browser: ## Test dailies-browser
-	$(TURBO) run test --filter=$(BROWSER)
 
 test-daemon: ## Test the daemon
 	$(TURBO) run test --filter=$(DAEMON)
 
-test-ui: ## Test the session viewer
-	$(TURBO) run test --filter=$(UI)
 
 test-cli: ## Test the dailies session orchestrator
 	$(TURBO) run test --filter=$(CLI)
 
-watch-browser: build-daemon ## Watch-test dailies-browser (needs daemon built)
-	pnpm --filter $(BROWSER) test:watch
 
 watch-daemon: ## Watch-test the daemon
 	pnpm --filter $(DAEMON) test:watch
@@ -153,13 +139,13 @@ ui: build-ui ## Build and serve the local session viewer
 
 install-local: build link plugin-dev ## Build + global npm links + Claude Code plugin from this checkout
 
-link: ## Globally symlink the CLIs so `npx dailies-cli` / `dailies` run this checkout
-	npm install -g ./apps/dailies ./apps/dailies-browser ./apps/dailies-ui
+link: ## Globally symlink the CLI so `npx dailies-cli` / `dailies` run this checkout
+	npm install -g ./apps/dailies
 	@echo "Linked. New builds (make build) are picked up automatically;"
 	@echo "restart the daemon to load them: dailies stop"
 
 unlink: ## Remove the global npm links (next npx falls back to the registry)
-	npm uninstall -g dailies-cli dailies-browser dailies-ui
+	npm uninstall -g dailies-cli
 
 plugin-dev: ## Point the Claude Code dailies plugin at this checkout (replaces the installed copy)
 	-claude plugin marketplace remove dailies-marketplace 2>/dev/null

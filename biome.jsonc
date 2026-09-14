@@ -63,10 +63,7 @@
     {
       // commander is CJS; a namespace import (+ cast) is required for its
       // ESM/CJS interop under esbuild.
-      "includes": [
-        "apps/dailies-browser/src/cli.ts",
-        "apps/dailies/src/cli.ts"
-      ],
+      "includes": ["apps/dailies/src/cli.ts"],
       "linter": {
         "rules": {
           "performance": { "noNamespaceImport": "off" }
@@ -82,9 +79,7 @@
         "packages/cli-kit/src/index.ts",
         "apps/dailies/src/commands/render.ts",
         "apps/dailies/src/util/request-id.ts",
-        "apps/dailies-browser/src/commands/render.ts",
-        "apps/dailies-browser/src/util/request-id.ts",
-        "apps/dailies-browser/src/util/format.ts"
+        "apps/dailies/src/util/format.ts"
       ],
       "linter": {
         "rules": {
@@ -120,65 +115,6 @@
           },
           "style": { "noNonNullAssertion": "off" },
           "complexity": { "noUselessStringRaw": "off" }
-        }
-      }
-    },
-    {
-      // Astro .astro components: Biome parses only the frontmatter script, so
-      // imports/consts used in the template read as unused — keep the rules
-      // from stripping them (the upstream-recommended Astro setup).
-      "includes": ["**/*.astro"],
-      "linter": {
-        "rules": {
-          "correctness": {
-            "noUnusedImports": "off",
-            "noUnusedVariables": "off"
-          }
-        }
-      }
-    },
-    {
-      // Astro viewer app. Its endpoints/server code may log diagnostics to the
-      // terminal that spawned `dailies ui` (no shared CLI stdout/stderr contract
-      // like the other apps), and endpoint handlers are conventionally `async`
-      // even when a given body doesn't await.
-      "includes": ["apps/dailies-ui/**"],
-      "linter": {
-        "rules": {
-          "suspicious": {
-            "noConsole": "off",
-            "useAwait": "off",
-            // Read-only render of fetched data — console/network table rows are
-            // never reordered or inserted, the canonical safe use of index keys.
-            "noArrayIndexKey": "off"
-          },
-          // Session artifacts are local images of unknown dimensions served from
-          // /api/artifact; next/image (optimizer + required dims) is the wrong
-          // tool here, and the CSS already constrains layout. Plain <img> is right.
-          "performance": { "noImgElement": "off" },
-          "correctness": { "useImageSize": "off" }
-        }
-      }
-    },
-    {
-      // shadcn/ui sidebar primitive + its mobile hook are generated components.
-      // Unlike the other ui/* wrappers (which are type-only and so use
-      // `import type * as React`), the sidebar uses React hooks at runtime and
-      // needs a value namespace import; it also ships shadcn's intentional
-      // context-memo dependency list. Keep them faithful to upstream rather than
-      // hand-editing generated code.
-      "includes": [
-        "apps/dailies-ui/src/components/ui/sidebar.tsx",
-        "apps/dailies-ui/src/hooks/use-mobile.ts"
-      ],
-      "linter": {
-        "rules": {
-          "performance": { "noNamespaceImport": "off" },
-          "correctness": { "useExhaustiveDependencies": "off" },
-          "style": { "useConsistentTypeDefinitions": "off" },
-          // shadcn persists the open/closed state via a document.cookie write;
-          // the Cookie Store API the rule suggests isn't a drop-in here.
-          "suspicious": { "noDocumentCookie": "off" }
         }
       }
     }

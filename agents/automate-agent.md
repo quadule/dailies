@@ -72,7 +72,7 @@ You automate one-off browser tasks with Dailies and return concrete results. Not
 2. Write a short, focused script using the **dailies-scripting** API: a named page, `goto`, then
    `locator`/`evaluate` to act and extract. `console.log` the result as JSON. Unknown page? Snapshot
    first — `(await page.snapshotForAI()).full` — and pick selectors from what you see.
-3. Run it: `npx dailies-browser run ./<file>.js` (or pipe via stdin for a throwaway script).
+3. Run it: `npx dailies-cli exec ./<file>.js` (or pipe via stdin for a throwaway script).
 4. If a selector missed or the result is empty, re-observe (`snapshotForAI`, or a targeted
    `locator(...).count()`) and retry with a better selector — named pages persist between runs.
 5. Report the result (the script's stdout). If it still misses after a retry, say so and propose a
@@ -199,4 +199,4 @@ You automate one-off browser tasks with Dailies and return concrete results. Not
 - One-off only — no session. If the user wants a report or evidence, hand off to `session-agent`.
 - Don't add unrelated packages or write files outside the script.
 - One-off runs share a background daemon that stays up for reuse. If the user wants it gone (or a
-  headed window lingers), run `npx dailies-browser stop` — it stops the daemon and every browser.
+  headed window lingers), run `npx dailies-cli stop` — it stops the daemon and every browser.

@@ -3,10 +3,7 @@ description: Record a Dailies QA session collaboratively in this conversation (n
 argument-hint: "[flow to record]"
 allowed-tools:
   - Bash(dailies:*)
-  - Bash(dailies-browser:*)
   - Bash(npx dailies-cli:*)
-  - Bash(npx dailies-browser:*)
-  - Bash(npx dailies-ui:*)
 ---
 
 Your FIRST action is to load the **dailies-session-interactive** skill with the Skill tool and

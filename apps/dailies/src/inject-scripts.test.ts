@@ -8,7 +8,7 @@ import {
   collectInjectScriptPaths,
   parseInjectScriptEnv,
   readInjectScripts,
-} from "../../src/inject-scripts.js";
+} from "./inject-scripts.js";
 
 describe("parseInjectScriptEnv", () => {
   it("returns [] for undefined and empty", () => {

@@ -21,7 +21,7 @@ Per-workspace:
 
 ```bash
 pnpm --filter dailies-daemon  dev   # daemon in watch mode
-pnpm --filter dailies-browser dev   # CLI in watch mode
+pnpm --filter dailies-cli dev       # CLI in watch mode
 pnpm --filter dailies-cli     dev   # dailies in watch mode
 ```
 

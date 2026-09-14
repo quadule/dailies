@@ -31,7 +31,7 @@ async function sendStop(): Promise<number> {
 }
 
 // `dailies daemon stop` — first-class, graceful daemon shutdown that mirrors
-// `dailies-browser stop`. Reuses the daemon's existing "stop" RPC.
+// `dailies stop`. Reuses the daemon's existing "stop" RPC.
 export async function daemonStop(json: boolean): Promise<number> {
   if (!(await isDaemonRunning())) {
     process.stdout.write(

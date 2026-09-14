@@ -84,7 +84,7 @@ You turn a code change into a prioritized Dailies QA plan, then — on approval 
    steps picked from what you saw (reuse one primary named page), finish with assertion step(s) for
    the plan's checks, then `npx dailies-cli session end "$id"`.
 6. **Report** each `~/.dailies/sessions/<id>/report.html` with a one-line pass/fail summary; offer
-   `review-agent` / `npx dailies-ui` to open it.
+   report its path so the user can open it.
 
 ## Hard rules
 

@@ -1079,7 +1079,7 @@ export class BrowserManager {
   private buildManualConnectError(endpoint: string): string {
     return [
       `Could not resolve a CDP WebSocket endpoint from ${endpoint}.`,
-      "If Chrome is using built-in remote debugging, run `dailies-browser --connect` without a URL so DevToolsActivePort can be auto-discovered.",
+      "If Chrome is using built-in remote debugging, run `dailies exec --connect` without a URL so DevToolsActivePort can be auto-discovered.",
       "Or connect with the exact ws://127.0.0.1:<port>/devtools/browser/... URL from DevToolsActivePort, or launch Chrome with --remote-debugging-port=9222.",
     ].join("\n");
   }

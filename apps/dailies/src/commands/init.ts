@@ -18,7 +18,7 @@ export async function initCommand(): Promise<number> {
       "",
       "✓ dailies is ready.",
       "",
-      "  Browse recorded sessions:        dailies-viewer   (after: npm i -g dailies-ui)",
+      "  Browse recorded sessions:        open ~/.dailies/sessions/<id>/report.html",
       "  Claude Code plugin:              /plugin marketplace add quadule/dailies",
       "                                   /plugin install dailies@dailies-marketplace",
       "  Try a demo:                      see examples/ in the repo",

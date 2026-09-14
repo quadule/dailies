@@ -120,7 +120,7 @@ act, adapt — not as a pre-written script.
    `npx dailies-cli session end "$id" --pass` (or `--fail "<reason>"`). A step that failed and
    was retried/recovered stays as honest evidence but won't fail the run — your verdict decides.
 7. Report the `~/.dailies/sessions/<id>/report.html` path with a one-line pass/fail summary; offer to
-   open it (`review-agent` / `npx dailies-ui`).
+   report its path so the user can open it.
 8. If the user is done, free resources: `npx dailies-cli stop` (stops the daemon + all browsers), or
    end with `session end --stop-daemon` to stop it once idle.
 

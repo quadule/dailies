@@ -20,7 +20,6 @@ The pieces:
 1. **`dailies` (orchestrator CLI, `dailies-cli`)** — records capture-enabled QA sessions (trace/video/HAR/console) as a series of script steps and renders a self-contained report. The primary, user-facing CLI.
 2. **`dailies-browser` (engine CLI, `dailies-browser`)** — one-off browser automation: persistent named pages, sandboxed JavaScript, headless or headed. Embeds and supervises the daemon.
 3. **`dailies-daemon`** — a long-running Node process owning Playwright + a QuickJS sandbox. Embedded into the CLIs at build time. Speaks line-delimited JSON over a named pipe / Unix socket.
-4. **`dailies-ui` (`dailies-ui`)** — the local session viewer; ships standalone. Run it with `dailies-viewer` (after `npm i -g dailies-ui`), or `dailies ui` from a repo checkout, or one-off via `npx dailies-ui`.
 
 Both CLIs reach the browser the same way:
 
@@ -41,8 +40,6 @@ the run isn't recorded or verifiable.
 | `apps/dailies`            | Session orchestrator CLI (`dailies`) — records QA sessions, renders reports. The primary CLI.    |
 | `apps/dailies-browser`    | Browser-automation engine CLI (`dailies-browser`) — owns the daemon lifecycle, embeds the daemon |
 | `apps/dailies-daemon`     | Internal Playwright host + QuickJS sandbox. Built standalone, embedded into the CLIs            |
-| `apps/dailies-ui`         | Local web viewer (Astro + React islands). Reads `results.json`; run via `dailies ui` or `npx dailies-ui` |
-| `apps/create-dailies`     | `npm create dailies` setup wizard (Ink)                                                          |
 | `packages/protocol`      | Zod IPC schemas. Single source of truth — daemon validates, CLIs infer types                    |
 | `packages/config`        | Shared tsconfig bases (`base`, `node-app`)                                                       |
 | `packages/logger`        | Shared pino-backed structured logger (source-distributed)                                       |
@@ -55,7 +52,7 @@ the run isn't recorded or verifiable.
 
 1. `dailies-protocol` + `dailies-config` + `dailies-logger` (no build, source-distributed)
 2. `dailies-daemon` builds → emits `dist/daemon.bundle.mjs` + `dist/sandbox-client.js`
-3. `dailies-browser` + `dailies-cli` embed their assets (the daemon bundle via `dailies-daemon-client`), then bundle with esbuild; `dailies-ui` builds an Astro node standalone — a self-contained `dist/server/entry.mjs` + `dist/client/` (`vite.ssr.noExternal` bundles every server dep, so the published package ships no runtime `node_modules`)
+3. `dailies-browser` + `dailies-cli` embed their assets (the daemon bundle via `dailies-daemon-client`), then bundle with esbuild
 
 ## Shared docs (skills + CLI help + README)
 
@@ -173,20 +170,9 @@ pnpm --filter dailies-browser test
 
 ## Viewing sessions
 
-`dailies ui` launches a local Astro web app (`apps/dailies-ui`, `dailies-ui` — the Library and
-SessionView screens are client-only React islands) that reads each
-session's `results.json`, lists every recorded session, and renders it in the same tabbed,
-"High-Contrast Precision" layout as the self-contained HTML report. You can organize sessions
-into **virtual folders**, tag/note/search them, and delete-to-trash. It reads `~/.dailies/sessions`
-by default; `dailies ui --dir <path>` (or adding roots in the UI) points it elsewhere.
-
-- Organization lives in a per-root `.dailies-ui.json` sidecar — **sessions stay flat on disk**;
-  deletes move the dir to `<root>/.trash/` (restorable).
-- The command resolves the built server (`dist/server/entry.mjs`) and spawns it in the foreground
-  (Ctrl-C stops it); with no build present it falls back to `astro dev`. Build once for fast
-  startup: `pnpm --filter dailies-ui build`. (The viewer stays a separate `node` server rather
-  than folding into the esbuild/SEA CLI bundle — `DAILIES_UI_SERVER` overrides its location. The
-  server reads `HOST`/`PORT`/`DAILIES_UI_ROOT` from the environment.)
+A session's `report.html` is self-contained — open it directly. `dailies session list` lists
+every recorded session and `dailies status --session <id>` reports one. The video is the
+shareable deliverable; see **Artifact sensitivity** above for what isn't.
 
 ## Provenance
 

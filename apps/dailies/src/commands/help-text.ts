@@ -7,6 +7,7 @@
 // when the engine CLI is not installed.
 import {
   buildScriptingGuide,
+  execExample,
   indent,
   RULE_DATA_PASSING,
   RULE_FAIL_FAST,
@@ -19,14 +20,14 @@ import {
 export const CLI_LONG_ABOUT = `Dailies records capture-enabled QA sessions. It drives a real browser with
 scripts run as ordered steps, captures a Playwright trace, video, network HAR,
 and console for each run, and renders a self-contained report.html you can open
-or browse in a local web UI. A background daemon (Playwright + a QuickJS sandbox)
-starts automatically when needed.
+in any browser. A background daemon (Playwright + a QuickJS sandbox) starts
+automatically when needed.
 
 THE SESSION LIFECYCLE:
   1. start   dailies session start --name "checkout"        -> prints a session id
   2. run     dailies run step.js --session <id> --step open    (one script per step)
   3. end     dailies session end <id>                        -> writes report.html
-  4. view    dailies ui                                      -> browse every session
+  4. view    open ~/.dailies/sessions/<id>/report.html      -> the self-contained report
 
 WHAT IS CAPTURED (per session; toggle on \`session start\`):
   trace        Playwright trace — DOM snapshots + actions, one group per step
@@ -58,7 +59,6 @@ ${indent(RULE_DATA_PASSING, "    ")}
     dailies session list                       List sessions (table; --json for machine output)
     dailies status --session <id>              One session's status
     open ~/.dailies/sessions/<id>/report.html  The self-contained report
-    dailies ui                                 Browse, search, and organize all sessions
 
   Step discipline:
 ${indent(RULE_FAIL_FAST, "    ")}
@@ -90,6 +90,10 @@ text still feeds the narration) and won't double up with the captions burned in 
 
 export const RUN_LONG_ABOUT = `Run a script as one step inside a session.
 
+RECORDED: the step is captured into the session's trace, video, HAR and console, and appears
+in report.html. --session is REQUIRED — for a one-off with no session and no recording, use
+\`dailies exec\` instead.
+
 The script (a FILE, or stdin if omitted) executes as top-level JavaScript with \`await\` in a
 sandboxed QuickJS runtime — full reference below. The step's name labels it in the report and
 owns ONE auto-captured screenshot (taken from the LAST page opened during the step). Named
@@ -109,6 +113,15 @@ Examples:
 // the top level points here instead.
 export const RUN_SCRIPTING_GUIDE = buildScriptingGuide({
   example: sessionExample,
+  heading: "SCRIPTING GUIDE:",
+});
+
+// `dailies exec` runs the same sandbox but outside a session, and owns the
+// browser-targeting flags (--browser/--connect/--headless) that `run` doesn't —
+// so its guide carries the extras `run`'s deliberately omits.
+export const EXEC_SCRIPTING_GUIDE = buildScriptingGuide({
+  example: execExample,
+  execExtras: true,
   heading: "SCRIPTING GUIDE:",
 });
 
@@ -234,13 +247,25 @@ report, run \`dailies session end <id>\` first, then \`dailies stop\`.
 
   dailies stop`;
 
-export const UI_LONG_ABOUT = `Launch the local web UI to browse, organize, and search recorded sessions.
+export const EXEC_LONG_ABOUT = `Run a script once, outside any session.
 
-Spins up a local server (like \`npx playwright show-trace\`) and opens your browser. Reads
-~/.dailies/sessions by default; point it elsewhere with --dir. Ctrl-C stops it.
+NOT RECORDED: nothing is captured and no report is written — this is the quick one-off for
+driving a browser, scraping a page, or poking at an unknown page before you record it. For a
+step that lands in a session's trace/video/HAR and its report, use \`dailies run --session\`.
 
-  dailies ui
-  dailies ui --dir ./artifacts --no-open`;
+The script (a FILE, or stdin if omitted) executes as top-level JavaScript with \`await\` in the
+same sandboxed QuickJS runtime as \`dailies run\` — full reference below. Named pages persist on
+the daemon between exec calls, so successive one-offs pick up where the last left off.
+
+Results come back on stdout via \`console.log\` — a script's return value is NOT emitted.
+
+Examples:
+  dailies exec scrape.js
+  dailies exec scrape.js --headless --timeout 60
+  echo 'const p = await browser.getPage("x"); await p.goto("https://example.com"); console.log(await p.title());' \\
+    | dailies exec
+
+Stop the browser and daemon when you're done: \`dailies stop\`.`;
 
 export const INSTALL_LONG_ABOUT = `Install the embedded daemon runtime: Chromium plus the Playwright + QuickJS
 sandbox, into ~/.dailies. Run once before your first session (downloads ~150 MB).`;

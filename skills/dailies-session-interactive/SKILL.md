@@ -3,10 +3,7 @@ name: dailies-session-interactive
 description: Record a Dailies QA session collaboratively, in the main conversation — the agent drives autonomously but pauses to ask you for direction when unsure, and can hand you the live browser to do steps it can't (log in, flip a feature flag, change settings), capturing your actions as recorded steps. Use when a flow needs your input or manual setup mid-run. Trigger phrases — "record this with me", "interactive session", "I'll need to take over", "let me do part of it", "ask me if you get stuck".
 allowed-tools:
   - Bash(dailies:*)
-  - Bash(dailies-browser:*)
   - Bash(npx dailies-cli:*)
-  - Bash(npx dailies-browser:*)
-  - Bash(npx dailies-ui:*)
 license: MIT
 metadata:
   author: dailies
@@ -167,7 +164,7 @@ build on). Read the printed code, then continue driving the flow.
 8. End, render, and open the report: `npx dailies-cli session end "$id" --open`. The `--open`
    flag opens the self-contained `~/.dailies/sessions/<id>/report.html` in the browser for you —
    always pass it here. (If the host has no opener and nothing appears, open the printed path
-   yourself.) Then mention **dailies-review** / `npx dailies-ui` to browse all sessions.
+   yourself.) Then report the `report.html` and video paths.
 
 ## Hard rules
 

@@ -15,7 +15,7 @@ beforeAll(() => {
 // but the long scripting guide (observe-first/interaction rules, worked
 // examples, Playwright methods) lives on `dailies run --help` — at the point of
 // need — reached via a same-CLI pointer (never the separately-installed
-// `dailies-browser` binary, and no engine-only flags leaking in).
+// removed `dailies-browser` binary, and no engine-only flags leaking in).
 describe("--help content", () => {
   it("root --help: lifecycle, compact API, workflow guide, pointer to run", async () => {
     const out = await runCli(["--help"]);
@@ -58,8 +58,8 @@ describe("--help content", () => {
     expect(out.code).toBe(0);
 
     // The old indirection ("see `dailies-browser --help` for the full
-    // reference") must be gone — dailies-browser may not even be installed.
-    // (The additive "use `dailies-browser run` for one-offs" tip is fine.)
+    // reference") must be gone — that CLI no longer exists; one-offs are
+    // `dailies exec`, whose guide is served from this same binary.
     expect(out.stdout).not.toContain("see `dailies-browser --help`");
     expect(out.stdout).not.toContain("dailies-browser --help");
 

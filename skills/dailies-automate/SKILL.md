@@ -3,10 +3,7 @@ name: dailies-automate
 description: Drive a real browser for a one-off task with Dailies — navigate, click, fill, scrape, screenshot — and return the result. Nothing is recorded. Use when the user asks to automate a browser task, scrape a page, fill a form, or check something on a site without needing a report. Trigger phrases — "go to X and get Y", "scrape this page", "automate this browser task", "log in and check", "take a screenshot of".
 allowed-tools:
   - Bash(dailies:*)
-  - Bash(dailies-browser:*)
   - Bash(npx dailies-cli:*)
-  - Bash(npx dailies-browser:*)
-  - Bash(npx dailies-ui:*)
 license: MIT
 metadata:
   author: dailies
@@ -76,7 +73,7 @@ User says: "is the pricing page up and what's the headline?" or "screenshot the 
 2. Write a short, focused script with the dailies-scripting API (`browser.getPage`, `page.goto`,
    `locator`/`evaluate`, `console.log` the result), observing first on unknown pages (see *Hard
    rules*).
-3. Run it: `npx dailies-browser run ./script.js` (or pipe the script via stdin).
+3. Run it: `npx dailies-cli exec ./script.js` (or pipe the script via stdin).
 4. If the result is empty or a selector missed, **observe and retry**: run a second short script that
    logs `page.url()`, `page.title()`, and `(await page.snapshotForAI()).full` (or a targeted
    `locator(...).count()`), pick a better selector, re-run. Named pages persist between runs, so
@@ -84,7 +81,7 @@ User says: "is the pricing page up and what's the headline?" or "screenshot the 
 5. Report the script's stdout. On optional extractions, degrade gracefully (log a `WARN`, don't
    crash) — but don't paper over a miss you can fix by observing.
 6. Cleanup (optional): the run leaves a shared background daemon up for reuse. To shut it (and any
-   browser) down, run `npx dailies-browser stop` (alias of `dailies stop` / `dailies daemon stop`).
+   browser) down, run `npx dailies-cli stop` (alias of `dailies daemon stop`).
 
 ## Hard rules
 

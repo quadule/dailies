@@ -1,29 +1,31 @@
 # Releasing
 
-Dailies publishes a small set of public packages to npm under the `dailies` scope;
-the rest stay private (bundled or embedded into the public ones).
+Dailies publishes **one** public package to npm — `dailies-cli`, which puts the `dailies`
+binary on your PATH. Everything else is private: bundled or embedded into it.
 
 ## What publishes
 
 | Package          | npm                | bin              | Notes                                              |
 | ---------------- | ------------------ | ---------------- | -------------------------------------------------- |
 | `dailies-cli`    | public             | `dailies`         | Self-contained esbuild bundle (deps inlined)       |
-| `dailies-browser`| public             | `dailies-browser` | Self-contained bundle; embeds the daemon           |
-| `dailies-ui`     | public             | —                | Astro node standalone — self-contained `dist/` (no runtime deps) |
-| `create-dailies`  | public (unscoped)  | `create-dailies`  | `npm create dailies` setup wizard                   |
-| `dailies-daemon` | **private**        | —                | Embedded as a string into the CLI bundles          |
-| `dailies-protocol`, `dailies-logger`, `dailies-cli-kit`, `dailies-daemon-client`, `dailies-config` | **private** | — | Bundled into the CLIs by esbuild |
+| `dailies-daemon` | **private**        | —                | Embedded as a string into the CLI bundle           |
+| `dailies-protocol`, `dailies-logger`, `dailies-cli-kit`, `dailies-daemon-client`, `dailies-config` | **private** | — | Bundled into the CLI by esbuild |
 
-`dailies-daemon`'s Playwright runtime and `dailies-ui` are **not** package dependencies — they're
-fetched into `~/.dailies/` at runtime (`dailies install` for the daemon, first `dailies ui` for the viewer),
-so a plain `npm i -g dailies-cli` stays small.
+`dailies-daemon`'s Playwright runtime is **not** a package dependency — it's fetched into
+`~/.dailies/` at runtime by `dailies install`, so a plain `npm i -g dailies-cli` stays small.
 
 ## Prerequisites (one-time)
 
-1. **npm scope** — the `dailies` org (or user scope) must exist on npmjs.com, and the `NPM_TOKEN`
-   repo secret must be an automation token with publish rights. Scoped packages publish with
-   `--access public` (already in the workflow).
-2. **`create-dailies` name** — confirm the unscoped name `create-dailies` is available/owned on npm.
+1. **`NPM_TOKEN`** — an npm automation token with publish rights. Two places need it, and
+   they're independent:
+   - **The release workflow** (the normal path) reads it as a GitHub repo secret. As of
+     2026-09-14 the repo has only `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`, so CI cannot
+     publish until the secret is added.
+   - **Publishing locally** (escape hatch) needs it in your shell. Keep it in 1Password and
+     inject it per-command with `op run --env-file=…` rather than writing it to `~/.npmrc` —
+     a token in a dotfile outlives the command that needed it.
+2. **The `dailies-cli` name** — unclaimed as of 2026-09-14. Note that the bare `dailies` name is
+   taken by an unrelated package, so the first publish also tests npm's name-similarity check.
 3. **Provenance** — the release workflow sets `id-token: write` so npm records build provenance;
    the `repository` field in each manifest must point at this repo (it does).
 
@@ -70,7 +72,7 @@ packages and rewrites `workspace:*` to the concrete version.
 
 ## How updates reach agents
 
-npm publishes the CLIs, but the agent plugin packs are served straight from this repo — a release
+npm publishes the CLI, but the agent plugin packs are served straight from this repo — a release
 is what makes them update-visible. `scripts/sync-version.mjs`
 stamps the same version into every manifest that update detection reads:
 
@@ -83,13 +85,13 @@ stamps the same version into every manifest that update detection reads:
   synced for honesty, not detection.)
 
 Shared doc content (scripting API, workflow rules) lives in `docs/snippets/` and is stitched into
-the skills, README, and both CLIs' `--help` by `make docs` — edit snippets, restitch, commit;
+the skills, README, and the CLI's `--help` by `make docs` — edit snippets, restitch, commit;
 `make check` fails on drift. See `docs/snippets/README.md`.
 
 ## Verifying a build locally (no publish)
 
 ```bash
 pnpm build
-pnpm --filter dailies-cli pack         # -> dailies-cli-<v>.tgz
-tar -tf dailies-cli-*.tgz               # expect only dist/ (and examples/), no node_modules
+(cd apps/dailies && npm pack)          # -> dailies-cli-<v>.tgz  (NB: `pnpm pack` rejects --filter)
+tar -tzf apps/dailies/dailies-cli-*.tgz # expect dist/, package.json, README.md — no node_modules
 ```

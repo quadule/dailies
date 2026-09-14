@@ -11,10 +11,10 @@ import pretty from "pino-pretty";
 // Shared `--help` prose (sandbox rules, script API, LLM usage guide) composed
 // into both CLIs' help output — single source of truth, no drift.
 export {
-  browserExample,
   buildScriptingGuide,
   type ExampleOptions,
   type ExampleWrapper,
+  execExample,
   indent,
   PLAYWRIGHT_PAGE_NOTE,
   SANDBOX_ENVIRONMENT,

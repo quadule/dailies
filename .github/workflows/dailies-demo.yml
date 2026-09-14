@@ -239,9 +239,8 @@ jobs:
         # for import.meta.url, so the bundled daemon assets still resolve.)
         run: |
           mkdir -p "$HOME/.local/bin" "$HOME/.dailies"
-          chmod +x "$GITHUB_WORKSPACE/apps/dailies/dist/cli.js" "$GITHUB_WORKSPACE/apps/dailies-browser/dist/cli.js"
+          chmod +x "$GITHUB_WORKSPACE/apps/dailies/dist/cli.js"
           ln -sf "$GITHUB_WORKSPACE/apps/dailies/dist/cli.js" "$HOME/.local/bin/dailies"
-          ln -sf "$GITHUB_WORKSPACE/apps/dailies-browser/dist/cli.js" "$HOME/.local/bin/dailies-browser"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Verify the dailies CLIs are runnable
         # Fail fast and cheaply: if the CLI isn't on PATH the agent would
@@ -252,7 +251,6 @@ jobs:
         # before the agent — and any API spend — starts.
         run: |
           dailies --version
-          dailies-browser --help >/dev/null
       - name: Install the dailies daemon runtime
         # Set up the embedded daemon NOW, in a free CI step — not lazily inside
         # the agent, where a first `dailies session start` would die with
