@@ -7,7 +7,7 @@ allowed-tools:
 license: MIT
 metadata:
   author: dailies
-  version: 0.4.4
+  version: 0.5.0
   category: reference
   tags:
     - dailies

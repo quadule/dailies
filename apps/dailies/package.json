@@ -1,8 +1,8 @@
 {
   "name": "dailies-cli",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "type": "module",
-  "description": "Dailies CLI. Records a browser session as ordered steps \u2014 trace, video, HAR, console \u2014 renders a self-contained report, and can cut the recording into a narrated demo film.",
+  "description": "Dailies CLI. Records a browser session as ordered steps — trace, video, HAR, console — renders a self-contained report, and can cut the recording into a narrated demo film.",
   "license": "MIT",
   "keywords": [
     "dailies",
