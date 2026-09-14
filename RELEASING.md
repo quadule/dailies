@@ -41,8 +41,8 @@ binary on your PATH. Everything else is private: bundled or embedded into it.
    never been published, and fails with a misleading
    `E403 … You may not perform that action with these credentials`. `dailies-cli` is past
    that point; a future *new* package would hit it again.
-2. **The `dailies-cli` name** — unclaimed as of 2026-09-14. Note that the bare `dailies` name is
-   taken by an unrelated package, so the first publish also tests npm's name-similarity check.
+2. **The `dailies-cli` name** — claimed; published since 2026-09-14. (The bare `dailies` name
+   belongs to an unrelated package, which is why the CLI is `dailies-cli`.)
 3. **Provenance** — the release workflow sets `id-token: write` so npm records build provenance;
    the `repository` field in each manifest must point at this repo (it does).
 

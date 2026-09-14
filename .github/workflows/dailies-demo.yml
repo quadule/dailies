@@ -90,7 +90,11 @@ jobs:
         with:
           node-version: 22
 
-      # TODO(before launch): pin an exact version here and in the demo job.
+      # Deliberately UNPINNED here: this repo demos its own pull requests, so
+      # tracking the newest published version is the point — it also catches a
+      # broken publish the day it happens. A COPY of this file in an app repo
+      # must pin instead (wrapbook/app pins dailies-cli@0.5.3), because there a
+      # Dailies release changing CI overnight is a hazard, not a test.
       - name: Install the dailies CLI
         run: npm install -g dailies-cli
 
@@ -232,9 +236,9 @@ jobs:
 
       - name: Install the dailies CLI
         # From npm, not from this checkout — this workflow is meant to be copied
-        # into an app repo, where `apps/dailies` does not exist.
-        # TODO(before launch): pin an exact version. Floating on @latest means a
-        # Dailies release can change an app repo's CI behavior overnight.
+        # into an app repo, where `apps/dailies` does not exist. Unpinned on
+        # purpose here; see the note in the discover job. A copy of this file in
+        # an app repo must pin.
         run: npm install -g dailies-cli
       - name: Verify the dailies CLIs are runnable
         # Fail fast and cheaply: if the CLI isn't on PATH the agent would
