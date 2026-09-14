@@ -46,22 +46,5 @@ const esm = build({
   sourcemap: true,
 });
 
-// CJS variant for Node SEA — `--experimental-sea-config` only accepts CJS.
-// `import.meta.url` isn't available in CJS, so map it to the equivalent derived
-// from `__filename` (used by resolve-server's workspace walk + cli's isMain).
-const cjs = build({
-  ...common,
-  outfile: resolve(dist, "cli.cjs"),
-  format: "cjs",
-  define: {
-    ...common.define,
-    "import.meta.url": "__importMetaUrl",
-  },
-  banner: {
-    js: "const __importMetaUrl = require('node:url').pathToFileURL(__filename).href;",
-  },
-  sourcemap: false,
-});
-
-await Promise.all([esm, cjs]);
+await esm;
 await chmod(resolve(dist, "cli.js"), 0o755);
