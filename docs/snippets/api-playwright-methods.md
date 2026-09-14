@@ -6,7 +6,8 @@
   Turbo/SPA nav until it commits — to confirm a navigation use `humanClickAndWaitForURL` /
   `waitForURLChange`, or read the live `await page.evaluate(() => location.href)`)
 - `page.snapshotForAI(options)` — AI-optimized page outline (whole page, any scroll position);
-  returns `{ full, incremental? }`; options `{ selector?, track?, timeout? }` — `selector` scopes to
+  returns `{ full, incremental?, chars, hint? }` (`chars` is the size of `full`; `hint` appears only
+  on a large page and names the cheaper next look); options `{ selector?, track?, timeout? }` — `selector` scopes to
   an element (e.g. `"main"`, to drop nav chrome after a full first look proves it is noise),
   `track` returns just the diff since the last same-key snapshot (the two are mutually exclusive);
   omit `depth` — a shallow tree forces expensive fallbacks and hides late-page fields

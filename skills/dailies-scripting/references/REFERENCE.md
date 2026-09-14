@@ -66,7 +66,8 @@ https://playwright.dev/docs/api/class-page
   Turbo/SPA nav until it commits — to confirm a navigation use `humanClickAndWaitForURL` /
   `waitForURLChange`, or read the live `await page.evaluate(() => location.href)`)
 - `page.snapshotForAI(options)` — AI-optimized page outline (whole page, any scroll position);
-  returns `{ full, incremental? }`; options `{ selector?, track?, timeout? }` — `selector` scopes to
+  returns `{ full, incremental?, chars, hint? }` (`chars` is the size of `full`; `hint` appears only
+  on a large page and names the cheaper next look); options `{ selector?, track?, timeout? }` — `selector` scopes to
   an element (e.g. `"main"`, to drop nav chrome after a full first look proves it is noise),
   `track` returns just the diff since the last same-key snapshot (the two are mutually exclusive);
   omit `depth` — a shallow tree forces expensive fallbacks and hides late-page fields
@@ -181,12 +182,17 @@ Semantic factories (also `Locator`): `page.getByRole(role, { name })`, `page.get
 ## Observing the page — `snapshotForAI`
 
 <!-- dailies:snippet api-snapshot -->
-- `page.snapshotForAI()` returns `{ full, incremental? }` — `full` is a deep aria outline of the
+- `page.snapshotForAI()` returns `{ full, incremental?, chars, hint? }` — `full` is a deep aria outline of the
   page: roles, accessible names, `[ref=eN]` markers on actionable nodes. On an unknown page, start
   with the full-depth snapshot so you can see the whole task surface, including content near the
   end of the page. Read it to pick a semantic selector — `page.getByRole("button", { name:
   "Continue" })`, `page.getByText("Sign in")` — then act. The outline covers the WHOLE page
   regardless of scroll position, so you never need to scroll to observe.
+- `chars` is the size of `full`, and `hint` appears only when the page is large enough that the
+  next observation should be cheaper. Log them alongside the outline — `console.log(snap.hint ??
+  "", snap.full)` — so the size is on the record. A whole-page outline on a real app runs tens of
+  thousands of characters; `chars` is what tells you which pages those are. The hint never appears
+  on a `{ track }` call, because tracking is already the advice it would give.
 - Read the WHOLE `snap.full` — do NOT `.slice()` / `.substring()` / truncate it when you log or
   inspect it. A window is the worst of both worlds: you pay for the full-page walk yet only see part
   of it, so late-page fields (a rate block, a required field just above the submit) fall outside your
