@@ -1,7 +1,7 @@
 {
   "name": "dailies",
   "description": "Dailies for your coding agent: record a browser flow as a verifiable session (trace, video, HAR, console) and cut it into a narrated demo video. Ships a sandbox scripting reference, verify/automate/session/review skills, subagents, and /dailies slash commands.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "author": {
     "name": "quadule",
     "url": "https://github.com/quadule"

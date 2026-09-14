@@ -7,7 +7,7 @@ allowed-tools:
 license: MIT
 metadata:
   author: dailies
-  version: 0.5.0
+  version: 0.5.1
   category: workflow
   tags:
     - dailies
