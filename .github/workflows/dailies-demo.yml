@@ -205,13 +205,6 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: actions/cache@v4
-        with:
-          path: .turbo
-          key: turbo-${{ runner.os }}-${{ github.sha }}
-          restore-keys: turbo-${{ runner.os }}-
-      - run: pnpm build
-
       - name: Install ffmpeg and a font (title card / credits need drawtext + a font)
         run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
 
@@ -236,20 +229,16 @@ jobs:
           path: ~/.dailies/node_modules
           key: dailies-runtime-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Install Chromium system dependencies
-        run: pnpm --filter dailies-daemon exec playwright install-deps chromium
+        run: npx --yes playwright install-deps chromium
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Put the dailies CLIs on PATH
-        # The root package is private with no `bin`, and nothing depends on
-        # dailies-cli, so pnpm never links a `dailies` into node_modules/.bin.
-        # Symlink the built CLIs directly. (node resolves the symlink's realpath
-        # for import.meta.url, so the bundled daemon assets still resolve.)
-        run: |
-          mkdir -p "$HOME/.local/bin" "$HOME/.dailies"
-          chmod +x "$GITHUB_WORKSPACE/apps/dailies/dist/cli.js"
-          ln -sf "$GITHUB_WORKSPACE/apps/dailies/dist/cli.js" "$HOME/.local/bin/dailies"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install the dailies CLI
+        # From npm, not from this checkout — this workflow is meant to be copied
+        # into an app repo, where `apps/dailies` does not exist.
+        # TODO(before launch): pin an exact version. Floating on @latest means a
+        # Dailies release can change an app repo's CI behavior overnight.
+        run: npm install -g dailies-cli
       - name: Verify the dailies CLIs are runnable
         # Fail fast and cheaply: if the CLI isn't on PATH the agent would
         # otherwise flail for minutes hitting permission walls (every fallback
