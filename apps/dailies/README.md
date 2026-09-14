@@ -2,10 +2,15 @@
 
 > `dailies` — the session orchestrator for [Dailies](https://github.com/quadule/dailies). Drive a real
 > browser, record capture-enabled QA sessions (Playwright trace, video, network HAR, console, per-step
-> screenshots), and render a self-contained `report.html` you can open, commit, or browse in a local UI.
+> screenshots), and render a self-contained `report.html` you can open, commit, or share.
 
 [![npm](https://img.shields.io/npm/v/dailies-cli.svg)](https://www.npmjs.com/package/dailies-cli)
 [![license](https://img.shields.io/npm/l/dailies-cli.svg)](https://github.com/quadule/dailies)
+
+> Built on **[Canary](https://github.com/wizenheimer/canary)**, the agent QA harness this began
+> as — its sandbox, session recording and report are Canary's, and they are still the foundation
+> everything here stands on. MIT, with thanks. See
+> [LICENSE](https://github.com/quadule/dailies/blob/main/LICENSE) for full provenance.
 
 Dailies is built for **AI agents and developers who need verifiable, reproducible browser QA**. Every
 run captures a trace, a video, a network log, console output, and per-step screenshots — and decodes
@@ -22,7 +27,7 @@ You drive the daemon through a four-step session lifecycle:
 | 1. start | `dailies session start --name "checkout"` | prints a session id |
 | 2. run | `dailies run step.js --session <id> --step open` | one script per step |
 | 3. end | `dailies session end <id>` | writes `report.html` |
-| 4. view | `dailies ui` | browse every session |
+| 4. view | open `report.html` | the self-contained report |
 
 Mid-session you can hand the live (headed) browser to a human and capture what they do as a step:
 `dailies session takeover <id>` starts recording their actions, `--stop` ends it and saves the
@@ -62,8 +67,8 @@ console.log(await p.title());' | dailies run --session "$id" --step "home"
 # 3. finish — collects artifacts and renders the report
 dailies session end "$id"            # -> ~/.dailies/sessions/<id>/report.html
 
-# 4. browse, search, and replay every session in a local viewer
-dailies ui
+# 4. review — the report is self-contained; open it in any browser
+open ~/.dailies/sessions/"$id"/report.html
 ```
 
 Each `--step` is one entry in the report, with its own trace group and **one** auto-captured
@@ -83,7 +88,7 @@ across steps within a session.
 | `dailies session abort <id>` | Best-effort teardown of a session — salvage a wedged run from whatever artifacts survived. |
 | `dailies session list` | List recorded sessions (table; `--json` for machine output). |
 | `dailies status [--session <id>]` | Daemon status, or one session's status. |
-| `dailies ui` | Launch the local session viewer. Options: `--dir <path>`, `--port`, `--host`, `--no-open`. |
+| `dailies exec <file>` | Run a script once, unrecorded and outside any session — the quick one-off. Options: `--browser`, `--connect`, `--headless`, `--inject-script`, `--timeout`. |
 | `dailies stop` | Stop the background daemon and every browser/session it's running (alias: `dailies daemon stop`). |
 
 Global flags: `--json` (machine-readable output on stdout), `-v` / `--verbose` (more logging on
@@ -138,10 +143,5 @@ an agent can plan and record QA for you:
 ```bash
 # Claude Code: /plugin marketplace add quadule/dailies  then  /plugin install dailies@dailies-marketplace
 ```
-
-## Related packages
-
-- [`dailies-ui`](https://www.npmjs.com/package/dailies-ui) — the `dailies-viewer` session browser.
-- [`create-dailies`](https://www.npmjs.com/package/create-dailies) — `npm create dailies` guided setup.
 
 MIT · [source](https://github.com/quadule/dailies)

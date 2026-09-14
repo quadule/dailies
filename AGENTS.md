@@ -176,4 +176,9 @@ shareable deliverable; see **Artifact sensitivity** above for what isn't.
 
 ## Provenance
 
-Dailies's daemon and TypeScript CLIs (`dailies-daemon`, `dailies-browser`, and the `dailies` session orchestrator) are the core of the toolkit. Portions are derived from MIT-licensed upstream work by Sawyer Hood (see `LICENSE`).
+Dailies began as a fork of [Canary](https://github.com/wizenheimer/canary), the agent QA harness —
+its sandbox, session recording and report are Canary's and remain the foundation here. Canary is
+MIT-licensed, and in turn derives from MIT-licensed work by Sawyer Hood. Both are credited in
+`LICENSE`, which ships inside the published npm tarball. Keep that attribution intact in `LICENSE`,
+the root `README.md`, and `apps/dailies/README.md` — the last is what npm renders on the package
+page, so it is the one that silently goes stale.
