@@ -33,8 +33,16 @@
 # plays inline. That flag shipped in gh 2.99.0 (2026-09-01) and runners' preinstalled
 # gh will lag it for a while, and GitHub caps comment video at 10 MB (free) /
 # 100 MB (paid) — so the step probes for the flag, checks the size, and falls back
-# to linking the run artifact. The full report bundle is always a run artifact:
-# it is a directory, not a video.
+# to linking the run artifact. The report is always a run artifact too: it is a
+# directory, not a video.
+#
+# WHAT IS UPLOADED, AND WHAT DELIBERATELY IS NOT: only `report.html` (which is
+# self-contained) and `results.json`. A recorded session ALSO writes `profile/`
+# — a real Chrome cookie database for the app it just logged into — and
+# `trace.zip`, which holds the run's traffic unscrubbed. Those must never become
+# a run artifact: anyone with read access to the repo can download one. If you
+# extend this workflow, keep copying named files out of the session directory
+# rather than archiving the directory. See "Artifact sensitivity" in AGENTS.md.
 
 name: Dailies demo
 
@@ -372,14 +380,23 @@ jobs:
           # Compact `name=value …` for the comment and the next run's marker.
           echo "metrics=$(echo "$OUT" | jq -r '[.metrics[]? | "\(.name)=\(.value)"] | join(" ")')" >> "$GITHUB_OUTPUT"
           VIDEO=$(find "$ARTIFACT_DIR" -name '*.webm' | head -1)
-          ( cd "$(dirname "$ARTIFACT_DIR")" && zip -r "$GITHUB_WORKSPACE/dailies-report.zip" "$(basename "$ARTIFACT_DIR")" >/dev/null )
+          # Copy out ONLY the artifacts that are safe to hand around. Zipping the
+          # whole session directory would publish `profile/` (a real Chrome cookie
+          # database for the logged-in review app) and `trace.zip` (the run's
+          # traffic, unscrubbed) as a run artifact any repo reader can download.
+          # report.html is self-contained and results.json carries no request
+          # headers — those two are the shareable pair. See "Artifact sensitivity"
+          # in AGENTS.md.
+          mkdir -p "$GITHUB_WORKSPACE/dailies-report"
+          cp "$ARTIFACT_DIR/report.html"  "$GITHUB_WORKSPACE/dailies-report/"
+          cp "$ARTIFACT_DIR/results.json" "$GITHUB_WORKSPACE/dailies-report/" || true
           cp "$VIDEO" "$GITHUB_WORKSPACE/dailies-demo.webm" || true
 
-      - name: Upload the report bundle
+      - name: Upload the report (report.html + results.json only)
         uses: actions/upload-artifact@v4
         with:
           name: dailies-report-pr${{ matrix.pr }}
-          path: dailies-report.zip
+          path: dailies-report/
           if-no-files-found: error
 
       - name: Upload the cinematic video
