@@ -56,6 +56,26 @@ export interface DemoConfig {
   // deliberate — a nightly demo of a PR is repetitive work, and the randomness
   // is what makes it worth opening. Set it only for a consistent house style.
   prompt: string | null;
+  // Where to find a per-PR target that only exists once something is deployed.
+  // Many setups post the review-app URL as a bot comment when the deploy
+  // succeeds, so it is knowable per PR but not from config or the PR body.
+  //
+  // TRUST: a comment is written by a person, not by the repo. Only comments
+  // carrying `marker` are considered, the extracted value must be an https URL,
+  // and fork PRs are already excluded before this runs. On a PUBLIC repo,
+  // anyone who can comment can forge a marker — do not enable it there without
+  // also restricting by comment author.
+  targetComment: TargetCommentConfig | null;
+}
+
+export interface TargetCommentConfig {
+  // Substring identifying the deploy comment — ideally the bot's own HTML
+  // marker, e.g. "review-app-deploy::pr-commenter-buildkite-plugin". Null
+  // considers every comment, which is looser than you usually want.
+  marker: string | null;
+  // Regex (as a string) matching the URL inside that comment. The first match
+  // in the most recent matching comment wins.
+  pattern: string;
 }
 
 export interface ProjectConfig {
@@ -71,6 +91,7 @@ export const EMPTY_CONFIG: ProjectConfig = {
     hint: null,
     paths: [],
     prompt: null,
+    targetComment: null,
   },
   url: null,
 };
@@ -104,9 +125,30 @@ export function parseProjectConfig(raw: unknown): ProjectConfig {
       hint: stringOrNull(demo.hint),
       paths: stringArray(demo.paths),
       prompt: stringOrNull(demo.prompt),
+      targetComment: parseTargetComment(demo.targetComment),
     },
     url: stringOrNull(root.url),
   };
+}
+
+// A `targetComment` is only usable with a pattern, and an invalid regex is a
+// config typo — both fall back to null rather than failing the run, matching
+// how the rest of this parser treats malformed keys.
+function parseTargetComment(value: unknown): TargetCommentConfig | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  const pattern = stringOrNull(raw.pattern);
+  if (!pattern) {
+    return null;
+  }
+  try {
+    new RegExp(pattern);
+  } catch {
+    return null;
+  }
+  return { marker: stringOrNull(raw.marker), pattern };
 }
 
 // Translate one glob to a regex. Supports `**` (any depth, including none),

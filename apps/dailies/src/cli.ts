@@ -192,6 +192,7 @@ interface CiDecideOpts {
   changedFile?: string;
   commentsFile?: string;
   cwd?: string;
+  force?: boolean;
   headSha?: string;
 }
 
@@ -520,12 +521,17 @@ export function buildProgram(): CommandType {
       "JSON array of existing PR comment bodies"
     )
     .option("--head-sha <SHA>", "The commit being considered")
+    .option(
+      "--force",
+      "Demo this commit even if a demo comment already names it. Skips ONLY the freshness check — always keep passing --comments-file, which also carries the deploy target and the last run's metrics"
+    )
     .action(async (opts: CiDecideOpts) => {
       const code = await ciDecide({
         bodyFile: opts.bodyFile,
         changedFile: opts.changedFile,
         commentsFile: opts.commentsFile,
         cwd: opts.cwd,
+        force: opts.force,
         headSha: opts.headSha,
       });
       throw new ExitCodeError(code);

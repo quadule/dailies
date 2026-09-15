@@ -9,7 +9,54 @@ import {
   parseDecision,
   parseDemoRequest,
   previousMetrics,
+  targetFromComments,
 } from "./demo-request.js";
+
+// The real shape: a Buildkite pr-commenter bot posts the review-app URL with its
+// own HTML marker once the deploy succeeds.
+const DEPLOY_COMMENT =
+  "## Review App Deployment\nYour PR was deployed successfully to https://wrapbook-dev-pr-64365.wrapbook.reviews\n\n<!-- review-app-deploy::pr-commenter-buildkite-plugin -->";
+const TARGET_COMMENT = {
+  marker: "review-app-deploy::pr-commenter-buildkite-plugin",
+  pattern: "https://[a-z0-9-]+\\.wrapbook\\.reviews",
+};
+
+describe("targetFromComments", () => {
+  it("reads the URL out of a marked deploy comment", () => {
+    expect(targetFromComments([DEPLOY_COMMENT], TARGET_COMMENT)).toBe(
+      "https://wrapbook-dev-pr-64365.wrapbook.reviews"
+    );
+  });
+
+  it("ignores a human saying the deploy failed", () => {
+    // A reviewer writing "the review app failed deployment" must not be mistaken
+    // for the bot's success comment — only the marker counts.
+    const human = "the review app failed deployment, I'll review when it's up";
+    expect(targetFromComments([human], TARGET_COMMENT)).toBeNull();
+  });
+
+  it("prefers the most recent deploy, so a redeploy wins", () => {
+    const older = DEPLOY_COMMENT.replace("64365", "11111");
+    expect(targetFromComments([older, DEPLOY_COMMENT], TARGET_COMMENT)).toBe(
+      "https://wrapbook-dev-pr-64365.wrapbook.reviews"
+    );
+  });
+
+  it("refuses a non-https match even inside a marked comment", () => {
+    const sneaky =
+      "http://evil.wrapbook.reviews\n<!-- review-app-deploy::pr-commenter-buildkite-plugin -->";
+    expect(
+      targetFromComments([sneaky], {
+        marker: TARGET_COMMENT.marker,
+        pattern: "https?://[a-z0-9.-]+",
+      })
+    ).toBeNull();
+  });
+
+  it("is off unless configured", () => {
+    expect(targetFromComments([DEPLOY_COMMENT], null)).toBeNull();
+  });
+});
 
 describe("parseDemoRequest", () => {
   it("defaults to cinematic with a random theme and the first URL", () => {
@@ -78,6 +125,7 @@ describe("parseDemoRequest", () => {
   it("handles an empty body", () => {
     expect(parseDemoRequest("")).toEqual({
       target: null,
+      targetIsExplicit: false,
       cinematic: true,
       prompt: null,
     });
@@ -110,6 +158,70 @@ describe("decideDemo", () => {
     });
     expect(d.target).toBe("https://pr-1.review.app");
     expect(d.prompt).toBe("noir");
+  });
+
+  it("keeps the repo default when the body only mentions a URL in prose", () => {
+    // Every real PR description opens with a ticket link. Scavenging it as the
+    // demo target pointed CI at the tracker instead of the app.
+    const d = decideDemo({
+      body: "## Description\n[APA-3002](https://linear.app/wrapbook/issue/APA-3002)\n\nAdds a card.",
+      changedPaths: ["app/views/a.erb"],
+      config,
+    });
+    expect(d.target).toBe("http://localhost:3000");
+  });
+
+  it("still scavenges a body URL when the repo has no configured target", () => {
+    const noUrl = parseProjectConfig({ demo: { paths: ["app/views/**"] } });
+    const d = decideDemo({
+      body: "Deployed at https://pr-9.review.app for review.",
+      changedPaths: ["app/views/a.erb"],
+      config: noUrl,
+    });
+    expect(d.target).toBe("https://pr-9.review.app");
+    expect(d.run).toBe(true);
+  });
+
+  it("prefers the deploy comment's review-app URL over the repo default", () => {
+    const withComment = parseProjectConfig({
+      demo: { paths: ["app/views/**"], targetComment: TARGET_COMMENT },
+      url: "http://localhost:3000",
+    });
+    const d = decideDemo({
+      body: "## Description\n[APA-3002](https://linear.app/wrapbook/issue/APA-3002)",
+      changedPaths: ["app/views/a.erb"],
+      comments: [DEPLOY_COMMENT],
+      config: withComment,
+    });
+    expect(d.target).toBe("https://wrapbook-dev-pr-64365.wrapbook.reviews");
+  });
+
+  it("still lets an explicit dailies-url: beat the deploy comment", () => {
+    const withComment = parseProjectConfig({
+      demo: { paths: ["app/views/**"], targetComment: TARGET_COMMENT },
+      url: "http://localhost:3000",
+    });
+    const d = decideDemo({
+      body: "dailies-url: https://staging.example.test",
+      changedPaths: ["app/views/a.erb"],
+      comments: [DEPLOY_COMMENT],
+      config: withComment,
+    });
+    expect(d.target).toBe("https://staging.example.test");
+  });
+
+  it("falls back to the repo default when no deploy comment has landed yet", () => {
+    const withComment = parseProjectConfig({
+      demo: { paths: ["app/views/**"], targetComment: TARGET_COMMENT },
+      url: "http://localhost:3000",
+    });
+    const d = decideDemo({
+      body: "Adds a card.",
+      changedPaths: ["app/views/a.erb"],
+      comments: ["still building…"],
+      config: withComment,
+    });
+    expect(d.target).toBe("http://localhost:3000");
   });
 
   it("lets the PR body opt out of the cinematic cut", () => {

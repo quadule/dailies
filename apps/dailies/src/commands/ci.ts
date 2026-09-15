@@ -17,6 +17,7 @@ export interface CiDecideArgs {
   changedFile?: string;
   commentsFile?: string;
   cwd?: string;
+  force?: boolean;
   headSha?: string;
 }
 

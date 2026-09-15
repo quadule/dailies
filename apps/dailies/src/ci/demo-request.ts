@@ -11,8 +11,15 @@
 //   dailies-url: / dailies-target: / Demo URL: / Demo target:   → the app to drive
 //   dailies-theme: / dailies-prompt: / Theme:                   → cinematic direction
 //   "plain demo" / "no cinematic" / "plain video" / "no narration" → disable cinematic
-// With no explicit target marker the first standalone http(s) URL in the body is
-// used, then the repo default.
+// Target precedence, highest first:
+//   1. an explicit `dailies-url:` marker in the PR body
+//   2. a deploy comment matching `demo.targetComment` — for review apps, whose
+//      URL only exists once a deploy succeeds and is posted by a bot
+//   3. the repo default (`url` in .dailies/config.json)
+//   4. the first standalone http(s) URL in the body
+// (4) is a convenience for repos with no config at all; it must not outrank one,
+// because a real PR description opens with a ticket link, and scavenging that
+// would point the run at the tracker instead of the app.
 //
 // Kept as pure, unit-tested functions with a thin JSON CLI — bash `grep` in a
 // YAML `run:` block is where this kind of logic rots.
@@ -26,6 +33,7 @@ import {
   isWorthDemoing,
   loadProject,
   type ProjectConfig,
+  type TargetCommentConfig,
 } from "../project/config.js";
 import { deserializeMetrics, type Metric } from "../session/metrics.js";
 
@@ -189,9 +197,14 @@ export interface DemoRequest {
   prompt: string | null;
   // The running app to drive. Null → nothing to record against.
   target: string | null;
+  // Whether `target` came from an explicit marker rather than being scavenged
+  // out of the body's prose. Only a marked target may outrank the repo default.
+  targetIsExplicit: boolean;
 }
 
-export interface DemoDecision extends DemoRequest {
+// `targetIsExplicit` is deliberately dropped: it is how the target was chosen,
+// not part of the verdict, and this interface is the CLI's JSON output.
+export interface DemoDecision extends Omit<DemoRequest, "targetIsExplicit"> {
   // How the verdict was reached, for the log: "agent", "paths", "always", or
   // "paths (agent unavailable)".
   decidedBy: string;
@@ -242,6 +255,43 @@ function cleanUrl(url: string): string {
   return url.replace(/^[<(]+/, "").replace(/[>).,;]+$/, "");
 }
 
+// Pull a per-PR target out of the PR's comments — for setups where the app to
+// drive only exists once a deploy succeeds and a bot posts its URL. Comments are
+// searched NEWEST first, so a redeploy after a failed one wins.
+//
+// Only comments carrying the configured `marker` count, and the match must be an
+// https URL: a comment is untrusted text, and this value becomes the URL a
+// browser drives and an agent is told about. See the TRUST note on
+// TargetCommentConfig. Pure → unit-tested.
+export function targetFromComments(
+  comments: string[],
+  config: TargetCommentConfig | null
+): string | null {
+  if (!config) {
+    return null;
+  }
+  const re = new RegExp(config.pattern);
+  for (const body of [...comments].reverse()) {
+    if (typeof body !== "string") {
+      continue;
+    }
+    if (config.marker && !body.includes(config.marker)) {
+      continue;
+    }
+    const found = body.match(re)?.[0];
+    if (!found) {
+      continue;
+    }
+    const url = cleanUrl(found);
+    // https only — not http, not file://, not a repo-relative .html path. Those
+    // are fine from trusted config; they are not fine from a comment.
+    if (/^https:\/\/\S+$/i.test(url)) {
+      return url;
+    }
+  }
+  return null;
+}
+
 // Read just the per-PR overrides out of a body. Pure → unit-tested.
 export function parseDemoRequest(body: string): DemoRequest {
   const text = body ?? "";
@@ -250,10 +300,12 @@ export function parseDemoRequest(body: string): DemoRequest {
     ? cleanUrl(marked)
     : (text.match(TARGET_RE)?.[0] ?? null);
   const target = candidate ? cleanUrl(candidate) : null;
+  const valid = target && isValidTarget(target) ? target : null;
   return {
     cinematic: !PLAIN_RE.test(text),
     prompt: markerValue(text, THEME_MARKERS),
-    target: target && isValidTarget(target) ? target : null,
+    target: valid,
+    targetIsExplicit: valid !== null && marked !== null,
   };
 }
 
@@ -263,15 +315,35 @@ export function parseDemoRequest(body: string): DemoRequest {
 export function decideDemo(args: {
   body: string;
   changedPaths: string[];
-  // Existing PR comments, for the "already demoed this commit" check.
+  // Existing PR comments — for the "already demoed this commit" check, and for
+  // a deploy comment carrying this PR's target (see demo.targetComment).
   comments?: string[];
   config: ProjectConfig;
+  // Re-demo this commit even though a demo comment already names it. Only the
+  // freshness check is skipped — the comments still carry the deploy target and
+  // the previous run's metrics, so they must NOT be blanked out to force a run.
+  force?: boolean;
   // The PR head this run would demo.
   headSha?: string;
 }): DemoDecision {
-  const { body, changedPaths, comments = [], config, headSha = "" } = args;
+  const {
+    body,
+    changedPaths,
+    comments = [],
+    config,
+    force = false,
+    headSha = "",
+  } = args;
   const override = parseDemoRequest(body);
-  const target = override.target ?? config.url;
+  // An explicit `dailies-url:` beats everything; then a deploy comment, which is
+  // the freshest per-PR fact (and the only one that knows the app is actually
+  // up); then the repo default; and last a URL merely scavenged from the body's
+  // prose. See the precedence note at the top of this file.
+  const target = override.targetIsExplicit
+    ? override.target
+    : (targetFromComments(comments, config.demo.targetComment) ??
+      config.url ??
+      override.target);
   // `cinematic` is a flag, so "specified" means the body opted out explicitly.
   const cinematic =
     override.cinematic === false ? false : config.demo.cinematic;
@@ -287,7 +359,7 @@ export function decideDemo(args: {
   // Nothing new to show: this exact commit already has a demo. Checked before
   // the target, so a re-run of an already-demoed PR is quiet rather than
   // complaining about configuration.
-  if (isAlreadyDemoed(headSha, comments)) {
+  if (!force && isAlreadyDemoed(headSha, comments)) {
     return {
       cinematic,
       decidedBy: "freshness",
@@ -332,6 +404,7 @@ export async function decideDemoWithAgent(args: {
   changedPaths: string[];
   comments?: string[];
   config: ProjectConfig;
+  force?: boolean;
   headSha?: string;
 }): Promise<DemoDecision> {
   const base = decideDemo(args);
@@ -442,6 +515,7 @@ export async function runDecide(args: {
   changedFile?: string;
   commentsFile?: string;
   cwd?: string;
+  force?: boolean;
   headSha?: string;
 }): Promise<string> {
   const [body, changed, comments] = await Promise.all([
@@ -455,6 +529,7 @@ export async function runDecide(args: {
     changedPaths: changed.split(/\r?\n/),
     comments: parseComments(comments),
     config,
+    force: args.force ?? false,
     headSha: args.headSha ?? "",
   });
   return JSON.stringify(decision);
@@ -467,6 +542,7 @@ async function main(): Promise<void> {
     changedFile: args["changed-file"],
     commentsFile: args["comments-file"],
     cwd: args.cwd,
+    force: args.force !== undefined,
     headSha: args["head-sha"],
   });
   process.stdout.write(`${json}\n`);
