@@ -19,10 +19,10 @@ async function project(files: Record<string, string>): Promise<string> {
 }
 
 describe("parseProjectConfig", () => {
-  it("reads url, demo paths, prompt and the cinematic flag", () => {
+  it("reads url, demo paths, prompt and the mode", () => {
     const cfg = parseProjectConfig({
       demo: {
-        cinematic: false,
+        mode: "song",
         paths: ["app/views/**", "app/components/**"],
         prompt: "1970s heist film",
       },
@@ -31,12 +31,16 @@ describe("parseProjectConfig", () => {
     expect(cfg.url).toBe("http://localhost:3000");
     expect(cfg.demo.paths).toEqual(["app/views/**", "app/components/**"]);
     expect(cfg.demo.prompt).toBe("1970s heist film");
-    expect(cfg.demo.cinematic).toBe(false);
+    expect(cfg.demo.mode).toBe("song");
   });
 
-  it("defaults cinematic to true when unset", () => {
-    expect(parseProjectConfig({}).demo.cinematic).toBe(true);
-    expect(parseProjectConfig({ demo: {} }).demo.cinematic).toBe(true);
+  it("leaves the mode unset so the agent picks, rather than defaulting", () => {
+    expect(parseProjectConfig({}).demo.mode).toBeNull();
+    expect(parseProjectConfig({ demo: {} }).demo.mode).toBeNull();
+  });
+
+  it("ignores an unrecognized mode rather than pinning one", () => {
+    expect(parseProjectConfig({ demo: { mode: "epic" } }).demo.mode).toBeNull();
   });
 
   it("falls back to defaults for junk rather than throwing", () => {
@@ -149,7 +153,7 @@ describe("loadProject", () => {
     const loaded = await loadProject(dir);
     expect(loaded.root).toBeNull();
     expect(loaded.flowsPath).toBeNull();
-    expect(loaded.config.demo.cinematic).toBe(true);
+    expect(loaded.config.demo.mode).toBeNull();
   });
 
   it("survives malformed config.json with defaults", async () => {
@@ -157,7 +161,7 @@ describe("loadProject", () => {
     const loaded = await loadProject(dir);
     expect(loaded.root).not.toBeNull();
     expect(loaded.config.url).toBeNull();
-    expect(loaded.config.demo.cinematic).toBe(true);
+    expect(loaded.config.demo.mode).toBeNull();
   });
 
   it("reports a config with no flows file, and vice versa", async () => {

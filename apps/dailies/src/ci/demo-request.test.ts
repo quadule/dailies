@@ -59,12 +59,12 @@ describe("targetFromComments", () => {
 });
 
 describe("parseDemoRequest", () => {
-  it("defaults to cinematic with a random theme and the first URL", () => {
+  it("leaves the mode unset with a random theme and the first URL", () => {
     const r = parseDemoRequest(
       "Adds login. Try it at https://staging.example.com/login please."
     );
     expect(r.target).toBe("https://staging.example.com/login");
-    expect(r.cinematic).toBe(true);
+    expect(r.mode).toBeNull();
     expect(r.prompt).toBeNull();
   });
 
@@ -86,13 +86,11 @@ describe("parseDemoRequest", () => {
     ).toBe("noir");
   });
 
-  it("disables cinematic on a plain-demo request", () => {
-    expect(
-      parseDemoRequest("https://a.test — plain demo please").cinematic
-    ).toBe(false);
-    expect(parseDemoRequest("https://a.test\nno narration").cinematic).toBe(
-      false
+  it("reads a plain-demo request as the plain mode", () => {
+    expect(parseDemoRequest("https://a.test — plain demo please").mode).toBe(
+      "plain"
     );
+    expect(parseDemoRequest("https://a.test\nno narration").mode).toBe("plain");
   });
 
   it("accepts a local .html path target (static local demo)", () => {
@@ -113,7 +111,7 @@ describe("parseDemoRequest", () => {
   it("returns a null target when the body has no URL or html path", () => {
     const r = parseDemoRequest("Just refactors internals, no UI.");
     expect(r.target).toBeNull();
-    expect(r.cinematic).toBe(true);
+    expect(r.mode).toBeNull();
   });
 
   it("strips wrapping/trailing punctuation from a URL", () => {
@@ -126,7 +124,7 @@ describe("parseDemoRequest", () => {
     expect(parseDemoRequest("")).toEqual({
       target: null,
       targetIsExplicit: false,
-      cinematic: true,
+      mode: null,
       prompt: null,
     });
   });
@@ -147,7 +145,7 @@ describe("decideDemo", () => {
     expect(d.run).toBe(true);
     expect(d.target).toBe("http://localhost:3000");
     expect(d.prompt).toBe("repo default theme");
-    expect(d.cinematic).toBe(true);
+    expect(d.mode).toBe("cinematic");
   });
 
   it("lets the PR body override the target and theme", () => {
@@ -224,23 +222,52 @@ describe("decideDemo", () => {
     expect(d.target).toBe("http://localhost:3000");
   });
 
-  it("lets the PR body opt out of the cinematic cut", () => {
+  it("reads a plain-demo body as the plain mode", () => {
     const d = decideDemo({
       body: "plain demo please",
       changedPaths: ["app/views/a.erb"],
       config,
     });
-    expect(d.cinematic).toBe(false);
+    expect(d.mode).toBe("plain");
   });
 
-  it("honors a repo default of cinematic:false, with no body opinion", () => {
+  it("reads a sing-it request as the song mode", () => {
+    const d = decideDemo({
+      body: "small win — sing it",
+      changedPaths: ["app/views/a.erb"],
+      config,
+    });
+    expect(d.mode).toBe("song");
+  });
+
+  it("lets plain win when a body somehow asks for both", () => {
+    const d = decideDemo({
+      body: "sing it, but actually no narration please",
+      changedPaths: ["app/views/a.erb"],
+      config,
+    });
+    expect(d.mode).toBe("plain");
+  });
+
+  it("honors a repo-pinned mode, with no body opinion", () => {
     const plain = parseProjectConfig({
-      demo: { cinematic: false },
+      demo: { mode: "plain" },
       url: "http://x",
     });
     expect(
-      decideDemo({ body: "", changedPaths: ["a"], config: plain }).cinematic
-    ).toBe(false);
+      decideDemo({ body: "", changedPaths: ["a"], config: plain }).mode
+    ).toBe("plain");
+  });
+
+  it("lets the PR body override a repo-pinned mode", () => {
+    const pinned = parseProjectConfig({
+      demo: { mode: "song" },
+      url: "http://x",
+    });
+    expect(
+      decideDemo({ body: "plain demo", changedPaths: ["a"], config: pinned })
+        .mode
+    ).toBe("plain");
   });
 
   it("skips when no changed file is user-facing", () => {
@@ -450,6 +477,7 @@ describe("parseDecision", () => {
       )
     ).toEqual({
       flow: "Open a payslip",
+      mode: null,
       reason: "changes the payslip",
       worth: true,
     });
@@ -460,6 +488,7 @@ describe("parseDecision", () => {
       parseDecision('Sure!\n```json\n{"worth":false,"reason":"docs only"}\n```')
     ).toEqual({
       flow: null,
+      mode: null,
       reason: "docs only",
       worth: false,
     });
@@ -556,13 +585,38 @@ describe("decideDemoWithAgent", () => {
   });
 });
 
+describe("parseDecision mode", () => {
+  it("reads a mode the model picked", () => {
+    expect(
+      parseDecision('{"worth":true,"reason":"fun one","mode":"song"}')?.mode
+    ).toBe("song");
+  });
+
+  it("ignores an unrecognized mode rather than failing the decision", () => {
+    const d = parseDecision('{"worth":true,"reason":"ok","mode":"epic"}');
+    expect(d?.mode).toBeNull();
+    expect(d?.worth).toBe(true);
+  });
+
+  it("drops a mode volunteered on a skip, like flow", () => {
+    expect(
+      parseDecision('{"worth":false,"reason":"docs","mode":"song"}')?.mode
+    ).toBeNull();
+  });
+});
+
 describe("parseDecision flow hygiene", () => {
   it("drops a flow the model volunteered on a skip", () => {
     // Observed live: the model fills `flow` in even when it says worth:false.
     const d = parseDecision(
       '{"worth":false,"reason":"specs only","flow":"Sign in and look at the screen"}'
     );
-    expect(d).toEqual({ flow: null, reason: "specs only", worth: false });
+    expect(d).toEqual({
+      flow: null,
+      mode: null,
+      reason: "specs only",
+      worth: false,
+    });
   });
 
   it("keeps the flow when the demo will run", () => {

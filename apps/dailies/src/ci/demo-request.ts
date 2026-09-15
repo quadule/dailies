@@ -10,7 +10,8 @@
 // PR-body conventions (case-insensitive, value runs to end of line):
 //   dailies-url: / dailies-target: / Demo URL: / Demo target:   → the app to drive
 //   dailies-theme: / dailies-prompt: / Theme:                   → cinematic direction
-//   "plain demo" / "no cinematic" / "plain video" / "no narration" → disable cinematic
+//   "plain demo" / "no cinematic" / "plain video" / "no narration" → force plain
+//   "as a song" / "sing it" / "musical" / dailies-song             → force song
 // Target precedence, highest first:
 //   1. an explicit `dailies-url:` marker in the PR body
 //   2. a deploy comment matching `demo.targetComment` — for review apps, whose
@@ -29,6 +30,7 @@ import { createLogger } from "dailies-logger";
 import { generateJson } from "../llm/index.js";
 import { tryParseJson } from "../llm/json.js";
 import {
+  type DemoMode,
   type DemoVerdict,
   isWorthDemoing,
   loadProject,
@@ -91,6 +93,12 @@ export const DECISION_SCHEMA = {
         "The single user-facing flow to demo, in one sentence an operator could follow. Empty when not worth demoing.",
       type: "string",
     },
+    mode: {
+      description:
+        'How to finish the cut. "cinematic" — spoken narration over the run, the default and right for most changes. "song" — one sung song instead of narration; pick it for a light or celebratory change, or a flow with little to explain, where a sung cut is more watchable than commentary. "plain" — no narration at all; pick it only when narration would obscure the change, e.g. a demo that is itself about audio or timing.',
+      enum: ["plain", "cinematic", "song"],
+      type: "string",
+    },
     reason: {
       description: "One short sentence explaining the verdict.",
       type: "string",
@@ -106,6 +114,9 @@ export const DECISION_SCHEMA = {
 
 export interface DemoDecisionFromAgent {
   flow: string | null;
+  // The mode the model picked, or null when it didn't answer or the repo
+  // pinned one (then it is never asked).
+  mode: DemoMode | null;
   reason: string;
   worth: boolean;
 }
@@ -186,12 +197,22 @@ export function parseDecision(raw: string): DemoDecisionFromAgent | null {
     parsed.worth && typeof parsed.flow === "string" && parsed.flow.trim()
       ? parsed.flow.trim()
       : null;
-  return { flow, reason, worth: parsed.worth };
+  // Same reasoning as `flow`: a mode is only meaningful for a demo that will be
+  // recorded, and an unrecognized value falls back rather than failing the run.
+  const mode =
+    parsed.worth &&
+    (parsed.mode === "plain" ||
+      parsed.mode === "cinematic" ||
+      parsed.mode === "song")
+      ? parsed.mode
+      : null;
+  return { flow, mode, reason, worth: parsed.worth };
 }
 
 export interface DemoRequest {
-  // Produce the cinematic cut (narration/title/captions) vs a plain recording.
-  cinematic: boolean;
+  // The mode this PR body asked for, or null when it didn't say — then the
+  // repo config, and failing that the agent, decides.
+  mode: DemoMode | null;
   // Verbatim cinematic direction for `session end --prompt`, or null for a
   // random theme.
   prompt: string | null;
@@ -203,14 +224,18 @@ export interface DemoRequest {
 }
 
 // `targetIsExplicit` is deliberately dropped: it is how the target was chosen,
-// not part of the verdict, and this interface is the CLI's JSON output.
-export interface DemoDecision extends Omit<DemoRequest, "targetIsExplicit"> {
+// not part of the verdict, and this interface is the CLI's JSON output. `mode`
+// is narrowed — the request's is nullable ("the body didn't say"), the
+// decision's is always resolved.
+export interface DemoDecision
+  extends Omit<DemoRequest, "mode" | "targetIsExplicit"> {
   // How the verdict was reached, for the log: "agent", "paths", "always", or
   // "paths (agent unavailable)".
   decidedBy: string;
   // The flow the model suggests recording, when it named one. Handed to the
   // recording agent so it doesn't have to re-derive it from the diff.
   flow: string | null;
+  mode: DemoMode;
   // One line explaining the decision, for the workflow log and the PR comment.
   reason: string;
   // Whether to actually record.
@@ -225,6 +250,7 @@ const TARGET_MARKERS = [
 ];
 const THEME_MARKERS = ["dailies-theme", "dailies-prompt", "theme"];
 const PLAIN_RE = /\b(plain demo|no cinematic|plain video|no narration)\b/i;
+const SONG_RE = /\b(as a song|sing it|musical|dailies-song)\b/i;
 // A demo target can be a remote URL, a file:// URL, or a local .html path (so a
 // static HTML file checked into the repo works as a target too).
 const URL_RE = /(?:https?|file):\/\/[^\s<>()[\]]+/i;
@@ -292,6 +318,16 @@ export function targetFromComments(
   return null;
 }
 
+// The mode a PR body asked for, or null when it said nothing. Plain wins over
+// song when a body somehow says both: "no narration" is the more emphatic
+// instruction, and a song is narration.
+function bodyMode(text: string): DemoMode | null {
+  if (PLAIN_RE.test(text)) {
+    return "plain";
+  }
+  return SONG_RE.test(text) ? "song" : null;
+}
+
 // Read just the per-PR overrides out of a body. Pure → unit-tested.
 export function parseDemoRequest(body: string): DemoRequest {
   const text = body ?? "";
@@ -302,7 +338,7 @@ export function parseDemoRequest(body: string): DemoRequest {
   const target = candidate ? cleanUrl(candidate) : null;
   const valid = target && isValidTarget(target) ? target : null;
   return {
-    cinematic: !PLAIN_RE.test(text),
+    mode: bodyMode(text),
     prompt: markerValue(text, THEME_MARKERS),
     target: valid,
     targetIsExplicit: valid !== null && marked !== null,
@@ -344,9 +380,10 @@ export function decideDemo(args: {
     : (targetFromComments(comments, config.demo.targetComment) ??
       config.url ??
       override.target);
-  // `cinematic` is a flag, so "specified" means the body opted out explicitly.
-  const cinematic =
-    override.cinematic === false ? false : config.demo.cinematic;
+  // The body wins, then a pinned repo mode. Null here means neither said, and
+  // the agent path below chooses; the deterministic paths fall back to
+  // `cinematic`, which is what a demo was before modes existed.
+  const mode = override.mode ?? config.demo.mode;
   const prompt = override.prompt ?? config.demo.prompt;
   const worth: DemoVerdict =
     config.demo.decide === "always"
@@ -361,8 +398,8 @@ export function decideDemo(args: {
   // complaining about configuration.
   if (!force && isAlreadyDemoed(headSha, comments)) {
     return {
-      cinematic,
       decidedBy: "freshness",
+      mode: mode ?? "cinematic",
       flow: null,
       prompt,
       reason: `already demoed at ${headSha.slice(0, 7)}`,
@@ -373,8 +410,8 @@ export function decideDemo(args: {
 
   if (!target) {
     return {
-      cinematic,
       decidedBy: "config",
+      mode: mode ?? "cinematic",
       flow: null,
       prompt,
       reason:
@@ -384,8 +421,8 @@ export function decideDemo(args: {
     };
   }
   return {
-    cinematic,
     decidedBy: config.demo.decide === "always" ? "always" : "paths",
+    mode: mode ?? "cinematic",
     flow: null,
     prompt,
     reason: worth.reason,
@@ -447,10 +484,16 @@ export async function decideDemoWithAgent(args: {
       "the demo decision was made by Apple Intelligence on-device, which is unreliable on borderline changes — prefer the claude CLI or an OpenAI-compatible endpoint for this call"
     );
   }
+  // The agent only gets to pick the mode when nothing more specific already
+  // did. A `plain demo` in the PR body or a pinned `demo.mode` is an
+  // instruction, not a suggestion — `base.mode` already carries it, and asking
+  // the model to reconsider would let it override a human.
+  const pinned = parseDemoRequest(args.body).mode ?? args.config.demo.mode;
   return {
     ...base,
     decidedBy: `agent (${result.provider}/${result.model})`,
     flow: result.value.flow,
+    mode: pinned ?? result.value.mode ?? base.mode,
     reason: result.value.reason,
     run: result.value.worth,
   };

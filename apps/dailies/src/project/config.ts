@@ -40,13 +40,21 @@ export const FLOWS_LINE_BUDGET = 250;
 //   always  demo every change.
 export type DecideMode = "agent" | "always" | "paths";
 
+// How a demo is finished.
+//   plain      the recording as captured — no narration, no title card.
+//   cinematic  spoken narration, a title card, burned captions.
+//   song       one sung song scored over the whole cut, instead of narration.
+export type DemoMode = "plain" | "cinematic" | "song";
+
 export interface DemoConfig {
-  // Produce the cinematic cut by default.
-  cinematic: boolean;
   decide: DecideMode;
   // Free-text steer for the agent decision: what this app considers
   // demo-worthy, which flows matter, what to ignore.
   hint: string | null;
+  // How to finish the cut. NULL — the default — means the agent picks between
+  // `cinematic` and `song` from the change itself, which is what makes a
+  // nightly demo worth opening. Set it to pin every run to one mode.
+  mode: DemoMode | null;
   // Glob patterns marking changes worth demoing. Under `agent` these are a
   // HINT, not a gate — and the fallback when no LLM provider is available.
   // Empty = every change qualifies.
@@ -86,8 +94,8 @@ export interface ProjectConfig {
 
 export const EMPTY_CONFIG: ProjectConfig = {
   demo: {
-    cinematic: true,
     decide: "agent",
+    mode: null,
     hint: null,
     paths: [],
     prompt: null,
@@ -106,6 +114,14 @@ function parseDecideMode(value: unknown): DecideMode {
     : "agent";
 }
 
+// An unset or unrecognized mode means "let the agent choose" rather than a
+// hardcoded default, so a config typo doesn't silently pin every demo to plain.
+function parseDemoMode(value: unknown): DemoMode | null {
+  return value === "plain" || value === "cinematic" || value === "song"
+    ? value
+    : null;
+}
+
 function stringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((v): v is string => typeof v === "string" && v.trim() !== "")
@@ -120,9 +136,9 @@ export function parseProjectConfig(raw: unknown): ProjectConfig {
   const demo = (root.demo ?? {}) as Record<string, unknown>;
   return {
     demo: {
-      cinematic: demo.cinematic === undefined ? true : demo.cinematic !== false,
       decide: parseDecideMode(demo.decide),
       hint: stringOrNull(demo.hint),
+      mode: parseDemoMode(demo.mode),
       paths: stringArray(demo.paths),
       prompt: stringOrNull(demo.prompt),
       targetComment: parseTargetComment(demo.targetComment),

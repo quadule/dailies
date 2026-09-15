@@ -210,7 +210,7 @@ jobs:
                         --arg prev "$PREV" \
                         --arg ask "$ASK" \
                 '. + [{pr: ($n|tonumber), sha: $sha, target: $d.target,
-                       cinematic: $d.cinematic, prompt: ($d.prompt // ""),
+                       mode: $d.mode, prompt: ($d.prompt // ""),
                        flow: (if $ask != "" then $ask else ($d.flow // "") end),
                        prevMetrics: $prev}]' <<<"$MATRIX")
             fi
@@ -328,7 +328,7 @@ jobs:
           TARGET: ${{ matrix.target }}
           PR_NUMBER: ${{ matrix.pr }}
           FLOW: ${{ matrix.flow }}
-          CINEMATIC: ${{ matrix.cinematic }}
+          MODE: ${{ matrix.mode }}
         run: |
           set -euo pipefail
           # Resolve the target: remote/file URLs pass through; a repo-relative or
@@ -358,16 +358,19 @@ jobs:
             FLOW_LINE="The flow to record: $FLOW"
           fi
 
-          # The cinematic decision is made BEFORE recording but was only applied
-          # at finalize — so the agent started the session without --cinematic,
-          # its page.showCaption overlays baked into the video, and the burned
+          # The mode decision is made BEFORE recording but was only applied at
+          # finalize — so the agent started the session without --cinematic, its
+          # page.showCaption overlays baked into the video, and the burned
           # subtitles were then drawn ON TOP of them. Two captions, same moment.
           # Suppressing the overlays has to happen at record time, so the
-          # decision has to reach the agent here.
+          # decision has to reach the agent here. `song` burns captions too, so
+          # it needs the same suppression; only `plain` keeps the overlays,
+          # which in plain mode are the only captions the viewer gets.
           CINEMATIC_LINE=""
-          if [ "${CINEMATIC:-false}" = "true" ]; then
-            CINEMATIC_LINE="This run will be finalized as a cinematic cut, so pass --cinematic to 'dailies session start' as well. It suppresses page.showCaption overlays, which would otherwise be baked into the video and collide with the burned-in subtitles."
-          fi
+          case "${MODE:-cinematic}" in
+            cinematic|song)
+              CINEMATIC_LINE="This run will be finalized as a $MODE cut, so pass --cinematic to 'dailies session start' as well. It suppresses page.showCaption overlays, which would otherwise be baked into the video and collide with the burned-in subtitles." ;;
+          esac
 
           PROMPT=$(printf '%s\n' \
             "Record a short browser demo of the user-facing flow in this pull request." \
@@ -422,7 +425,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          CINEMATIC: ${{ matrix.cinematic }}
+          MODE: ${{ matrix.mode }}
           PROMPT: ${{ matrix.prompt }}
         run: |
           set -euo pipefail
@@ -455,9 +458,14 @@ jobs:
             *)
               echo "::warning::the agent declared no VERDICT — falling back to the per-step tally" ;;
           esac
-          if [ "$CINEMATIC" = "true" ]; then
-            FLAGS+=(--cinematic)
-            if [ -n "${PROMPT:-}" ]; then FLAGS+=(--prompt "$PROMPT"); fi
+          # `--song` implies --cinematic, so it is passed alone. `plain` adds
+          # neither and leaves the recording as captured.
+          case "${MODE:-cinematic}" in
+            song)      FLAGS+=(--song) ;;
+            cinematic) FLAGS+=(--cinematic) ;;
+          esac
+          if [ "${MODE:-cinematic}" != "plain" ] && [ -n "${PROMPT:-}" ]; then
+            FLAGS+=(--prompt "$PROMPT")
           fi
           # A repo's own tooling may have written metrics for this run (e.g. a
           # coverage percentage) into $DAILIES_METRICS as `name=value` lines —
