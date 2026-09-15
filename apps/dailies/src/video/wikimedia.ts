@@ -244,6 +244,15 @@ export function attributionFor(image: CommonsImage): string {
   return `title image: "${image.title}"${who}${lic}${page}`;
 }
 
+// The credits-roll line for an image: the creator first, because that is who
+// the licence requires be credited — the platform and licence follow as
+// provenance. Pure → unit-tested.
+export function creditFor(image: CommonsImage): string {
+  const who = image.artist?.trim() || "unknown creator";
+  const lic = image.license ? `, ${image.license}` : "";
+  return `Title art — ${who} (Wikimedia Commons${lic})`;
+}
+
 // ---------------------------------------------------------------------------
 // I/O.
 // ---------------------------------------------------------------------------
@@ -275,8 +284,13 @@ async function downloadTo(url: string, outPath: string): Promise<void> {
 }
 
 function createProvider(notes: string[], echo?: Echo): TitleBackgroundProvider {
+  // The image this run actually used, so credit() can name its author.
+  let used: CommonsImage | null = null;
   return {
     id: "wikimedia-image",
+    credit() {
+      return used ? creditFor(used) : undefined;
+    },
     async render(directionText, width, _height, outPath) {
       // Progressively relax the query: start with all extracted keywords and
       // drop the trailing (less salient) ones until a permissive image matches —
@@ -298,7 +312,9 @@ function createProvider(notes: string[], echo?: Echo): TitleBackgroundProvider {
       }
       echo?.(`$ curl -sL '${image.imageUrl}' -o '${outPath}'`);
       await downloadTo(image.imageUrl, outPath);
-      // CC-BY/BY-SA require attribution — record it in the run notes.
+      // CC-BY/BY-SA require attribution — record it in the run notes AND keep
+      // the image so the credits roll can name the author too.
+      used = image;
       notes.push(attributionFor(image));
     },
   };

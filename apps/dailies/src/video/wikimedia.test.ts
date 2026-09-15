@@ -3,6 +3,7 @@ import {
   attributionFor,
   buildCommonsSearchUrl,
   cleanArtist,
+  creditFor,
   imageKeywords,
   isPermissiveLicense,
   pickCommonsImage,
@@ -156,6 +157,34 @@ describe("pickCommonsImage", () => {
   it("returns null when nothing qualifies", () => {
     expect(pickCommonsImage({ query: { pages: {} } })).toBeNull();
     expect(pickCommonsImage({})).toBeNull();
+  });
+});
+
+describe("creditFor", () => {
+  it("names the creator first, not just the platform", () => {
+    // CC-BY/BY-SA require crediting the AUTHOR. "Wikimedia Commons" alone names
+    // the platform the file sits on and satisfies nothing.
+    expect(
+      creditFor({
+        title: "File:Wet Street.jpg",
+        imageUrl: "https://upload/x.jpg",
+        descriptionUrl: "",
+        license: "CC BY-SA 4.0",
+        artist: "Jane Doe",
+      })
+    ).toBe("Title art — Jane Doe (Wikimedia Commons, CC BY-SA 4.0)");
+  });
+
+  it("says so plainly when Commons has no artist for the file", () => {
+    expect(
+      creditFor({
+        title: "File:Old Map.jpg",
+        imageUrl: "https://upload/x.jpg",
+        descriptionUrl: "",
+        license: "Public domain",
+        artist: undefined,
+      })
+    ).toBe("Title art — unknown creator (Wikimedia Commons, Public domain)");
   });
 });
 

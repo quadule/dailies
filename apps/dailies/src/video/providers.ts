@@ -45,6 +45,12 @@ export interface TtsProvider {
 }
 
 export interface TitleBackgroundProvider {
+  // Optional: a specific credit line for the image actually used, read AFTER
+  // render(). A stock source must name the creator — "Wikimedia Commons" is the
+  // platform, not the author, and CC-BY/BY-SA require the author. Mirrors
+  // MusicProvider.credit(); when absent the caller falls back to a generic
+  // "made with" line naming the tool.
+  credit?(): string | undefined;
   id: string;
   // Write a themed background IMAGE (png/jpg) at width×height to `outPath`.
   // Throws on failure.

@@ -567,6 +567,30 @@ describe("buildModelCredits", () => {
     ]);
   });
 
+  it("prefers a specific image credit over the generic tool line", () => {
+    expect(
+      buildModelCredits({
+        voiceLabel: "Samantha",
+        ttsId: undefined,
+        musicId: undefined,
+        titleArtId: "wikimedia-image",
+        titleArtCredit:
+          "Title art — Jane Doe (Wikimedia Commons, CC BY-SA 4.0)",
+      })
+    ).toContain("Title art — Jane Doe (Wikimedia Commons, CC BY-SA 4.0)");
+  });
+
+  it("falls back to the generic tool line when no specific credit is given", () => {
+    expect(
+      buildModelCredits({
+        voiceLabel: "Samantha",
+        ttsId: undefined,
+        musicId: undefined,
+        titleArtId: "wikimedia-image",
+      })
+    ).toContain("Title art — Wikimedia Commons (CC)");
+  });
+
   it("does not credit the built-in local gradient as title art", () => {
     expect(
       buildModelCredits({

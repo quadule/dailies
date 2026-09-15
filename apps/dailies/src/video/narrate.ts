@@ -615,6 +615,10 @@ export function buildModelCredits(args: {
   // credit; the built-in local gradient is a fallback, not a tool, so it's not
   // credited (like the drawtext/solid card it replaces).
   titleArtId: string | undefined;
+  // A specific credit for the image actually used (provider.credit()), which
+  // supersedes the generic tool line — same pattern as `hasMusicCredit`. A
+  // stock photo must name its creator, not just the platform it came from.
+  titleArtCredit?: string | undefined;
   song?: boolean;
   hasMusicCredit?: boolean;
 }): string[] {
@@ -630,7 +634,8 @@ export function buildModelCredits(args: {
   if (music) {
     models.push(music);
   }
-  const titleArt = titleArtToolName(args.titleArtId);
+  const titleArt =
+    args.titleArtCredit?.trim() || titleArtToolName(args.titleArtId);
   if (titleArt) {
     models.push(titleArt);
   }
@@ -1008,6 +1013,9 @@ async function assembleVideo(args: {
           ttsId: providers.tts?.id,
           musicId: providers.music?.id,
           titleArtId: background ? providers.titleBackground?.id : undefined,
+          titleArtCredit: background
+            ? providers.titleBackground?.credit?.()
+            : undefined,
           hasMusicCredit: Boolean(musicCredit),
         }),
       }),
@@ -1263,6 +1271,9 @@ async function assembleSongVideo(args: {
           ttsId: undefined,
           musicId: providers.music?.id,
           titleArtId: background ? providers.titleBackground?.id : undefined,
+          titleArtCredit: background
+            ? providers.titleBackground?.credit?.()
+            : undefined,
           song: true,
           hasMusicCredit: Boolean(musicCredit),
         }),
