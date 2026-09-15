@@ -80,11 +80,12 @@ in video and screenshots; disable it with --no-cursor.
 Pass --url <url> to open (and settle) a page at session start, so the recording begins on a
 loaded page instead of the initial blank one — the pre-load blank is trimmed off the video head
 at \`session end\`. Your first step then acts on the already-loaded page.
-\`session end --cinematic\`.
+Captions from \`page.showCaption\` are recorded as timed data and rendered at \`session end\`
+in every mode — the cinematic/song cut is chosen there, so \`session start\` takes no cut flags.
 
   id=$(dailies session start --name "checkout" --url https://shop.example.com/cart)
   id=$(dailies session start --name "smoke" --headless --no-video)
-  id=$(dailies session start --name "demo" --cinematic)`;
+  id=$(dailies session start --name "wide" --viewport 1440x900)`;
 
 export const RUN_LONG_ABOUT = `Run a script as one step inside a session.
 

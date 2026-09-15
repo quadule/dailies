@@ -100,9 +100,9 @@ https://playwright.dev/docs/api/class-page
   camera; reach for `humanClick` / `humanFill` in recordings)
 - `page.showCaption(text, opts?)` — Dailies helper: overlay a short caption on the page to label a
   moment in the recording for a human viewer; fades after `opts.durationMs` (default 3000).
-  Cosmetic only — use sparingly, not to echo step names. In a session started with `--cinematic`
-  the overlay is suppressed (the burned-in themed captions replace it), but the text still feeds
-  the narration as intent — so keep calling it
+  Cosmetic only — use sparingly, not to echo step names. Cues are recorded as timed data and
+  rendered into a caption band at `session end` in every mode; in cinematic/song cuts the text
+  also feeds the narration/lyrics as intent — so keep calling it
 - `page.showSpotlight(target?)` — Dailies helper: animate a spotlight vignette to focus on an
   element (`target` is a selector or locator). The spotlight opens wide then tightens to
   circumscribe the element's bounding box, drawing the reviewer's eye before you interact.

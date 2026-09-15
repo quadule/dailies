@@ -410,11 +410,9 @@ last-opened tab and binds it to that step in the report. So:
   they attach it, continue recording.
 - **Split / dropdown button submenus:** after clicking a button that reveals a submenu, snapshot
   immediately — before any other call — to capture the menu while it's open.
-- **Cinematic mode: flag both ends.** The pass that adds narration + burned captions runs at
-  `session end` — pass `--cinematic` (and `--open`) to `npx dailies-cli session end`, not to
-  `run`. But ALSO pass `--cinematic` to `session start` when you know the recording is for a
-  cinematic edit: that suppresses the `page.showCaption` overlays during recording (their text
-  still feeds the narration) so they don't double up with the burned captions. Re-running
-  `session end --cinematic` on an already-ended session is safe — it rebuilds the report
-  idempotently — but if the session wasn't started with `--cinematic`, the overlays are already
-  baked into the video and you'll get double captions (the command warns you).
+- **Cinematic mode runs at `session end`.** The pass that adds narration + burned captions runs at
+  `session end` — pass `--cinematic` (and `--open`) to `npx dailies-cli session end`, not to `run`
+  or `session start` (which takes no cut flags). `page.showCaption` cues are recorded as timed data
+  and rendered into a caption band at `session end` in **every** mode, so there is nothing to
+  suppress during recording and no double-caption risk. Re-running `session end --cinematic` on an
+  already-ended session is safe — it rebuilds the report idempotently.

@@ -20,7 +20,9 @@
 //   4. the first standalone http(s) URL in the body
 // (4) is a convenience for repos with no config at all; it must not outrank one,
 // because a real PR description opens with a ticket link, and scavenging that
-// would point the run at the tracker instead of the app.
+// would point the run at the tracker instead of the app. It is DROPPED entirely
+// when `demo.targetComment` is set: an unmatched targetComment means the deploy
+// hasn't posted a URL (pending or failed), and (4) would then drive the ticket.
 //
 // Kept as pure, unit-tested functions with a thin JSON CLI — bash `grep` in a
 // YAML `run:` block is where this kind of logic rots.
@@ -375,11 +377,17 @@ export function decideDemo(args: {
   // the freshest per-PR fact (and the only one that knows the app is actually
   // up); then the repo default; and last a URL merely scavenged from the body's
   // prose. See the precedence note at the top of this file.
+  //
+  // That last resort is DROPPED when the repo declares a `demo.targetComment`:
+  // there the app URL comes from a deploy bot, so an unmatched targetComment means
+  // the deploy hasn't posted a URL yet or failed — and a stray link in the body (a
+  // Linear/GitHub issue) is never the app. Falling through to it drove demos at
+  // linear.app. Fail closed instead: no target → the run skips with a clear reason.
   const target = override.targetIsExplicit
     ? override.target
     : (targetFromComments(comments, config.demo.targetComment) ??
       config.url ??
-      override.target);
+      (config.demo.targetComment ? null : override.target));
   // The body wins, then a pinned repo mode. Null here means neither said, and
   // the agent path below chooses; the deterministic paths fall back to
   // `cinematic`, which is what a demo was before modes existed.
@@ -414,8 +422,9 @@ export function decideDemo(args: {
       mode: mode ?? "cinematic",
       flow: null,
       prompt,
-      reason:
-        "no demo target — set `url` in .dailies/config.json or add `dailies-url: <url>` to the PR body",
+      reason: config.demo.targetComment
+        ? "no demo target — no deploy comment matching demo.targetComment carries a URL yet (deploy pending or failed); not scavenging one from the PR body"
+        : "no demo target — set `url` in .dailies/config.json or add `dailies-url: <url>` to the PR body",
       run: false,
       target: null,
     };

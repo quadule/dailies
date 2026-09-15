@@ -222,6 +222,27 @@ describe("decideDemo", () => {
     expect(d.target).toBe("http://localhost:3000");
   });
 
+  it("does not scavenge a body URL when a configured deploy comment carries none", () => {
+    // The #64529 case: targetComment is set and no repo `url`, the deploy comment
+    // has the marker but FAILED so it carries no review-app URL, and the body opens
+    // with a Linear link. Falling through to that link drove demos at linear.app —
+    // fail closed instead (no target, run:false) rather than driving the tracker.
+    const failedDeploy =
+      "## Review App Deployment\n:x: Your PR deployment failed: https://buildkite.com/wrapbook/review-app-deploy/builds/1\n\n<!-- review-app-deploy::pr-commenter-buildkite-plugin -->";
+    const withComment = parseProjectConfig({
+      demo: { paths: ["app/views/**"], targetComment: TARGET_COMMENT },
+    });
+    const d = decideDemo({
+      body: "## Description\nCloses [PAW-10303](https://linear.app/wrapbook/issue/PAW-10303)\n\nExpands the filter.",
+      changedPaths: ["app/views/a.erb"],
+      comments: [failedDeploy],
+      config: withComment,
+    });
+    expect(d.target).toBeNull();
+    expect(d.run).toBe(false);
+    expect(d.reason).toContain("demo.targetComment");
+  });
+
   it("reads a plain-demo body as the plain mode", () => {
     const d = decideDemo({
       body: "plain demo please",

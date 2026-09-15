@@ -67,20 +67,30 @@ describe("describeSpeechCurl", () => {
 });
 
 // Live integration: exercise the real provider against a running oMLX. Skipped
-// automatically when oMLX isn't reachable / configured, so CI and non-oMLX
-// machines stay green.
+// automatically when oMLX isn't reachable / configured, OR when it is reachable
+// but has no TTS model loaded (e.g. an oMLX serving only a music or LLM model) —
+// reachability is not the same as a speech model being present, so CI, non-oMLX
+// machines, and oMLX hosts without a TTS model all stay green.
 const apiKey = await readOmlxApiKey(process.env);
 const baseUrl = omlxBaseUrl(process.env);
-const reachable =
+const ttsModelLoaded =
   apiKey != null &&
   (await fetch(`${baseUrl}/v1/models`, {
     headers: { Authorization: `Bearer ${apiKey}` },
     signal: AbortSignal.timeout(3000),
   })
-    .then((r) => r.ok)
+    .then((r) =>
+      r.ok ? (r.json() as Promise<{ data?: { id?: unknown }[] }>) : null
+    )
+    .then((body) => {
+      const ids = (body?.data ?? [])
+        .map((m) => m?.id)
+        .filter((id): id is string => typeof id === "string");
+      return pickTtsModel(ids, process.env) != null;
+    })
     .catch(() => false));
 
-describe.skipIf(!reachable)("oMLX live TTS", () => {
+describe.skipIf(!ttsModelLoaded)("oMLX live TTS", () => {
   const out = path.join(os.tmpdir(), `dailies-omlx-test-${process.pid}.wav`);
   afterAll(() => rm(out, { force: true }));
 
