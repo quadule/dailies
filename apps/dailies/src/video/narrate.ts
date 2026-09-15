@@ -421,6 +421,32 @@ export function buildAudioMix(tracks: AudioTrack[]): string {
   return `${chains};${labels}amix=inputs=${tracks.length}:normalize=0:dropout_transition=0[aout]`;
 }
 
+// How many characters fit on one title-card line. drawtext has no measuring API,
+// so this estimates from the font size — and two things made the old estimate
+// overshoot, which rendered a long line past the frame edge and clipped it:
+//
+//   - It ignored the scrim's `boxborderw`, which eats fontSize*0.6 on EACH side
+//     of the text — 72px at 720p, more than a quarter of the whole margin.
+//   - 0.52 is the average glyph width for MIXED-case text. Models like to hand
+//     back an all-caps title, and caps run ~20% wider, so a line that measured
+//     as "just fits" actually didn't.
+//
+// Deliberately conservative: wrapping a line early is invisible, and a clipped
+// title is not. Pure → unit-tested.
+export function titleMaxChars(
+  title: string,
+  frameWidth: number,
+  fontSize: number
+): number {
+  const letters = title.replace(/\s/g, "");
+  const upperShare = letters
+    ? (letters.match(/\p{Lu}/gu)?.length ?? 0) / letters.length
+    : 0;
+  const glyphRatio = 0.52 + 0.13 * upperShare;
+  const usableWidth = frameWidth * 0.82 - fontSize * 1.2;
+  return Math.max(8, Math.floor(usableWidth / (fontSize * glyphRatio)));
+}
+
 // Wrap a title into lines of at most `maxChars`, honoring any explicit newlines
 // the model included (so it can force a layout) and greedily word-wrapping the
 // rest. A single word longer than the limit is kept whole rather than split.
@@ -1483,10 +1509,7 @@ async function buildTitleCard(args: {
   // Size text to the frame, then word-wrap; shrink a touch when it spills past
   // ~3 lines so a long title still fits without overflowing the card.
   const baseSize = Math.max(24, Math.round(geometry.height / 12));
-  const maxChars = Math.max(
-    8,
-    Math.floor((geometry.width * 0.82) / (baseSize * 0.52))
-  );
+  const maxChars = titleMaxChars(title, geometry.width, baseSize);
   const lines = wrapTitle(title, maxChars);
   const fontSize = lines.length > 3 ? Math.round(baseSize * 0.8) : baseSize;
   const lineSpacing = Math.round(fontSize * 0.35);

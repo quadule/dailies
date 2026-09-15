@@ -18,6 +18,7 @@ import {
   songHoldSec,
   songTargetSec,
   stepFootageSec,
+  titleMaxChars,
   titleStyle,
   ttsConcurrency,
   voiceCredit,
@@ -366,6 +367,44 @@ describe("normalizeTitle", () => {
     expect(normalizeTitle("SHE FORGOT\\nEVERYTHING")).toBe(
       "SHE FORGOT\nEVERYTHING"
     );
+  });
+
+  describe("titleMaxChars", () => {
+    // 720p title card: fontSize = height/12 = 60.
+    const W = 1280;
+    const SIZE = 60;
+
+    it("wraps an all-caps title that the old estimate let run off-frame", () => {
+      // Regression: "AN APA_DECOUPLE_PAY_METHOD EXPOSÉ" is 33 chars and the old
+      // formula allowed 33, so it stayed on one line and rendered past both
+      // edges of the frame.
+      const title =
+        "BACKSTAGE AT THE PAYMENT RAIL\nAN APA_DECOUPLE_PAY_METHOD EXPOSÉ";
+      const max = titleMaxChars(title, W, SIZE);
+      expect(max).toBeLessThan(33);
+      for (const line of wrapTitle(title, max)) {
+        expect(line.length).toBeLessThanOrEqual(max);
+      }
+    });
+
+    it("allows more characters for mixed-case than for all-caps", () => {
+      expect(titleMaxChars("a quiet lowercase title", W, SIZE)).toBeGreaterThan(
+        titleMaxChars("A LOUD UPPERCASE TITLE", W, SIZE)
+      );
+    });
+
+    it("leaves room for the scrim border, not just the margin", () => {
+      // The naive estimate — margin only, mixed-case ratio — must be an
+      // overestimate of what actually fits.
+      const naive = Math.floor((W * 0.82) / (SIZE * 0.52));
+      expect(titleMaxChars("A LOUD UPPERCASE TITLE", W, SIZE)).toBeLessThan(
+        naive
+      );
+    });
+
+    it("never returns a uselessly small width", () => {
+      expect(titleMaxChars("WIDE", 320, 200)).toBeGreaterThanOrEqual(8);
+    });
     // wrapTitle then splits it into two lines.
     expect(wrapTitle(normalizeTitle("A\\nB"), 40)).toEqual(["A", "B"]);
   });
