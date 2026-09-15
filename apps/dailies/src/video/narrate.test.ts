@@ -6,6 +6,7 @@ import { mapLimit, parseFilterNames } from "./ffmpeg.js";
 import {
   buildAudioMix,
   buildModelCredits,
+  captionBandPx,
   groupedLyricSteps,
   groupStepsForLyrics,
   layoutSongCues,
@@ -547,6 +548,25 @@ describe("voiceCredit", () => {
       "Voice — Ava (Premium)"
     );
     expect(voiceCredit(undefined, "")).toBe("Voice — system speech");
+  });
+});
+
+describe("captionBandPx", () => {
+  it("scales the band with the frame", () => {
+    expect(captionBandPx(720)).toBe(130);
+    expect(captionBandPx(1080)).toBe(194);
+  });
+
+  it("never goes below a two-line minimum on a small frame", () => {
+    expect(captionBandPx(200)).toBe(96);
+  });
+
+  it("falls back to the minimum when the probe failed", () => {
+    // Padding by 0 would silently put captions back over the recording, which
+    // is the whole thing this band exists to prevent.
+    expect(captionBandPx(undefined)).toBe(96);
+    expect(captionBandPx(0)).toBe(96);
+    expect(captionBandPx(Number.NaN)).toBe(96);
   });
 });
 

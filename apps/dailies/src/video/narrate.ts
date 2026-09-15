@@ -1882,8 +1882,15 @@ async function mixAudioAndCaptions(args: {
     inputs.push("-i", track.path);
   }
 
+  // Captions go in a band ADDED BELOW the frame, never on top of the recording.
+  // A caption laid over the video covers exactly what the viewer was told to
+  // look at — on a real demo the line "the date field springs free" sat over the
+  // table containing the date field. Padding keeps the app pixels untouched and
+  // 1:1 (no rescale, no blur) and gives the text a dedicated strip.
+  const probed = burnCaptions ? await probeVideo(ffmpeg, videoPath) : undefined;
+  const band = captionBandPx(probed?.height);
   const filterComplex = burnCaptions
-    ? `${filter};[0:v]subtitles='${escapeSubtitlesPath(srtPath)}':force_style='${SUBTITLE_STYLE}'[vout]`
+    ? `${filter};[0:v]pad=iw:ih+${band}:0:0:color=black,subtitles='${escapeSubtitlesPath(srtPath)}':force_style='${SUBTITLE_STYLE}'[vout]`
     : filter;
 
   const videoMap = burnCaptions ? "[vout]" : "0:v";
@@ -1923,12 +1930,28 @@ async function mixAudioAndCaptions(args: {
   );
 }
 
-// libass force_style: white text in a semi-transparent dark box, bottom third.
-// BorderStyle=3 is libass's opaque-box mode (1=outline, 3=box); only 3 paints
-// BackColour as a box behind the text. The AA alpha byte gives a semi-
-// transparent dark fill (&H in libass ABGR; AA=alpha, 00=opaque).
+// Height of the caption band added below the frame, in pixels. Sized to hold two
+// rendered caption lines with breathing room — the SRT writer wraps to two — and
+// proportional so it holds at any capture size. Pure → unit-tested.
+export function captionBandPx(videoHeightPx: number | undefined): number {
+  if (!(videoHeightPx && Number.isFinite(videoHeightPx) && videoHeightPx > 0)) {
+    // Probe failed — fall back to the 720p band rather than padding by 0, which
+    // would silently put captions back over the recording.
+    return MIN_CAPTION_BAND_PX;
+  }
+  return Math.max(MIN_CAPTION_BAND_PX, Math.round(videoHeightPx * 0.18));
+}
+
+const MIN_CAPTION_BAND_PX = 96;
+
+// libass force_style: white text on black, centered in the band added beneath
+// the video. BorderStyle=3 is libass's opaque-box mode (1=outline, 3=box); only
+// 3 paints BackColour as a box behind the text. The box is fully opaque here
+// because it sits on the black band rather than over the recording, so there is
+// nothing to see through. MarginV lifts the text off the bottom edge to sit
+// roughly centered in the band.
 const SUBTITLE_STYLE =
-  "FontSize=18,PrimaryColour=&H00FFFFFF,BorderStyle=3,BackColour=&HA0000000,Alignment=2,MarginV=40";
+  "FontSize=18,PrimaryColour=&H00FFFFFF,BorderStyle=3,BackColour=&HFF000000,Alignment=2,MarginV=8";
 
 // Escape the subtitles path for the filtergraph. The caller wraps it in single
 // quotes, so filtergraph metacharacters (, ; [ ]) are already literal; we escape
