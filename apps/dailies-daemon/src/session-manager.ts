@@ -4,9 +4,11 @@ import path from "node:path";
 import type { Logger } from "dailies-logger";
 import {
   type ArtifactInfo,
+  type CaptionEvent,
   type CaptureOptions,
   DEFAULT_SESSION_VIEWPORT,
   SESSION_ATTACHMENTS_DIR,
+  SESSION_CAPTIONS_FILE,
   SESSION_CONSOLE_FILE,
   SESSION_HAR_FILE,
   SESSION_SCREENSHOT_EXT,
@@ -46,6 +48,8 @@ type EndReason = "end" | "abort";
 
 interface SessionState {
   artifactsDir: string;
+  // page.showCaption() calls in order, mirrored to captions.json.
+  captions: CaptionEvent[];
   capture: CaptureOptions;
   consolePath: string;
   consoleStream?: WriteStream;
@@ -223,6 +227,7 @@ export class SessionManager {
     const state: SessionState = {
       artifactsDir,
       capture: req.capture,
+      captions: [],
       consolePath,
       entry,
       errorDisposers: [],
@@ -336,6 +341,26 @@ export class SessionManager {
       "session started"
     );
     return this.summarize(state);
+  }
+
+  // Record a page.showCaption() as timed data. Written through to
+  // captions.json on every call rather than flushed at session end: `session
+  // end` can be re-run on an ended session (to re-cut a video), and a crash
+  // must not lose the captions a completed run already showed.
+  async recordCaption(sessionId: string, event: CaptionEvent): Promise<void> {
+    const state = this.sessions.get(sessionId);
+    if (!state) {
+      return;
+    }
+    state.captions.push(event);
+    await writeFile(
+      path.join(state.artifactsDir, SESSION_CAPTIONS_FILE),
+      `${JSON.stringify(state.captions, null, 2)}\n`,
+      "utf8"
+    ).catch(() => {
+      // A caption is presentation, never the point of the run — losing one must
+      // not fail the step that showed it.
+    });
   }
 
   async beginStep(sessionId: string, step: string): Promise<void> {

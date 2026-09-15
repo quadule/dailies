@@ -1,13 +1,20 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, stat } from "node:fs/promises";
+import { copyFile, readFile, stat } from "node:fs/promises";
+import path from "node:path";
 import { formatDurationMs, requestId } from "dailies-cli-kit";
 import {
   sendRequest,
   sessionReportPath,
   sessionResultsPath,
 } from "dailies-daemon-client";
-import type { SessionEndRequest, SessionEndResult } from "dailies-protocol";
+import {
+  type CaptionEvent,
+  CaptionEventSchema,
+  SESSION_CAPTIONS_FILE,
+  type SessionEndRequest,
+  type SessionEndResult,
+} from "dailies-protocol";
 import { logger } from "../logger.js";
 import { writeSessionReport } from "../report/load-and-render.js";
 import { endResultFromDisk } from "../session/artifacts.js";
@@ -128,6 +135,71 @@ export function stepKeepWindows(record: SessionRecord): Segment[] {
   return windows;
 }
 
+// The captions this session showed, as timed data. Read from disk rather than
+// held from the run so a re-finalize (re-rendering a report, re-cutting a video)
+// sees exactly what the original run did. Missing or malformed is not an error:
+// a session that never called showCaption has no file, and a caption is
+// presentation — it must never be the reason a report fails to build.
+async function readCaptions(artifactsDir: string): Promise<CaptionEvent[]> {
+  try {
+    const raw = await readFile(
+      path.join(artifactsDir, SESSION_CAPTIONS_FILE),
+      "utf8"
+    );
+    const parsed = CaptionEventSchema.array().safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : [];
+  } catch {
+    return [];
+  }
+}
+
+// Reading speed used to guarantee a caption stays on screen long enough to be
+// read. 200 wpm is a conservative subtitle-industry figure — deliberately slower
+// than silent reading, because the viewer is also watching the app — plus a
+// second of fixation time to find the text and look back at the page.
+const CAPTION_WPM = 200;
+const CAPTION_FIXATION_MS = 1000;
+// The on-page overlay clamped to two lines and the SRT writer wraps to two, so
+// no caption is ever a wall of text; this bounds the floor for a long one.
+const CAPTION_MAX_READ_MS = 8000;
+
+// How long a caption must stay on screen to be readable. The requested duration
+// is a floor, not a ceiling: `showCaption(text, { durationMs: 500 })` on a long
+// sentence is unreadable no matter what the caller asked for. Pure → tested.
+export function captionReadMs(text: string, requestedMs: number): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  const read = CAPTION_FIXATION_MS + (words / CAPTION_WPM) * 60_000;
+  return Math.min(CAPTION_MAX_READ_MS, Math.max(requestedMs, Math.round(read)));
+}
+
+// Video-time windows that must survive condensing, one per caption. A caption is
+// usually shown over a page that is doing nothing — which is exactly what the
+// freeze detector trims — so without these the caption's own frames are cut and
+// it flashes past. Same clock basis as stepKeepWindows: wall-clock minus the
+// session's createdAt. Pure → unit-tested.
+export function captionKeepWindows(
+  record: SessionRecord,
+  captions: CaptionEvent[]
+): Segment[] {
+  const t0 = Date.parse(record.createdAt);
+  if (!Number.isFinite(t0)) {
+    return [];
+  }
+  const windows: Segment[] = [];
+  for (const caption of captions) {
+    const atMs = Date.parse(caption.at);
+    if (!Number.isFinite(atMs)) {
+      continue;
+    }
+    const start = (atMs - t0) / 1000;
+    windows.push({
+      start: Math.max(0, start),
+      end: start + captionReadMs(caption.text, caption.durationMs) / 1000,
+    });
+  }
+  return windows;
+}
+
 // Seconds into the recording where real content began — a session start --url's
 // settle time, relative to the video start (createdAt, same clock). 0 when no
 // start URL was used (no head trim). Exported for testing.
@@ -170,7 +242,8 @@ export function isDegradedEnd(args: {
 // are kept and the report renders unchanged.
 async function condenseSessionVideos(
   result: SessionEndResult,
-  record: SessionRecord
+  record: SessionRecord,
+  captions: CaptionEvent[]
 ): Promise<void> {
   const videos = result.artifacts.filter((a) => a.kind === "video");
   if (videos.length === 0) {
@@ -182,6 +255,10 @@ async function condenseSessionVideos(
     return;
   }
   const keepWindows = stepKeepWindows(record);
+  // A caption is normally shown over a page that is doing nothing, which is
+  // exactly what the freeze trim removes. These windows keep each caption on
+  // screen long enough to read while the idle around it is still trimmed.
+  const protectWindows = captionKeepWindows(record, captions);
   // A session start --url stamped when its page finished settling; trim the video
   // head to that (same clock basis as createdAt) so the pre-load about:blank is
   // dropped even in the freezedetect / near-t0-first-step cases.
@@ -199,6 +276,7 @@ async function condenseSessionVideos(
       ffmpegPath: ffmpeg,
       headTrimSec,
       keepWindows,
+      protectWindows,
     });
     if (outcome.condensed) {
       mappingKeeps ??= outcome.keeps;
@@ -527,7 +605,11 @@ export async function sessionEnd(
     videoArtifact !== undefined &&
     existsSync(precinematicVideoPath(videoArtifact.path));
   if (opts.condense !== false && !alreadyCondensed) {
-    await condenseSessionVideos(endResult, record);
+    await condenseSessionVideos(
+      endResult,
+      record,
+      await readCaptions(endResult.session.artifactsDir)
+    );
     // Persist the stamped step videoTimes now (not just in the cinematic branch)
     // so a LATER `session end --cinematic` on this already-condensed session can
     // source them without re-condensing.

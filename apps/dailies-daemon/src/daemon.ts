@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { createLogger } from "dailies-logger";
 import {
+  type CaptionEvent,
   EMBEDDED_PACKAGE_JSON,
   type ExecuteRequest,
   parseRequest,
@@ -239,6 +240,19 @@ async function handleExecute(
       return;
     }
 
+    // Captions are recorded against the SESSION, not this request, so they
+    // outlive the step and are there for `session end` to render from. Lifted
+    // out of the runScript call to keep that closure readable.
+    const recordCaptionFor = (
+      manager: typeof sessions,
+      sessionId: string | undefined
+    ) =>
+      sessionId
+        ? (event: CaptionEvent) => {
+            void manager.recordCaption(sessionId, event);
+          }
+        : undefined;
+
     const output = createMessageQueue(socket);
     const timeoutMs = request.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS;
 
@@ -261,6 +275,7 @@ async function handleExecute(
         manager,
         request.browser,
         {
+          onCaption: recordCaptionFor(sessions, targetSession),
           onStdout: (data) => {
             void output.push({
               id: request.id,

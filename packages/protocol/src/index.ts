@@ -337,6 +337,21 @@ export const SESSION_TRACE_FILE = "trace.zip";
 export const SESSION_HAR_FILE = "network.har";
 export const SESSION_CONSOLE_FILE = "console.log";
 export const SESSION_VIDEO_DIR = "video";
+// page.showCaption() calls, recorded as timed DATA rather than painted into the
+// recording. Captions are rendered at `session end`, so the same recording can
+// be finished plain, cinematic or song — and the condense pass can protect
+// enough video for each caption to be readable (see captionKeepWindows).
+export const SESSION_CAPTIONS_FILE = "captions.json";
+
+// One page.showCaption() call. `at` is an absolute wall-clock ISO timestamp on
+// the same basis as the session's createdAt and each step's startedAt, so video
+// offsets are derived exactly the way step windows already are.
+export const CaptionEventSchema = z.object({
+  at: z.string().min(1),
+  durationMs: z.number().int().nonnegative(),
+  text: z.string(),
+});
+export type CaptionEvent = z.infer<typeof CaptionEventSchema>;
 export const SESSION_VIDEO_EXT = ".webm";
 export const SESSION_SCREENSHOTS_DIR = "screenshots";
 export const SESSION_SCREENSHOT_EXT = ".png";

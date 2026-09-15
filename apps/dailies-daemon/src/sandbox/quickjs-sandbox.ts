@@ -249,6 +249,10 @@ interface QuickJSSandboxOptions {
   browserName: string;
   manager: BrowserManager;
   memoryLimitBytes?: number;
+  // Called for every page.showCaption(). The caption is recorded as timed data
+  // so `session end` can render it in whichever mode was chosen, instead of the
+  // recording having to commit to one at capture time.
+  onCaption?: (event: { at: string; durationMs: number; text: string }) => void;
   onStderr: (data: string) => void;
   onStdout: (data: string) => void;
   timeoutMs?: number;
@@ -312,6 +316,20 @@ export class QuickJSSandbox {
           readUploadFile: (name) => this.#readUploadFile(name),
           setDialogPolicy: (guid, action) =>
             this.#setDialogPolicy(guid, action),
+          // Records a page.showCaption() as timed data. Stamped here, on the
+          // host, so the timestamp shares a clock with the session record and
+          // the video — the sandbox has no reliable wall clock of its own.
+          recordCaption: (text, durationMs) => {
+            // Args arrive from the sandbox as `unknown` — a script can call
+            // showCaption with anything, so coerce rather than trust.
+            const ms = Number(durationMs);
+            this.#options.onCaption?.({
+              at: new Date().toISOString(),
+              durationMs: Number.isFinite(ms) ? Math.max(0, Math.round(ms)) : 0,
+              text: String(text),
+            });
+            return Promise.resolve();
+          },
         },
         onConsole: (level, args) => {
           this.#routeConsole(level, args);
@@ -930,6 +948,11 @@ export class QuickJSSandbox {
                   options && typeof options.durationMs === "number"
                     ? options.durationMs
                     : 3000;
+                // Record it as data FIRST. The event is what session end
+                // renders the caption from, and what keeps the condense pass
+                // from trimming this stretch of video away, so it has to
+                // survive a page that navigates or closes mid-call.
+                await hostCall("recordCaption", JSON.stringify([text, ms]));
                 await page
                   .evaluate(
                     (arg) => {

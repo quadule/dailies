@@ -5,6 +5,7 @@ import {
   computeKeepSegments,
   keptSeconds,
   MAX_SELECT_TERMS,
+  MAX_STILL_SEC,
   mergeWindows,
   parseFreezeOutput,
   remapToCondensed,
@@ -169,6 +170,54 @@ describe("subtractFreezesFromWindows", () => {
       [{ start: 4, end: 6 }]
     );
     expect(keeps).toEqual([{ start: 0, end: 10 }]);
+  });
+
+  it("keeps a protected caption span and still trims the idle around it", () => {
+    // The case showCaption's "breathing" animation existed to fake: a caption
+    // shown over a page doing nothing, inside a long dead wait. The caption's
+    // own seconds must survive; the wait either side of it must not.
+    const keeps = subtractFreezesFromWindows(
+      [{ start: 0, end: 40 }],
+      [{ start: 2, end: 38 }],
+      MAX_STILL_SEC,
+      [{ start: 20, end: 25 }]
+    );
+    // Cut would have been [3, 36.5]; the protected span splits it in two.
+    expect(keeps).toEqual([
+      { start: 0, end: 3 },
+      { start: 20, end: 25 },
+      { start: 36.5, end: 40 },
+    ]);
+  });
+
+  it("protects a caption that starts before the freeze's cut begins", () => {
+    const keeps = subtractFreezesFromWindows(
+      [{ start: 0, end: 20 }],
+      [{ start: 5, end: 18 }],
+      MAX_STILL_SEC,
+      [{ start: 0, end: 8 }]
+    );
+    // Nothing is lost before 8; the rest of the cut [8, 16.5] still goes.
+    expect(keeps).toEqual([
+      { start: 0, end: 8 },
+      { start: 16.5, end: 20 },
+    ]);
+  });
+
+  it("changes nothing when no window is protected", () => {
+    expect(
+      subtractFreezesFromWindows(
+        [{ start: 0, end: 20 }],
+        [{ start: 5, end: 18 }],
+        MAX_STILL_SEC,
+        []
+      )
+    ).toEqual(
+      subtractFreezesFromWindows(
+        [{ start: 0, end: 20 }],
+        [{ start: 5, end: 18 }]
+      )
+    );
   });
 });
 

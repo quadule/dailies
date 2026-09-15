@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { SessionRecord, SessionStep } from "../session/registry.js";
 import {
+  captionKeepWindows,
+  captionReadMs,
   contentStartFloorSec,
   isDegradedEnd,
   STEP_PAD_AFTER_SEC,
@@ -44,6 +46,69 @@ function step(
     ...partial,
   };
 }
+
+describe("captionReadMs", () => {
+  it("treats the requested duration as a floor, not a ceiling", () => {
+    // A long sentence asked to show for 500ms is unreadable no matter what the
+    // caller wanted.
+    const long =
+      "Selecting a non-system-dated payment method unlocks the payment date field for editing";
+    expect(captionReadMs(long, 500)).toBeGreaterThan(500);
+  });
+
+  it("honors a generous requested duration", () => {
+    expect(captionReadMs("Short", 6000)).toBe(6000);
+  });
+
+  it("caps the floor so one caption cannot hold the whole cut", () => {
+    const wall = `${"word ".repeat(400)}`;
+    expect(captionReadMs(wall, 0)).toBe(8000);
+  });
+
+  it("handles an empty caption without dividing by zero", () => {
+    expect(Number.isFinite(captionReadMs("", 0))).toBe(true);
+  });
+});
+
+describe("captionKeepWindows", () => {
+  const record = recordWith([]);
+
+  it("places a caption window at its wall-clock offset into the video", () => {
+    // Same clock basis as stepKeepWindows: caption time minus createdAt.
+    const windows = captionKeepWindows(record, [
+      { at: "2026-06-02T10:00:12.000Z", durationMs: 3000, text: "Hi" },
+    ]);
+    expect(windows).toHaveLength(1);
+    expect(windows[0]?.start).toBe(12);
+    expect(windows[0]?.end).toBeGreaterThanOrEqual(15);
+  });
+
+  it("extends a window that was asked to be shorter than it is readable", () => {
+    const windows = captionKeepWindows(record, [
+      {
+        at: "2026-06-02T10:00:12.000Z",
+        durationMs: 200,
+        text: "Selecting a non-system-dated method unlocks the payment date field",
+      },
+    ]);
+    expect(windows).toHaveLength(1);
+    expect((windows[0]?.end ?? 0) - (windows[0]?.start ?? 0)).toBeGreaterThan(
+      0.2
+    );
+  });
+
+  it("skips a caption with an unparseable timestamp rather than throwing", () => {
+    expect(
+      captionKeepWindows(record, [
+        { at: "not a date", durationMs: 3000, text: "Hi" },
+      ])
+    ).toEqual([]);
+  });
+
+  it("returns nothing when there are no captions", () => {
+    expect(captionKeepWindows(record, [])).toEqual([]);
+  });
+});
 
 describe("isDegradedEnd", () => {
   it("is not degraded when re-finalizing an already-ended session", () => {

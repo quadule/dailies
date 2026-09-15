@@ -425,26 +425,15 @@ export function mergeWindows(
 // Subtract detected freezes from interaction-aware keep windows so that dead
 // waits inside a step (e.g. a 30-second login response within one action) are
 // trimmed even when the caller supplies explicit keepWindows.
-export function subtractFreezesFromWindows(
-  keeps: Segment[],
-  freezes: Segment[],
-  maxStillSec: number = MAX_STILL_SEC
-): Segment[] {
-  const cuts = freezes
-    // Keep a GLIDE_LEADOUT_SEC tail (cut only the middle) so a cursor glide into
-    // the next action survives — same reasoning as computeKeepSegments.
-    .map((f) => ({
-      start: f.start + maxStillSec,
-      end: f.end - GLIDE_LEADOUT_SEC,
-    }))
-    .filter((c) => c.end > c.start);
-
+// Remove `remove` from `spans`, splitting a span in two when a removal falls in
+// its middle. Pure → unit-tested.
+export function subtractSpans(spans: Segment[], remove: Segment[]): Segment[] {
   const result: Segment[] = [];
-  for (const keep of keeps) {
-    let parts: Segment[] = [{ start: keep.start, end: keep.end }];
-    for (const cut of cuts) {
-      const cs = Math.max(cut.start, keep.start);
-      const ce = Math.min(cut.end, keep.end);
+  for (const span of spans) {
+    let parts: Segment[] = [{ start: span.start, end: span.end }];
+    for (const cut of remove) {
+      const cs = Math.max(cut.start, span.start);
+      const ce = Math.min(cut.end, span.end);
       if (ce <= cs) {
         continue;
       }
@@ -465,6 +454,31 @@ export function subtractFreezesFromWindows(
     result.push(...parts);
   }
   return result.filter((s) => s.end > s.start);
+}
+
+export function subtractFreezesFromWindows(
+  keeps: Segment[],
+  freezes: Segment[],
+  maxStillSec: number = MAX_STILL_SEC,
+  // Stretches that must survive even though they are motionless — a caption
+  // shown over a static page. Without this a caption's own video is trimmed and
+  // it flashes past unreadably, which is why showCaption used to animate a
+  // "breathing" opacity purely to defeat the freeze detector.
+  protect: Segment[] = []
+): Segment[] {
+  const cuts = freezes
+    // Keep a GLIDE_LEADOUT_SEC tail (cut only the middle) so a cursor glide into
+    // the next action survives — same reasoning as computeKeepSegments.
+    .map((f) => ({
+      start: f.start + maxStillSec,
+      end: f.end - GLIDE_LEADOUT_SEC,
+    }))
+    .filter((c) => c.end > c.start);
+
+  // Protecting a span in the MIDDLE of a long freeze splits that freeze's cut
+  // in two rather than cancelling it, so the idle either side of the caption is
+  // still trimmed. Falls out of the same subtraction.
+  return subtractSpans(keeps, subtractSpans(cuts, protect));
 }
 
 export interface CondenseResult {
@@ -488,6 +502,9 @@ export interface CondenseOptions {
   // seconds) and trim everything else — the leading load, the idle gaps between
   // steps, and the trailing tail. When omitted, fall back to freezedetect.
   keepWindows?: Segment[];
+  // Windows that must survive even when motionless — caption spans. See
+  // subtractFreezesFromWindows.
+  protectWindows?: Segment[];
 }
 
 // Drop the part of `keeps` before `floorSec` (sorted, disjoint in → out).
@@ -566,7 +583,9 @@ export async function condenseVideo(
       }
       keeps = subtractFreezesFromWindows(
         mergeWindows(keepWindows, durationSec),
-        windowAnalysis.freezes
+        windowAnalysis.freezes,
+        MAX_STILL_SEC,
+        options.protectWindows ?? []
       );
     } else {
       const analyze = await runFfmpeg(
