@@ -510,8 +510,11 @@ jobs:
           if [ -f "$VIDEO" ] && gh pr comment --help 2>&1 | grep -q -- '--attach'; then
             SIZE=$(stat -c%s "$VIDEO" 2>/dev/null || stat -f%z "$VIDEO")
             if [ "$SIZE" -le 104857600 ]; then
-              # `<file>#<alt text>` captions the attachment.
-              ATTACH=(--attach "$VIDEO#Dailies demo of $SHA")
+              # NO `#<alt text>` suffix: gh takes alt text on IMAGE attachments
+              # only and rejects a video outright with "cannot set alt text on
+              # video" (measured on gh 2.100.0), which would drop the video from
+              # every comment via the fallback below.
+              ATTACH=(--attach "$VIDEO")
               echo "Attaching the video inline ($((SIZE / 1048576)) MiB)"
             else
               echo "Video is $((SIZE / 1048576)) MiB — over GitHub's comment limit; linking the artifact instead"
