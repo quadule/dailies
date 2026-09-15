@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { SessionRecord, SessionStep } from "../session/registry.js";
 import {
   contentStartFloorSec,
+  isDegradedEnd,
   STEP_PAD_AFTER_SEC,
   STEP_PAD_BEFORE_SEC,
   stepKeepWindows,
@@ -43,6 +44,35 @@ function step(
     ...partial,
   };
 }
+
+describe("isDegradedEnd", () => {
+  it("is not degraded when re-finalizing an already-ended session", () => {
+    // The supported re-run: the daemon dropped the session long ago, so it
+    // answers "not found". Exiting non-zero here failed CI steps that had just
+    // succeeded.
+    expect(
+      isDegradedEnd({ daemonCode: 1, hasResult: false, wasAlreadyEnded: true })
+    ).toBe(false);
+  });
+
+  it("is degraded when a LIVE session could not be finalized", () => {
+    expect(
+      isDegradedEnd({ daemonCode: 1, hasResult: false, wasAlreadyEnded: false })
+    ).toBe(true);
+  });
+
+  it("is degraded when the daemon answered ok but returned nothing", () => {
+    expect(
+      isDegradedEnd({ daemonCode: 0, hasResult: false, wasAlreadyEnded: false })
+    ).toBe(true);
+  });
+
+  it("is not degraded on a clean end of a live session", () => {
+    expect(
+      isDegradedEnd({ daemonCode: 0, hasResult: true, wasAlreadyEnded: false })
+    ).toBe(false);
+  });
+});
 
 describe("contentStartFloorSec", () => {
   it("is 0 with no start-URL content time", () => {

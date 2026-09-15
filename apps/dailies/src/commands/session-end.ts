@@ -143,6 +143,25 @@ export function contentStartFloorSec(record: SessionRecord): number {
   return Math.max(0, (content - t0) / 1000);
 }
 
+// Whether this `session end` had to fall back to on-disk artifacts because
+// something went WRONG, as opposed to being a deliberate re-run.
+//
+// Re-running `session end` on an already-ended record is supported — it is how a
+// report is re-rendered and a video re-cut — and the daemon has necessarily
+// dropped the session by then, so it answers "Session not found". Treating that
+// as degraded exited non-zero on a run that fully succeeded, which fails a CI
+// step for doing the right thing. Exported for testing.
+export function isDegradedEnd(args: {
+  daemonCode: number;
+  hasResult: boolean;
+  wasAlreadyEnded: boolean;
+}): boolean {
+  if (args.wasAlreadyEnded) {
+    return false;
+  }
+  return args.daemonCode !== 0 || !args.hasResult;
+}
+
 // Trim dead air from the recorded videos before the report is rendered,
 // refreshing each artifact's byte size so the manifest reflects the condensed
 // file. Interaction-aware when the session has timed steps: keep the step
@@ -407,9 +426,15 @@ export async function sessionEnd(
     );
   }
 
+  // Was this session already ended before this call? Then the daemon has long
+  // since dropped it, and its "Session not found" is the expected answer to a
+  // deliberate re-finalize — not a failure. See the `degraded` note below.
+  let wasAlreadyEnded = false;
+
   // Reconcile the on-disk record regardless of the daemon outcome: if the daemon
   // restarted / lost the session, never leave a zombie "active" record behind.
   const record = await updateSessionRecord(id, (r) => {
+    wasAlreadyEnded = r.status !== "active";
     if (metrics.length > 0) {
       r.metrics = metrics;
     }
@@ -424,11 +449,26 @@ export async function sessionEnd(
     }
   });
 
-  // Degraded = the daemon did not cleanly finalize the live session (it was
+  // Degraded = the daemon did not cleanly finalize a LIVE session (it was
   // unreachable, restarted, or returned an error), so the report is rebuilt
   // from whatever artifacts were already flushed to disk and may be partial.
-  let degraded = code !== 0 || !result;
-  if (degraded) {
+  //
+  // Re-running on an ALREADY-ended record is not that. It is the supported way
+  // to re-render a report or re-cut a video (see the idempotence note further
+  // down), and the daemon necessarily no longer holds the session — so its
+  // "not found" is the expected answer, and exiting non-zero for it failed a CI
+  // step that had just succeeded.
+  let degraded = isDegradedEnd({
+    daemonCode: code,
+    hasResult: Boolean(result),
+    wasAlreadyEnded,
+  });
+  if (wasAlreadyEnded) {
+    logger.info(
+      { sessionId: id },
+      "session was already ended; re-finalizing from on-disk artifacts"
+    );
+  } else if (degraded) {
     logger.warn(
       { sessionId: id },
       "daemon could not finalize the session; building the report from on-disk artifacts"
