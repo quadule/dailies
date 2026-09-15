@@ -376,7 +376,13 @@ jobs:
             "2. Drive the single most important user-facing flow this PR adds or modifies," \
             "   using humanClick/humanFill." \
             "3. Do NOT run 'dailies session end' — leave the session open; CI finalizes it." \
-            "4. Print the session id as: SESSION_ID=<id>")
+            "4. Print the session id as: SESSION_ID=<id>" \
+            "5. Judge the run against the flow above and declare a verdict on its own line:" \
+            "   VERDICT=pass        — the flow was demonstrated end to end" \
+            "   VERDICT=fail <why>  — it was not" \
+            "   Intermediate step failures you RECOVERED from — a timed-out click, a dead" \
+            "   end, an abandoned retry — are honest evidence and do NOT make the run a" \
+            "   failure. Judge the flow, not the step tally.")
 
           # The agent records but does NOT end the session — the workflow
           # finalizes it so the cinematic/theme decision stays in tested code.
@@ -428,6 +434,27 @@ jobs:
           ARTIFACT_DIR=$(echo "$OUT" | jq -r '.artifactsDir')
           # The run verdict (agent-declared via --pass/--fail, else the
           # any-step-failed fallback). Captured now so the job can be failed
+          # The agent's verdict, on the same printed-line contract as SESSION_ID
+          # above. Without it `session end` falls back to "failed if any step
+          # exited non-zero", which marks a perfectly good demo FAILED whenever
+          # the agent explored — a recovered dead end is normal, not a failure.
+          # `--pass`/`--fail` already exist on `session end`; the only thing
+          # missing was CI forwarding what the agent decided.
+          # Unanchored, like the SESSION_ID grep above: agent.log is stream-json,
+          # so the agent's printed line lives INSIDE a JSON string and never
+          # starts a line of its own. A fail reason is read up to the first quote
+          # or escaped newline, which is where the JSON string ends.
+          VERDICT=$(grep -oE 'VERDICT=(pass|fail)' agent.log | tail -1 | cut -d= -f2 || true)
+          case "$VERDICT" in
+            pass)
+              FLAGS+=(--pass) ;;
+            fail)
+              REASON=$(grep -oE 'VERDICT=fail[^"\\]*' agent.log | tail -1 \
+                       | sed -e 's/^VERDICT=fail[[:space:]]*//' -e 's/[[:space:]]*$//')
+              FLAGS+=(--fail "${REASON:-the agent declared the run a failure}") ;;
+            *)
+              echo "::warning::the agent declared no VERDICT — falling back to the per-step tally" ;;
+          esac
           # AFTER the report/video have been uploaded.
           echo "artifact_dir=$ARTIFACT_DIR" >> "$GITHUB_OUTPUT"
           echo "status=$(echo "$OUT" | jq -r '.status // "unknown"')" >> "$GITHUB_OUTPUT"
