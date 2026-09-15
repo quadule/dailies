@@ -433,7 +433,12 @@ jobs:
           echo "status=$(echo "$OUT" | jq -r '.status // "unknown"')" >> "$GITHUB_OUTPUT"
           # Compact `name=value …` for the comment and the next run's marker.
           echo "metrics=$(echo "$OUT" | jq -r '[.metrics[]? | "\(.name)=\(.value)"] | join(" ")')" >> "$GITHUB_OUTPUT"
-          VIDEO=$(find "$ARTIFACT_DIR" -name '*.webm' | head -1)
+          # Exclude `*.precinematic.webm` — the raw, silent recording the
+          # cinematic cut is built FROM. It sits in the same directory and sorts
+          # first, so a bare `-name '*.webm' | head -1` attaches the uncut video
+          # with no narration, captions or title card, and the cinematic step's
+          # whole output is silently discarded.
+          VIDEO=$(find "$ARTIFACT_DIR" -name '*.webm' ! -name '*.precinematic.webm' | head -1)
           # Copy out ONLY the artifacts that are safe to hand around. Zipping the
           # whole session directory would publish `profile/` (a real Chrome cookie
           # database for the logged-in review app) and `trace.zip` (the run's
