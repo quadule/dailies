@@ -19,6 +19,7 @@ import {
   songHoldSec,
   songTargetSec,
   stepFootageSec,
+  subtitleStyle,
   titleMaxChars,
   titleStyle,
   ttsConcurrency,
@@ -567,6 +568,29 @@ describe("captionBandPx", () => {
     expect(captionBandPx(undefined)).toBe(96);
     expect(captionBandPx(0)).toBe(96);
     expect(captionBandPx(Number.NaN)).toBe(96);
+  });
+});
+
+describe("subtitleStyle", () => {
+  it("pins PlayRes to the frame so sizes are in pixels", () => {
+    // Without this libass scales against its own default resolution and the
+    // same FontSize renders at wildly different sizes per frame — which put two
+    // lines taller than the band, half of them over the recording.
+    const style = subtitleStyle(850, 130);
+    expect(style).toContain("PlayResY=850");
+  });
+
+  it("keeps two lines inside the band", () => {
+    const band = 130;
+    const style = subtitleStyle(850, band);
+    const size = Number(/FontSize=(\d+)/.exec(style)?.[1]);
+    const margin = Number(/MarginV=(\d+)/.exec(style)?.[1]);
+    expect(size * 2 * 1.2 + margin).toBeLessThanOrEqual(band);
+  });
+
+  it("stays legible on a small frame", () => {
+    const size = Number(/FontSize=(\d+)/.exec(subtitleStyle(240, 96))?.[1]);
+    expect(size).toBeGreaterThanOrEqual(14);
   });
 });
 

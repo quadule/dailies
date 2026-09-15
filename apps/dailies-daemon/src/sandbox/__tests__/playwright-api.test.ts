@@ -1392,53 +1392,15 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
       await manager.stopBrowser(browserName);
     }, 180_000);
 
-    it("showCaption clamps an over-long caption to two lines", async () => {
-      const result = await harness.runJson<{
-        lineHeight: number;
-        renderedHeight: number;
-        clamped: boolean;
-      }>(
-        withTestPage(
-          "caption-clamp",
-          `
-          const longText = "This is a deliberately long caption that runs well past two lines so we can prove the overflow is clamped rather than growing into a wall of text across the whole page.";
-          await page.showCaption(longText, { durationMs: 5000 });
-          const metrics = await page.evaluate(() => {
-            const el = document.querySelector("dailies-caption");
-            const lh = parseFloat(getComputedStyle(el).lineHeight);
-            return {
-              lineHeight: lh,
-              renderedHeight: el.getBoundingClientRect().height,
-              // scrollHeight exceeds clientHeight only when content is clipped.
-              clamped: el.scrollHeight > el.clientHeight + 1,
-            };
-          });
-          console.log(JSON.stringify(metrics));
-        `
-        )
-      );
-
-      // Rendered box holds at most two text lines plus the 12px*2 vertical
-      // padding — far short of the ~10 lines the untruncated text would need.
-      expect(result.clamped).toBe(true);
-      expect(result.renderedHeight).toBeLessThanOrEqual(
-        result.lineHeight * 2 + 24 + 2
-      );
-    }, 15_000);
-
-    it("showCaption skips the overlay in a cinematic session", async () => {
-      // In a real cinematic session the daemon sets this via an init script;
-      // set it directly here to prove the overlay render is gated on it. The
-      // call must still succeed (its text is the narration context) — it just
-      // paints nothing.
+    it("showCaption paints nothing into the page", async () => {
+      // Captions are recorded as timed DATA and rendered at session end, so the
+      // recording itself stays clean — that is what lets one recording be
+      // finished plain, cinematic or song. Nothing must reach the DOM.
       const result = await harness.runJson<{ exists: boolean }>(
         withTestPage(
-          "caption-cinematic",
+          "caption-data-only",
           `
-          await page.evaluate(() => {
-            window.__dailiesCinematic = true;
-          });
-          await page.showCaption("Should not paint over the burned captions");
+          await page.showCaption("This is recorded, not drawn", { durationMs: 2000 });
           const exists = await page.evaluate(
             () => document.querySelector("dailies-caption") !== null
           );

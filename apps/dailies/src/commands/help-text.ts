@@ -80,8 +80,6 @@ in video and screenshots; disable it with --no-cursor.
 Pass --url <url> to open (and settle) a page at session start, so the recording begins on a
 loaded page instead of the initial blank one — the pre-load blank is trimmed off the video head
 at \`session end\`. Your first step then acts on the already-loaded page.
-Planning a cinematic edit? Pass --cinematic so page.showCaption overlays are suppressed (their
-text still feeds the narration) and won't double up with the captions burned in by
 \`session end --cinematic\`.
 
   id=$(dailies session start --name "checkout" --url https://shop.example.com/cart)

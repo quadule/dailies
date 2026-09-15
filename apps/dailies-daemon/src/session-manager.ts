@@ -34,12 +34,6 @@ const SESSION_PREFIX = "__session__";
 // Cap each teardown step so a hung context.close() can't stall daemon exit.
 const TEARDOWN_TIMEOUT_MS = 5000;
 
-// Marks the page as part of a cinematic recording. page.showCaption() reads this
-// global and skips drawing its overlay (the cinematic `session end` pass burns
-// themed captions in, so an overlay too would double-caption). Injected as an
-// init script so it survives navigations and reaches every page in the session.
-const SESSION_CINEMATIC_SCRIPT = "window.__dailiesCinematic = true;";
-
 export function sessionBrowserName(sessionId: string): string {
   return `${SESSION_PREFIX}${sessionId}`;
 }
@@ -281,24 +275,6 @@ export class SessionManager {
             .pages()
             .map((page) =>
               page.evaluate(SESSION_CURSOR_SCRIPT).catch(() => undefined)
-            )
-        );
-      }
-      if (req.cinematic) {
-        // Cinematic recordings get themed captions burned in during the
-        // `session end` pass; flag the page so page.showCaption() skips its
-        // on-page overlay — rendering both would double-caption. The call
-        // still runs, so its text stays in the recorded script as context for
-        // the narration step. Seeded into already-open pages like the cursor,
-        // since addInitScript only reaches documents created afterward.
-        await this.manager.applyInitScripts(entry.name, [
-          SESSION_CINEMATIC_SCRIPT,
-        ]);
-        await Promise.all(
-          entry.context
-            .pages()
-            .map((page) =>
-              page.evaluate(SESSION_CINEMATIC_SCRIPT).catch(() => undefined)
             )
         );
       }

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, readFile, stat } from "node:fs/promises";
+import { copyFile, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { formatDurationMs, requestId } from "dailies-cli-kit";
 import {
@@ -34,11 +34,14 @@ import {
   remapToCondensed,
   type Segment,
 } from "../video/condense.js";
+import { probeVideo } from "../video/ffmpeg.js";
 import {
+  burnCaptionBand,
   type CinematicStep,
   cinematicProcess,
   precinematicVideoPath,
 } from "../video/narrate.js";
+import { buildSrt, captionLineMax } from "../video/srt.js";
 import { stopDaemonIfIdle } from "./daemon-stop.js";
 
 interface SessionEndOpts {
@@ -240,19 +243,25 @@ export function isDegradedEnd(args: {
 // windows, trim the idle gaps / leading load / trailing tail. Otherwise fall
 // back to freezedetect. Best-effort: without ffmpeg or on failure, originals
 // are kept and the report renders unchanged.
+export interface CaptionCue {
+  endSec: number;
+  startSec: number;
+  text: string;
+}
+
 async function condenseSessionVideos(
   result: SessionEndResult,
   record: SessionRecord,
   captions: CaptionEvent[]
-): Promise<void> {
+): Promise<CaptionCue[]> {
   const videos = result.artifacts.filter((a) => a.kind === "video");
   if (videos.length === 0) {
-    return;
+    return [];
   }
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) {
     logger.info("ffmpeg not found; keeping raw session videos");
-    return;
+    return [];
   }
   const keepWindows = stepKeepWindows(record);
   // A caption is normally shown over a page that is doing nothing, which is
@@ -320,13 +329,121 @@ async function condenseSessionVideos(
   // timeline can sync to it. Mutating record.steps here flows into the manifest
   // (built from the record just after this).
   const t0 = Date.parse(record.createdAt);
-  if (mappingKeeps && Number.isFinite(t0)) {
+  if (!Number.isFinite(t0)) {
+    return [];
+  }
+  if (mappingKeeps) {
     for (const step of record.steps) {
       const startMs = Date.parse(step.startedAt);
       if (Number.isFinite(startMs)) {
         step.videoTime = remapToCondensed((startMs - t0) / 1000, mappingKeeps);
       }
     }
+  }
+  // Caption cues in CONDENSED time, remapped exactly like step times. Their
+  // windows were protected above, so the stretch each one covers survived the
+  // trim and these land on the frames the caption was shown over.
+  // No keeps means nothing was trimmed (a short recording with no dead air), so
+  // caption times need no remapping — they are already video time. Returning []
+  // here would silently drop every caption from such a run.
+  return captionCues(record, captions, mappingKeeps);
+}
+
+// Caption cues in condensed video time. Pure → unit-tested.
+export function captionCues(
+  record: SessionRecord,
+  captions: CaptionEvent[],
+  // Undefined when the video wasn't condensed — then caption times ARE video
+  // times and pass through unmapped.
+  keeps: Segment[] | undefined
+): CaptionCue[] {
+  const t0 = Date.parse(record.createdAt);
+  if (!Number.isFinite(t0)) {
+    return [];
+  }
+  const cues: CaptionCue[] = [];
+  for (const caption of captions) {
+    const atMs = Date.parse(caption.at);
+    if (!Number.isFinite(atMs)) {
+      continue;
+    }
+    const startSec = (atMs - t0) / 1000;
+    const holdSec = captionReadMs(caption.text, caption.durationMs) / 1000;
+    const start = keeps ? remapToCondensed(startSec, keeps) : startSec;
+    const end = keeps
+      ? remapToCondensed(startSec + holdSec, keeps)
+      : startSec + holdSec;
+    if (end > start) {
+      cues.push({ endSec: end, startSec: start, text: caption.text });
+    }
+  }
+  // A caption's read-time floor can run past the next one's start. Two captions
+  // on screen at once stack on top of each other, so an earlier one always
+  // yields to the next: showCaption replaces the caption showing, and the
+  // rendered version has to behave the same way.
+  for (let i = 0; i < cues.length - 1; i++) {
+    const next = cues[i + 1];
+    const cue = cues[i];
+    if (cue && next && cue.endSec > next.startSec) {
+      cue.endSec = next.startSec;
+    }
+  }
+  return cues.filter((c) => c.endSec > c.startSec);
+}
+
+// Burn the run's own showCaption cues into the video, for a plain (non-cinematic)
+// finalize. Best-effort throughout: captions are presentation, and a session's
+// evidence must never be lost because ffmpeg could not draw text.
+async function burnPlainCaptions(
+  result: SessionEndResult,
+  cues: CaptionCue[]
+): Promise<void> {
+  const video = result.artifacts.find((a) => a.kind === "video");
+  const ffmpeg = await findFfmpeg();
+  if (!(video && ffmpeg)) {
+    return;
+  }
+  try {
+    // Burn from the clean condensed cut, never from a video that may already
+    // carry a band. `session end` is re-runnable, and without this a second run
+    // padded the padded video and stacked a second band under the first.
+    const clean = precinematicVideoPath(video.path);
+    if (existsSync(clean)) {
+      await copyFile(clean, video.path);
+    } else {
+      await copyFile(video.path, clean);
+    }
+    const probed = await probeVideo(ffmpeg, video.path);
+    const srtPath = `${video.path}.captions.srt`;
+    await writeFile(
+      srtPath,
+      buildSrt(
+        cues.map((c) => ({ start: c.startSec, end: c.endSec, text: c.text })),
+        captionLineMax(probed?.width)
+      ),
+      "utf8"
+    );
+    const outPath = `${video.path}.captioned.webm`;
+    const burned = await burnCaptionBand({
+      ffmpeg,
+      videoPath: video.path,
+      srtPath,
+      outPath,
+      echo: (line) => process.stderr.write(`  · ${line}\n`),
+    });
+    if (!burned) {
+      process.stderr.write(
+        "  ⚠ captions not burned — this ffmpeg has no `subtitles` filter; the .srt is written alongside the video\n"
+      );
+      return;
+    }
+    await rename(outPath, video.path);
+    video.bytes = await stat(video.path)
+      .then((st) => st.size)
+      .catch(() => video.bytes);
+    process.stderr.write(`  ✓ ${cues.length} caption(s) burned\n`);
+  } catch (err) {
+    logger.warn({ err }, "could not burn showCaption captions");
   }
 }
 
@@ -601,11 +718,14 @@ export async function sessionEnd(
   // its stamped timings instead. First runs (raw video) condense normally.
   const videoArtifact = endResult.artifacts.find((a) => a.kind === "video");
   const cinematicRequested = opts.cinematic === true || opts.song === true;
+  // page.showCaption cues, in condensed time. Burned below in plain mode; the
+  // cinematic pass writes its own captions from the narration instead.
+  let cues: CaptionCue[] = [];
   const alreadyCondensed =
     videoArtifact !== undefined &&
     existsSync(precinematicVideoPath(videoArtifact.path));
   if (opts.condense !== false && !alreadyCondensed) {
-    await condenseSessionVideos(
+    cues = await condenseSessionVideos(
       endResult,
       record,
       await readCaptions(endResult.session.artifactsDir)
@@ -629,15 +749,6 @@ export async function sessionEnd(
   // (it keys off the stamped step.videoTime and the trimmed video). Default output
   // is unchanged.
   if (cinematicRequested) {
-    // Both narration and song mode BURN captions (song shows the per-step lyric
-    // lines), so either way page.showCaption overlays baked into the recording
-    // would double up. Warn when the session wasn't started --cinematic (which
-    // suppresses the overlays); still run the pass (handy for testing).
-    if (!record.cinematic) {
-      process.stderr.write(
-        "  ⚠ this session was not started with --cinematic, so any page.showCaption overlays are baked into the video; the burned captions will be added on top (possible double captions). Start with `dailies session start --cinematic` to suppress the overlays.\n"
-      );
-    }
     await cinematizeSessionVideo(endResult, record, {
       prompt: opts.prompt,
       captions: opts.captions !== false,
@@ -653,6 +764,14 @@ export async function sessionEnd(
         "could not persist cinematic timings"
       );
     });
+  }
+
+  // Plain mode: the captions the run showed are burned from the recorded data,
+  // into the same band the cinematic pass uses. Nothing was painted during
+  // recording, so this is the only thing that puts them on screen — and it runs
+  // here, at finalize, which is what lets one recording be finished in any mode.
+  if (!cinematicRequested && opts.captions !== false && cues.length > 0) {
+    await burnPlainCaptions(endResult, cues);
   }
 
   // Resilient like `session abort`: a report-write failure must not crash the

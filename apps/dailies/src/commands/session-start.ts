@@ -17,9 +17,6 @@ import { generateSessionId } from "../util/session-id.js";
 
 interface SessionStartArgs {
   capture: CaptureOptions;
-  // Record for a cinematic edit: the daemon suppresses page.showCaption
-  // overlays so they don't double up with the captions burned in at session end.
-  cinematic?: boolean;
   cursor: boolean;
   headless: boolean;
   json: boolean;
@@ -65,7 +62,6 @@ export async function sessionStart(args: SessionStartArgs): Promise<number> {
     capture: args.capture,
     viewport,
     cursor: args.cursor,
-    cinematic: args.cinematic === true,
     url: args.url,
   };
 
@@ -87,7 +83,6 @@ export async function sessionStart(args: SessionStartArgs): Promise<number> {
       artifactsDir: session.artifactsDir,
       browser: session.browser,
       capture: session.capture,
-      cinematic: args.cinematic === true,
       createdAt: new Date(session.startedAt).toISOString(),
       contentStartedAt:
         typeof session.contentStartedAt === "number"

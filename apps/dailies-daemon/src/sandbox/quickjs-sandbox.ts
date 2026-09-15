@@ -935,102 +935,18 @@ export class QuickJSSandbox {
                   window.__dailiesCursor?.showVignette?.(proxy);
                 }, box);
               };
-              // Show a caption overlay in the page to label a section of the
-              // recording for a human viewer. Non-blocking: it fades in, holds
-              // for durationMs, then fades out. Cosmetic only (custom element,
-              // pointer-events:none, aria-hidden) so it never affects the page
-              // or snapshots. Replaces any caption already showing. The hold
-              // gently breathes so the frame never reads as "still" — otherwise
-              // the condense pass (which now drops every motionless stretch)
-              // would collapse a caption shown over a static page.
+              // Record a caption for this moment of the run. Nothing is
+              // painted into the page: the caption is stored as timed data and
+              // rendered at session end, which is what lets one recording be
+              // finished plain, cinematic or song. The condense pass protects
+              // each caption's span so it stays on screen long enough to read
+              // even when the page underneath is perfectly still.
               page.showCaption = async (text, options) => {
                 const ms =
                   options && typeof options.durationMs === "number"
                     ? options.durationMs
                     : 3000;
-                // Record it as data FIRST. The event is what session end
-                // renders the caption from, and what keeps the condense pass
-                // from trimming this stretch of video away, so it has to
-                // survive a page that navigates or closes mid-call.
                 await hostCall("recordCaption", JSON.stringify([text, ms]));
-                await page
-                  .evaluate(
-                    (arg) => {
-                      // In a cinematic recording the themed captions are burned
-                      // in by the session-end pass; painting this overlay too
-                      // would double-caption. The call still runs (its text
-                      // stays in the recorded script as narration context); we
-                      // just skip drawing the on-page overlay.
-                      if (window.__dailiesCinematic) {
-                        return;
-                      }
-                      const host = document.documentElement;
-                      if (!host) {
-                        return;
-                      }
-                      for (const prev of document.querySelectorAll(
-                        "dailies-caption"
-                      )) {
-                        prev.remove();
-                      }
-                      const el = document.createElement("dailies-caption");
-                      el.setAttribute("aria-hidden", "true");
-                      el.textContent = arg.text;
-                      // Clamp to two lines so an over-long caption can't grow
-                      // into a wall of text over the page: -webkit-line-clamp
-                      // truncates with an ellipsis past line two. A narrower
-                      // max-width keeps a normal one-liner on one or two lines.
-                      el.style.cssText =
-                        "position:fixed;left:50%;bottom:36px;" +
-                        "transform:translateX(-50%) translateY(8px);" +
-                        "width:auto;max-width:90vw;padding:12px 20px;border-radius:10px;" +
-                        "background:rgba(17,17,17,0.86);color:#fff;" +
-                        "font:500 18px/1.45 system-ui,-apple-system,sans-serif;" +
-                        "z-index:2147483646;pointer-events:none;white-space:pre-wrap;" +
-                        "text-align:center;box-shadow:0 4px 18px rgba(0,0,0,0.35);opacity:0;" +
-                        "display:-webkit-box;-webkit-box-orient:vertical;" +
-                        "-webkit-line-clamp:2;overflow:hidden;";
-                      host.appendChild(el);
-                      const FADE = 250;
-                      const hold = Math.max(0, arg.ms - FADE * 2);
-                      try {
-                        const fadeIn = el.animate(
-                          [
-                            {
-                              opacity: 0,
-                              transform: "translateX(-50%) translateY(8px)",
-                            },
-                            {
-                              opacity: 1,
-                              transform: "translateX(-50%) translateY(0)",
-                            },
-                          ],
-                          { duration: FADE, easing: "ease-out", fill: "forwards" }
-                        );
-                        fadeIn.onfinish = () => {
-                          // Whole-box opacity breathing — enough changing area
-                          // per frame to clear the freeze-detector's threshold.
-                          const breathe = el.animate(
-                            [{ opacity: 1 }, { opacity: 0.85 }, { opacity: 1 }],
-                            { duration: 2000, iterations: Number.POSITIVE_INFINITY }
-                          );
-                          setTimeout(() => {
-                            breathe.cancel();
-                            const out = el.animate(
-                              [{ opacity: 1 }, { opacity: 0 }],
-                              { duration: FADE, easing: "ease-in", fill: "forwards" }
-                            );
-                            out.onfinish = () => el.remove();
-                            setTimeout(() => el.remove(), FADE + 250);
-                          }, hold);
-                        };
-                      } catch {
-                        setTimeout(() => el.remove(), arg.ms);
-                      }
-                    },
-                    { ms, text: String(text) }
-                  )
-                  .catch(() => undefined);
               };
               const nativeWaitForURL =
                 typeof page.waitForURL === "function"

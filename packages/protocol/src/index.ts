@@ -95,11 +95,6 @@ export const SessionStartRequestSchema = RequestBaseSchema.extend({
   // Render a virtual mouse cursor + click animation into the recording (the
   // OS cursor is never captured for CDP-driven input). On unless disabled.
   cursor: z.boolean().default(true),
-  // Record for the cinematic `session end` pass: the daemon flags the page so
-  // page.showCaption() skips its on-page overlay (the themed captions burned in
-  // at `session end` would otherwise double up). The call still runs, so its
-  // text stays in the recorded script as narration context. Off by default.
-  cinematic: z.boolean().default(false),
   // Optional URL to open (and settle) at session start, before any step runs —
   // so the recording begins on a loaded page instead of the initial about:blank.
   // The daemon stamps `contentStartedAt` once it has settled, which `session end`

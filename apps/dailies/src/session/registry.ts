@@ -34,10 +34,6 @@ export interface SessionRecord {
   artifactsDir: string;
   browser: string;
   capture: CaptureOptions;
-  // Recorded for a cinematic edit (page.showCaption overlays were suppressed).
-  // `session end --cinematic` reads this to detect a mismatch — running the
-  // cinematic pass on a non-cinematic recording risks double captions.
-  cinematic?: boolean;
   // ISO time real content first appeared — the first non-about:blank page load
   // (or, with `session start --url`, that page's post-settle time). Same clock
   // basis as createdAt. session end trims the video head to

@@ -1890,7 +1890,7 @@ async function mixAudioAndCaptions(args: {
   const probed = burnCaptions ? await probeVideo(ffmpeg, videoPath) : undefined;
   const band = captionBandPx(probed?.height);
   const filterComplex = burnCaptions
-    ? `${filter};[0:v]pad=iw:ih+${band}:0:0:color=black,subtitles='${escapeSubtitlesPath(srtPath)}':force_style='${SUBTITLE_STYLE}'[vout]`
+    ? `${filter};[0:v]pad=iw:ih+${band}:0:0:color=black,subtitles='${escapeSubtitlesPath(srtPath)}':force_style='${subtitleStyle((probed?.height ?? 720) + band, band)}'[vout]`
     : filter;
 
   const videoMap = burnCaptions ? "[vout]" : "0:v";
@@ -1930,6 +1930,48 @@ async function mixAudioAndCaptions(args: {
   );
 }
 
+// Burn an SRT into a band below the frame, with no audio work — the plain-mode
+// counterpart to the cinematic pass's combined mix-and-burn. Same band and style,
+// so a plain cut and a cinematic one caption identically.
+//
+// Returns false when it could not run (no `subtitles` filter in this ffmpeg), so
+// the caller can leave the video untouched rather than fail the session.
+export async function burnCaptionBand(args: {
+  ffmpeg: string;
+  videoPath: string;
+  srtPath: string;
+  outPath: string;
+  echo?: Echo;
+}): Promise<boolean> {
+  const { ffmpeg, videoPath, srtPath, outPath, echo } = args;
+  const filters = await availableFilters(ffmpeg);
+  if (!filters.has("subtitles")) {
+    return false;
+  }
+  const probed = await probeVideo(ffmpeg, videoPath);
+  const band = captionBandPx(probed?.height);
+  await run(
+    ffmpeg,
+    [
+      ...FFMPEG_BASE_ARGS,
+      "-i",
+      videoPath,
+      "-vf",
+      `pad=iw:ih+${band}:0:0:color=black,subtitles='${escapeSubtitlesPath(srtPath)}':force_style='${subtitleStyle((probed?.height ?? 720) + band, band)}'`,
+      "-c:v",
+      "libvpx",
+      "-b:v",
+      "1M",
+      // The recording has no audio track; -an keeps the muxer from waiting on one.
+      "-an",
+      outPath,
+    ],
+    ENCODE_TIMEOUT_MS,
+    echo
+  );
+  return true;
+}
+
 // Height of the caption band added below the frame, in pixels. Sized to hold two
 // rendered caption lines with breathing room — the SRT writer wraps to two — and
 // proportional so it holds at any capture size. Pure → unit-tested.
@@ -1944,14 +1986,35 @@ export function captionBandPx(videoHeightPx: number | undefined): number {
 
 const MIN_CAPTION_BAND_PX = 96;
 
-// libass force_style: white text on black, centered in the band added beneath
-// the video. BorderStyle=3 is libass's opaque-box mode (1=outline, 3=box); only
-// 3 paints BackColour as a box behind the text. The box is fully opaque here
-// because it sits on the black band rather than over the recording, so there is
-// nothing to see through. MarginV lifts the text off the bottom edge to sit
-// roughly centered in the band.
-const SUBTITLE_STYLE =
-  "FontSize=18,PrimaryColour=&H00FFFFFF,BorderStyle=3,BackColour=&HFF000000,Alignment=2,MarginV=8";
+// libass force_style: white text on black, sized to sit inside the band added
+// beneath the video.
+//
+// PlayResX/PlayResY are pinned to the real frame so FontSize and MarginV are in
+// PIXELS. Without them libass scales against its own default resolution, and the
+// same FontSize renders wildly different sizes depending on the frame — which
+// put two lines of caption taller than the band and straddling its edge, half on
+// the recording.
+//
+// BorderStyle=3 is libass's opaque-box mode (1=outline, 3=box); only 3 paints
+// BackColour as a box behind the text. Fully opaque, because it sits on the
+// black band rather than over the page — there is nothing to see through.
+// Pure → unit-tested.
+export function subtitleStyle(frameHeightPx: number, bandPx: number): string {
+  // Two lines plus leading must fit the band: 2 * size * 1.2 + padding <= band.
+  const fontSize = Math.max(14, Math.round(bandPx * 0.26));
+  const textHeight = fontSize * 2 * 1.2;
+  const marginV = Math.max(4, Math.round((bandPx - textHeight) / 2));
+  return [
+    `PlayResX=${Math.round((frameHeightPx * 16) / 9)}`,
+    `PlayResY=${frameHeightPx}`,
+    `FontSize=${fontSize}`,
+    "PrimaryColour=&H00FFFFFF",
+    "BorderStyle=3",
+    "BackColour=&HFF000000",
+    "Alignment=2",
+    `MarginV=${marginV}`,
+  ].join(",");
+}
 
 // Escape the subtitles path for the filtergraph. The caller wraps it in single
 // quotes, so filtergraph metacharacters (, ; [ ]) are already literal; we escape

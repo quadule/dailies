@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SessionRecord, SessionStep } from "../session/registry.js";
 import {
+  captionCues,
   captionKeepWindows,
   captionReadMs,
   contentStartFloorSec,
@@ -107,6 +108,49 @@ describe("captionKeepWindows", () => {
 
   it("returns nothing when there are no captions", () => {
     expect(captionKeepWindows(record, [])).toEqual([]);
+  });
+});
+
+describe("captionCues", () => {
+  const record = recordWith([]);
+  const at = (sec: number) =>
+    new Date(Date.parse(CREATED_AT) + sec * 1000).toISOString();
+
+  it("passes times through unmapped when nothing was condensed", () => {
+    const cues = captionCues(
+      record,
+      [{ at: at(5), durationMs: 3000, text: "Hi" }],
+      undefined
+    );
+    expect(cues[0]?.startSec).toBe(5);
+  });
+
+  it("ends a caption where the next one begins", () => {
+    // showCaption replaces the caption on screen, so the render has to as well
+    // — two overlapping cues stack on top of each other.
+    const cues = captionCues(
+      record,
+      [
+        { at: at(0), durationMs: 9000, text: "First" },
+        { at: at(2), durationMs: 3000, text: "Second" },
+      ],
+      undefined
+    );
+    expect(cues[0]?.endSec).toBe(2);
+    expect(cues[1]?.startSec).toBe(2);
+  });
+
+  it("drops a caption the next one immediately supersedes", () => {
+    const cues = captionCues(
+      record,
+      [
+        { at: at(4), durationMs: 3000, text: "Replaced instantly" },
+        { at: at(4), durationMs: 3000, text: "Winner" },
+      ],
+      undefined
+    );
+    expect(cues).toHaveLength(1);
+    expect(cues[0]?.text).toBe("Winner");
   });
 });
 
