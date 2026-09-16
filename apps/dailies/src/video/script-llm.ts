@@ -126,14 +126,16 @@ export function buildNarrationPrompt(args: {
     stepLines,
     "",
     "Rules:",
-    "- Write one narration entry per step: SHORT and PUNCHY — ideally ONE sentence, never more than two, and at most ~18 words / ~95 characters so it fits two on-screen caption lines and reads aloud within the step's brief window. A longer line is truncated on screen. Favor brevity over flourish.",
+    '- NOT every step needs narration. Narrate only the beats a viewer actually cares about — a real action taken, a screen or result reached, a meaningful change. For steps that are setup, waiting, retries, scrolling, or the automation inspecting the page (snapshots, DOM/selector probing, debug pokes), emit an EMPTY narration string "" so that moment plays with no voice-over. A few well-placed lines over a quiet score beat a wall-to-wall play-by-play.',
+    '- Narrate the USER-FACING story: what a person is doing and what they see happen — the goal, the screen, the result. NEVER narrate the automation mechanics. The "does:" note is the under-the-hood script, given ONLY so you understand the step; never mention selectors, DOM nodes, ts-control / Select2 / TomSelect, clicks, typing, snapshots, waits, or how an element was located.',
+    "- Keep each narrated line SHORT and PUNCHY — ideally ONE sentence, never more than two, and at most ~18 words / ~95 characters so it fits two on-screen caption lines and reads aloud within the step's brief window. A longer line is truncated on screen. Favor brevity over flourish.",
     "- Stay in character for the creative direction throughout; commit to the bit.",
-    "- Never repeat the literal step name; describe what is happening in that voice.",
-    '- A step may carry an "intent:" note — the operator\'s own caption for that moment, the clearest signal of WHY it matters. Let it guide your narration, but rewrite it fully in character; never quote it verbatim.',
-    "- If the direction calls for a verse form (poem/limerick/haiku/song), write the narration in that form.",
+    "- Never repeat the literal step name.",
+    '- A step may carry an "intent:" note — the operator\'s own caption for that moment, the clearest signal of WHY it matters. Prefer it as your guide, but rewrite it fully in character; never quote it verbatim.',
+    "- If the direction calls for a verse form (poem/limerick/haiku/song), write the narrated lines in that form.",
     '- Provide a punchy, dramatic, mostly-uppercase "title" for an opening title card. You may use a newline in the title to force a two-line layout.',
     "",
-    'Respond with STRICT JSON only — no prose, no markdown fences — exactly: {"title": string, "steps": [{"index": number, "narration": string}]}',
+    'Respond with STRICT JSON only — no prose, no markdown fences — exactly: {"title": string, "steps": [{"index": number, "narration": string}]}. Include every step index in order; give any step you choose not to voice an empty "narration".',
   ].join("\n");
 }
 

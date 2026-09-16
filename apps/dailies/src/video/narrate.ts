@@ -159,10 +159,11 @@ export function titleStyle(category: ThemeCategory | undefined): {
   return { font: resolveFont(pref.font), color: pref.color };
 }
 
-// Score gains: the single cinematic-mode song sits low under the spoken
-// narration, then swells to (near-)full for the credits roll. The ramp is the
-// cross-fade length in seconds between the two.
-const NARRATION_MUSIC_GAIN = 0.16;
+// Score gains: the single cinematic-mode song sits WELL under the spoken
+// narration — low enough that the voice stays clearly in front — then swells to
+// (near-)full for the credits roll. The ramp is the cross-fade length in seconds
+// between the two.
+const NARRATION_MUSIC_GAIN = 0.08;
 const CREDITS_MUSIC_GAIN = 0.6;
 const MUSIC_SWELL_RAMP_SEC = 1.5;
 
@@ -2416,7 +2417,12 @@ async function runNarrationPass(
     rate: speech.rate,
   };
   log.info(meta, "cinematic: narration parameters");
-  progress(`voicing ${narration.steps.length} lines (${meta.voice})…`);
+  // Count only the steps the script actually voices — the LLM leaves a step's
+  // narration empty to skip it, so the total step count would overstate this.
+  const voicedLineCount = narration.steps.filter((s) =>
+    s.narration.trim()
+  ).length;
+  progress(`voicing ${voicedLineCount} lines (${meta.voice})…`);
   const clips = await synthesizeClips({
     ffmpeg,
     say: speech.say,
