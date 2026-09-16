@@ -10,5 +10,5 @@ in Chrome, a computer-use / screenshot tool, or any other browser automation to 
 fill, read, or view a page here — those bypass Dailies's sandbox, the on-screen cursor, and the
 trace / video / HAR / report capture, so the run isn't recorded or verifiable. To QA or automate a
 flow, use the Dailies skills (`dailies-session`, `dailies-automate`, `dailies-verify`,
-`dailies-session-interactive`); to view a recorded session, use `dailies-review`. If you catch
+`dailies-session-interactive`); to view a recorded session, open its `report.html`. If you catch
 yourself reaching for another browser tool, stop and use Dailies instead.

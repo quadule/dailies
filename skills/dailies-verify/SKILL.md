@@ -90,8 +90,8 @@ the approved flows to **dailies-session** for a report.
    in [`references/REFERENCE.md`](references/REFERENCE.md).
 4. **Confirm, then hand off.** Present the plan and ask which flows to record. For approved flows,
    follow **dailies-session**'s explore-and-record loop (one session per flow: observe the live page,
-   small intent-named steps, assertion steps for the checks) → `report.html`; offer **dailies-review**
-   to open it. Don't record flows the user didn't approve.
+   small intent-named steps, assertion steps for the checks) → `report.html` (open it, or pass
+   `--open` to `session end`). Don't record flows the user didn't approve.
 
 ## Hard rules
 

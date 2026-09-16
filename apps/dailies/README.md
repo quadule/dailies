@@ -47,7 +47,7 @@ Prefer not to install globally? Prefix anything with `npx`:
 npx dailies-cli install
 ```
 
-Or set everything up interactively with the guided wizard — `npm create dailies`.
+Or run the one-shot setup — `dailies init` (installs the runtime and prints next steps).
 
 ## Quickstart
 
@@ -80,7 +80,7 @@ across steps within a session.
 
 | Command | What it does |
 | --- | --- |
-| `dailies init` | One-shot setup: install the runtime, then print next steps. The friendlier wizard is `npm create dailies`. |
+| `dailies init` | One-shot setup: install the runtime, then print next steps (add the agent plugin, where reports land). |
 | `dailies install` | Install the embedded runtime (Chromium + Playwright + QuickJS) into `~/.dailies`. |
 | `dailies session start` | Start a capture-enabled session; prints its id. Toggle capture with `--no-trace` / `--no-video` / `--no-har` / `--no-console`; `--headless` for unattended runs. |
 | `dailies run [FILE]` | Run a script (a file, or stdin if omitted) as one step. Requires `--session <id>`; label it with `--step <name>`; bound it with `--timeout <seconds>`. |

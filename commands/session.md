@@ -7,5 +7,5 @@ Delegate to the `session-agent` subagent. Give it the flow: **$ARGUMENTS**.
 
 Ask it to explore the flow step by step — observe the live page, run each small action as an
 intent-named `dailies run --session` step, finish with assertion step(s) — then `session end` to
-render the report, and report the `report.html` path with a one-line pass/fail summary. Offer
-`/dailies:review` to open it.
+render the report, and report the `report.html` path with a one-line pass/fail summary (pass
+`--open` to `session end` to open it in a browser).

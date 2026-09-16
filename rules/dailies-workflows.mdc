@@ -6,7 +6,7 @@ alwaysApply: false
 # Dailies workflows
 
 Dailies drives a real browser from the CLI and records verifiable QA sessions. Set up once with
-`npx dailies-cli init` (installs the runtime); browse sessions with `npx dailies-ui`; stop the
+`npx dailies-cli init` (installs the runtime); browse a session by opening its `report.html`; stop the
 shared daemon (and all browsers/sessions) with `npx dailies-cli stop`. For a session, run
 `session end <id>` **before** `stop` — `stop` aborts a live session and skips its report.
 
@@ -17,7 +17,5 @@ shared daemon (and all browsers/sessions) with `npx dailies-cli stop`. For a ses
   `dailies-automate` / agent `automate-agent`. Command: `/dailies:run`.
 - **Session (recorded QA)** — run scripts as steps that capture trace/video/HAR/console and render
   `report.html`. Skill `dailies-session` / agent `session-agent`. Command: `/dailies:session`.
-- **Review (triage)** — open the viewer and summarize a recorded session. Skill `dailies-review` /
-  agent `review-agent`. Command: `/dailies:review`.
 - **Scripting API** — the sandbox API (`browser.getPage`, page methods, `saveScreenshot`) lives in
   the `dailies-scripting` skill and its `references/REFERENCE.md`.

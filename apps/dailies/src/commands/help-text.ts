@@ -1,10 +1,8 @@
-// Help prose for the `dailies` orchestrator, shown via commander's
-// `.addHelpText()` / `.description()`. Mirrors the dailies-browser engine's
-// rich `--help` (a long-about + an after-help usage guide + per-command detail).
-// The sandbox rules, script API, and scripting guide come from
-// dailies-cli-kit — the single source of truth shared with dailies-browser —
-// so `dailies --help` is fully self-contained for writing step scripts even
-// when the engine CLI is not installed.
+// Help prose for the `dailies` CLI, shown via commander's `.addHelpText()` /
+// `.description()`: a rich `--help` (a long-about + an after-help usage guide +
+// per-command detail). The sandbox rules, script API, and scripting guide come
+// from dailies-cli-kit — the single source of truth — so `dailies --help` and
+// `dailies exec --help` are fully self-contained for writing scripts.
 import {
   buildScriptingGuide,
   execExample,
@@ -66,7 +64,7 @@ ${indent(RULE_FAIL_FAST, "    ")}
   Tips:
     - \`--json\` (global) emits machine-readable JSON on stdout; \`-v\`/\`--verbose\` raises stderr logging.
     - \`dailies session end --stop-daemon\` shuts the daemon down if nothing else is using it.
-    - Need a quick one-off with NO recording? Use \`dailies-browser run\` instead of a session.
+    - Need a quick one-off with NO recording? Use \`dailies exec\` instead of a session.
     - Writing step scripts? \`dailies run --help\` has the full SCRIPTING GUIDE — snapshotForAI, humanClick/humanFill, waiting patterns, and worked examples.`;
 
 // Per-command long help (shown before that command's own --help body).
@@ -286,4 +284,4 @@ export const INSTALL_LONG_ABOUT = `Install the embedded daemon runtime: Chromium
 sandbox, into ~/.dailies. Run once before your first session (downloads ~150 MB).`;
 
 export const INIT_LONG_ABOUT = `One-shot setup: install the browser runtime, then print next steps (add the
-agent plugin, install skills, open the viewer). The friendlier Ink version is \`npm create dailies\`.`;
+agent plugin, install skills, open a report). Run it once before your first session.`;

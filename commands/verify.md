@@ -11,5 +11,5 @@ change, reason from that. Ask it to read the diff, infer the affected user-facin
 present a **prioritized QA plan** (P0/P1/P2 flows with the checks that must hold, phases as a guide).
 Then ask which flows
 to record — for approved ones, record a Dailies session (`/dailies:session` mechanics) and report each
-`report.html` with a one-line pass/fail. Offer `/dailies:review` to open it. Already know the flow? Use
-`/dailies:session`. Just a quick one-off with no plan? Use `/dailies:run`.
+`report.html` with a one-line pass/fail (pass `--open` to `session end` to open it). Already know the
+flow? Use `/dailies:session`. Just a quick one-off with no plan? Use `/dailies:run`.

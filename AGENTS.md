@@ -17,29 +17,27 @@ marketing artifact.
 
 The pieces:
 
-1. **`dailies` (orchestrator CLI, `dailies-cli`)** — records capture-enabled QA sessions (trace/video/HAR/console) as a series of script steps and renders a self-contained report. The primary, user-facing CLI.
-2. **`dailies-browser` (engine CLI, `dailies-browser`)** — one-off browser automation: persistent named pages, sandboxed JavaScript, headless or headed. Embeds and supervises the daemon.
-3. **`dailies-daemon`** — a long-running Node process owning Playwright + a QuickJS sandbox. Embedded into the CLIs at build time. Speaks line-delimited JSON over a named pipe / Unix socket.
+1. **`dailies` (CLI, `dailies-cli`)** — the single user-facing CLI. Records capture-enabled QA sessions (trace/video/HAR/console) as a series of script steps and renders a self-contained report; `dailies exec` runs a one-off script unrecorded, outside any session (persistent named pages, sandboxed JavaScript, headless or headed).
+2. **`dailies-daemon`** — a long-running Node process owning Playwright + a QuickJS sandbox. Embedded into the CLI at build time. Speaks line-delimited JSON over a named pipe / Unix socket.
 
-Both CLIs reach the browser the same way:
+The CLI reaches the browser like this:
 
 ```
-dailies run … --session …   /   dailies-browser run …   →   daemon RPC   →   Playwright
+dailies run … --session …   /   dailies exec …   →   daemon RPC   →   Playwright
 ```
 
-**Drive browsers only through these CLIs.** All browser work in this repo — navigating, clicking,
-filling, scraping, viewing a recorded run — goes through the `dailies` / `dailies-browser` CLIs and
-the scripts they run. Do not use Claude in Chrome, a computer-use tool, or any other browser
-automation: they skip Dailies's sandbox, on-screen cursor, and trace/video/HAR/report capture, so
-the run isn't recorded or verifiable.
+**Drive browsers only through this CLI.** All browser work in this repo — navigating, clicking,
+filling, scraping, viewing a recorded run — goes through the `dailies` CLI and the scripts it runs.
+Do not use Claude in Chrome, a computer-use tool, or any other browser automation: they skip
+Dailies's sandbox, on-screen cursor, and trace/video/HAR/report capture, so the run isn't recorded
+or verifiable.
 
 ## Apps + packages
 
 | Workspace                | Role                                                                                            |
 | ------------------------ | ----------------------------------------------------------------------------------------------- |
-| `apps/dailies`            | Session orchestrator CLI (`dailies`) — records QA sessions, renders reports. The primary CLI.    |
-| `apps/dailies-browser`    | Browser-automation engine CLI (`dailies-browser`) — owns the daemon lifecycle, embeds the daemon |
-| `apps/dailies-daemon`     | Internal Playwright host + QuickJS sandbox. Built standalone, embedded into the CLIs            |
+| `apps/dailies`            | The CLI (`dailies`) — records QA sessions, renders reports, and runs one-offs via `dailies exec`. |
+| `apps/dailies-daemon`     | Internal Playwright host + QuickJS sandbox. Built standalone, embedded into the CLI             |
 | `packages/protocol`      | Zod IPC schemas. Single source of truth — daemon validates, CLIs infer types                    |
 | `packages/config`        | Shared tsconfig bases (`base`, `node-app`)                                                       |
 | `packages/logger`        | Shared pino-backed structured logger (source-distributed)                                       |
@@ -52,7 +50,7 @@ the run isn't recorded or verifiable.
 
 1. `dailies-protocol` + `dailies-config` + `dailies-logger` (no build, source-distributed)
 2. `dailies-daemon` builds → emits `dist/daemon.bundle.mjs` + `dist/sandbox-client.js`
-3. `dailies-browser` + `dailies-cli` embed their assets (the daemon bundle via `dailies-daemon-client`), then bundle with esbuild
+3. `dailies-cli` embeds its assets (the daemon bundle via `dailies-daemon-client`), then bundles with esbuild
 
 ## Shared docs (skills + CLI help + README)
 
@@ -165,7 +163,7 @@ Per-workspace:
 
 ```bash
 pnpm --filter dailies-daemon test
-pnpm --filter dailies-browser test
+pnpm --filter dailies-cli test
 ```
 
 ## Viewing sessions
