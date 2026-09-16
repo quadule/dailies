@@ -98,20 +98,21 @@ dailies session list                     # every recorded session
 dailies stop                             # shut the background daemon down when you're done
 ```
 
-Just need a quick one-off with no recording? Drive the browser engine directly:
+Just need a quick one-off with no recording? Run a script straight through with `dailies exec`
+(a file path, or piped on stdin):
 
 ```bash
 echo 'const p = await browser.getPage("main");
 await p.goto("https://example.com");
-console.log(await p.title());' | dailies-browser
+console.log(await p.title());' | dailies exec
 ```
 
 Or attach to a Chrome you already have open — launch it with `--remote-debugging-port=9222`, then
-`dailies-browser --connect` (it auto-discovers the port, or pass the URL explicitly). Handy for driving
+`dailies exec --connect` (it auto-discovers the port, or pass the URL explicitly). Handy for driving
 a browser that's already logged in:
 
 ```bash
-dailies-browser --connect http://localhost:9222 <<'EOF'
+dailies exec --connect http://localhost:9222 <<'EOF'
 const page = await browser.getPage("main");
 console.log(await page.title());
 EOF
@@ -209,7 +210,6 @@ a real browser, and hands back the report.
 /dailies:session             # record a flow end to end and render report.html
 /dailies:session-interactive # record collaboratively — the agent asks you, or hands you the browser
 /dailies:run                 # drive the browser once, nothing recorded
-/dailies:review              # open the viewer and triage a recorded session
 ```
 
 Or skip the slash and just say *"QA the checkout flow and give me a report"* — Dailies's subagents pick
@@ -218,7 +218,7 @@ it up. Install the plugin below.
 ## Use it with your coding agent
 
 Dailies is built for agents — and it explains itself to them. Install it, then **tell your agent to run
-`dailies --help`** (or `dailies-browser --help` for one-offs): each output is a complete, self-contained
+`dailies --help`** (and `dailies exec --help` for one-offs): each output is a complete, self-contained
 usage guide — sandbox API, worked examples, a Playwright cheat sheet — written for an LLM to read.
 No plugin required.
 
@@ -239,11 +239,11 @@ codex marketplace add quadule/dailies        # then /plugins → install "dailie
 ```
 
 You get **`dailies-scripting`** (the sandbox API, with `references/REFERENCE.md`) plus the workflow
-skills **`dailies-verify`**, **`dailies-automate`**, **`dailies-session`**, and **`dailies-review`** —
-each paired with a subagent and a slash command: `/dailies:verify`, `/dailies:run`, `/dailies:session`,
-`/dailies:review`. There's also **`dailies-session-interactive`** (`/dailies:session-interactive`),
-which records a session collaboratively in the main conversation — no subagent — so the agent can
-pause to ask you, or hand you the live browser mid-flow (its actions captured as a step).
+skills **`dailies-verify`**, **`dailies-automate`**, and **`dailies-session`** — each paired with a
+subagent and a slash command: `/dailies:verify`, `/dailies:run` (automate), and `/dailies:session`.
+There's also **`dailies-session-interactive`** (`/dailies:session-interactive`), which records a
+session collaboratively in the main conversation — no subagent — so the agent can pause to ask you,
+or hand you the live browser mid-flow (its actions captured as a step).
 
 ## Teach it your app
 
@@ -357,10 +357,12 @@ language-agnostic and your instrumentation stays where someone can maintain it.
 
 Copy [`.github/workflows/dailies-demo.yml`](.github/workflows/dailies-demo.yml) into your repo, add
 `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` as repo secrets, and label a PR **`dailies`**. Each night
-it records a demo of every labeled PR whose head has moved since its last demo and whose changed
-files match `demo.paths`, then posts the video and the full report back to the PR. Labeling a PR
-demos it immediately; `dailies-url:` / `dailies-theme:` / "plain demo" in a PR body override the
-repo defaults for that PR.
+it records a demo of every labeled PR whose head has moved since its last demo and whose change a
+model (or `demo.paths`) judges worth filming, then posts the video and the full report back to the
+PR. Want one now? Comment **`/dailies`** on the PR — anything after it steers the run
+(`/dailies record the vendor payment flow`, or a `dailies-theme:` marker), and it's restricted to
+commenters with write access. `dailies-url:` / `dailies-theme:` / "plain demo" in a PR body override
+the repo defaults for that PR.
 
 ## Which model runs it
 
@@ -390,17 +392,20 @@ Dailies warns in the log when the demo decision was made on-device.
 The Anthropic Messages API isn't a fourth provider — the `claude` CLI already covers Claude, and
 this package deliberately ships no runtime dependencies. It would slot in behind the same interface.
 
-## Three tools, one runtime
+## One CLI, one runtime
 
-| Tool                            | Command                            | Use it to                                                                          |
-| ------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------- |
-| **CLI** `dailies-cli`        | `dailies`                           | Record capture-enabled QA sessions and render reports. The main, user-facing tool. |
-| **Engine** `dailies-browser` | `dailies-browser`                   | Drive a browser for quick, one-off automation — no recording, no report.           |
+`dailies-cli` puts a single command on your PATH — **`dailies`**:
 
-Both CLIs share one background daemon (Playwright + a QuickJS sandbox) that starts automatically when
-needed. Stop it anytime with **`dailies stop`** (alias: `dailies daemon stop`, or `dailies-browser stop`) —
-it shuts down every browser and session it's running. You can also pass `--stop-daemon` to
-`dailies session end` to tear it down as soon as nothing else needs it.
+| Command | Use it to |
+| --- | --- |
+| `dailies session …` | Record capture-enabled QA sessions and render reports — the main, user-facing flow. |
+| `dailies run` | Run a script as a recorded step inside a session. |
+| `dailies exec` | Run a script once — unrecorded, outside any session — for quick one-offs (a file or stdin; `--connect` attaches to a Chrome you already have open). |
+
+Behind them is one background daemon (Playwright + a QuickJS sandbox) that starts automatically when
+needed. Stop it anytime with **`dailies stop`** (alias: `dailies daemon stop`) — it shuts down every
+browser and session it's running. You can also pass `--stop-daemon` to `dailies session end` to tear
+it down as soon as nothing else needs it.
 
 ## Scripting
 
@@ -523,7 +528,7 @@ update-visible.
 
 ## Contributing & development
 
-Dailies is a pnpm + Turborepo monorepo: five apps and five packages cooperate to make agent-driven
+Dailies is a pnpm + Turborepo monorepo: two apps and five packages cooperate to make agent-driven
 browser automation reproducible.
 
 <details>
@@ -532,18 +537,17 @@ browser automation reproducible.
 ```
 dailies/
 ├── apps/
-│   ├── dailies/             # dailies-cli      bin: dailies          — session orchestrator (record QA sessions, render reports)
-│   ├── dailies-browser/     # dailies-browser  bin: dailies-browser  — browser-automation engine (one-off runs)
-│   └── dailies-daemon/      # dailies-daemon   no bin               — Playwright + QuickJS runtime (embedded into the CLIs)
+│   ├── dailies/             # dailies-cli      bin: dailies   — the CLI: record QA sessions, render reports, one-off `exec`
+│   └── dailies-daemon/      # dailies-daemon   no bin         — Playwright + QuickJS runtime (embedded into the CLI)
 ├── packages/
 │   ├── protocol/           # dailies-protocol         IPC schemas (Zod), single source of truth
 │   ├── config/             # dailies-config           shared tsconfig bases
 │   ├── logger/             # dailies-logger           pino-backed structured logger
 │   ├── cli-kit/            # dailies-cli-kit          shared CLI helpers
 │   └── daemon-client/      # dailies-daemon-client    daemon transport + lifecycle; embeds the daemon bundle
-├── skills/                 # agent skills: dailies-scripting (+references), -verify, -automate, -session, -session-interactive, -review
-├── agents/                 # JTBD subagents: verify-agent, automate-agent, session-agent, review-agent
-├── commands/               # slash commands: /dailies:verify, :run, :session, :session-interactive, :review
+├── skills/                 # agent skills: dailies-scripting (+references), -verify, -automate, -session, -session-interactive
+├── agents/                 # JTBD subagents: verify-agent, automate-agent, session-agent
+├── commands/               # slash commands: /dailies:verify, :run, :session, :session-interactive
 ├── .claude-plugin/         # Claude Code plugin + marketplace manifests
 ├── .cursor-plugin/         # Cursor plugin manifest (pairs with rules/)
 ├── plugins/dailies/         # Codex plugin wrapper (.codex-plugin → canonical skills/)
@@ -553,8 +557,7 @@ dailies/
 └── .github/                # CI
 ```
 
-`dailies` (the orchestrator) and `dailies-browser` (the engine) both embed and supervise
-`dailies-daemon` (the long-running Playwright host).
+The `dailies` CLI embeds and supervises `dailies-daemon` (the long-running Playwright host).
 
 </details>
 
