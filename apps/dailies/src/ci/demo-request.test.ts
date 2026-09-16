@@ -15,16 +15,16 @@ import {
 // The real shape: a Buildkite pr-commenter bot posts the review-app URL with its
 // own HTML marker once the deploy succeeds.
 const DEPLOY_COMMENT =
-  "## Review App Deployment\nYour PR was deployed successfully to https://wrapbook-dev-pr-64365.wrapbook.reviews\n\n<!-- review-app-deploy::pr-commenter-buildkite-plugin -->";
+  "## Review App Deployment\nYour PR was deployed successfully to https://pr-64365.review.example.com\n\n<!-- review-app-deploy::pr-commenter-buildkite-plugin -->";
 const TARGET_COMMENT = {
   marker: "review-app-deploy::pr-commenter-buildkite-plugin",
-  pattern: "https://[a-z0-9-]+\\.wrapbook\\.reviews",
+  pattern: "https://[a-z0-9-]+\\.review\\.example\\.com",
 };
 
 describe("targetFromComments", () => {
   it("reads the URL out of a marked deploy comment", () => {
     expect(targetFromComments([DEPLOY_COMMENT], TARGET_COMMENT)).toBe(
-      "https://wrapbook-dev-pr-64365.wrapbook.reviews"
+      "https://pr-64365.review.example.com"
     );
   });
 
@@ -38,13 +38,13 @@ describe("targetFromComments", () => {
   it("prefers the most recent deploy, so a redeploy wins", () => {
     const older = DEPLOY_COMMENT.replace("64365", "11111");
     expect(targetFromComments([older, DEPLOY_COMMENT], TARGET_COMMENT)).toBe(
-      "https://wrapbook-dev-pr-64365.wrapbook.reviews"
+      "https://pr-64365.review.example.com"
     );
   });
 
   it("refuses a non-https match even inside a marked comment", () => {
     const sneaky =
-      "http://evil.wrapbook.reviews\n<!-- review-app-deploy::pr-commenter-buildkite-plugin -->";
+      "http://evil.review.example.com\n<!-- review-app-deploy::pr-commenter-buildkite-plugin -->";
     expect(
       targetFromComments([sneaky], {
         marker: TARGET_COMMENT.marker,
@@ -162,7 +162,7 @@ describe("decideDemo", () => {
     // Every real PR description opens with a ticket link. Scavenging it as the
     // demo target pointed CI at the tracker instead of the app.
     const d = decideDemo({
-      body: "## Description\n[APA-3002](https://linear.app/wrapbook/issue/APA-3002)\n\nAdds a card.",
+      body: "## Description\n[ACME-3002](https://tracker.example.com/issue/ACME-3002)\n\nAdds a card.",
       changedPaths: ["app/views/a.erb"],
       config,
     });
@@ -186,12 +186,12 @@ describe("decideDemo", () => {
       url: "http://localhost:3000",
     });
     const d = decideDemo({
-      body: "## Description\n[APA-3002](https://linear.app/wrapbook/issue/APA-3002)",
+      body: "## Description\n[ACME-3002](https://tracker.example.com/issue/ACME-3002)",
       changedPaths: ["app/views/a.erb"],
       comments: [DEPLOY_COMMENT],
       config: withComment,
     });
-    expect(d.target).toBe("https://wrapbook-dev-pr-64365.wrapbook.reviews");
+    expect(d.target).toBe("https://pr-64365.review.example.com");
   });
 
   it("still lets an explicit dailies-url: beat the deploy comment", () => {
@@ -228,12 +228,12 @@ describe("decideDemo", () => {
     // with a Linear link. Falling through to that link drove demos at linear.app —
     // fail closed instead (no target, run:false) rather than driving the tracker.
     const failedDeploy =
-      "## Review App Deployment\n:x: Your PR deployment failed: https://buildkite.com/wrapbook/review-app-deploy/builds/1\n\n<!-- review-app-deploy::pr-commenter-buildkite-plugin -->";
+      "## Review App Deployment\n:x: Your PR deployment failed: https://ci.example.com/deploy/builds/1\n\n<!-- review-app-deploy::pr-commenter-buildkite-plugin -->";
     const withComment = parseProjectConfig({
       demo: { paths: ["app/views/**"], targetComment: TARGET_COMMENT },
     });
     const d = decideDemo({
-      body: "## Description\nCloses [PAW-10303](https://linear.app/wrapbook/issue/PAW-10303)\n\nExpands the filter.",
+      body: "## Description\nCloses [ACME-10303](https://tracker.example.com/issue/ACME-10303)\n\nExpands the filter.",
       changedPaths: ["app/views/a.erb"],
       comments: [failedDeploy],
       config: withComment,

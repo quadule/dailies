@@ -113,8 +113,8 @@ jobs:
       # Deliberately UNPINNED here: this repo demos its own pull requests, so
       # tracking the newest published version is the point — it also catches a
       # broken publish the day it happens. A COPY of this file in an app repo
-      # must pin instead (wrapbook/app pins dailies-cli@0.5.3), because there a
-      # Dailies release changing CI overnight is a hazard, not a test.
+      # must pin instead (e.g. dailies-cli@0.5.3), because there a Dailies release
+      # changing CI overnight is a hazard, not a test.
       - name: Install the dailies CLI
         run: npm install -g dailies-cli
 
