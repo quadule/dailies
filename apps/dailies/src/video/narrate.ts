@@ -159,13 +159,23 @@ export function titleStyle(category: ThemeCategory | undefined): {
   return { font: resolveFont(pref.font), color: pref.color };
 }
 
-// Score gains: the single cinematic-mode song sits WELL under the spoken
-// narration — low enough that the voice stays clearly in front — then swells to
-// (near-)full for the credits roll. The ramp is the cross-fade length in seconds
-// between the two.
-const NARRATION_MUSIC_GAIN = 0.08;
+// Score gains: the single cinematic-mode song plays softly under the spoken
+// narration, then swells to (near-)full for the credits roll. The ramp is the
+// cross-fade length in seconds between the two. The bed sits at a modest resting
+// level and is DUCKED under the voice (see MUSIC_DUCK), so it breathes in the
+// gaps between lines but drops beneath the words — rather than a flat low level.
+const NARRATION_MUSIC_GAIN = 0.15;
 const CREDITS_MUSIC_GAIN = 0.6;
 const MUSIC_SWELL_RAMP_SEC = 1.5;
+// Subtle sidechain ducking of the bed under the summed narration voice. Gentle on
+// purpose — ratio 2 with rms detection gives a few dB of dip, and a 300 ms release
+// with a 20 ms attack recovers smoothly between lines without pumping. The two
+// compressor inputs are format-normalized first (sidechaincompress needs matching
+// layout/rate; the beds and the voice clips don't always agree).
+const MUSIC_DUCK =
+  "threshold=0.03:ratio=2:attack=20:release=300:detection=rms:makeup=1";
+const SC_FORMAT =
+  "aformat=sample_fmts=fltp:channel_layouts=stereo:sample_rates=44100";
 
 export interface CinematicStep {
   durationMs: number;
@@ -390,36 +400,76 @@ export interface AudioTrack {
   fadeInDurSec?: number;
   fadeOutAtSec?: number;
   fadeOutDurSec?: number;
+  // A duckable music bed: it is sidechain-compressed under the (summed) non-music
+  // tracks so it dips beneath the narration voice and recovers between lines.
+  // Unmarked tracks are the voice — they are the sidechain key, never ducked.
+  music?: boolean;
   volume?: number;
+}
+
+// The per-track chain: delay to its timeline position, scale volume, apply fades.
+// (No output label — the caller appends one.)
+function audioTrackChain(t: AudioTrack, i: number): string {
+  const vol = t.volume === undefined ? "" : `,volume=${t.volume.toFixed(3)}`;
+  const fadeOut =
+    t.fadeOutAtSec === undefined
+      ? ""
+      : `,afade=t=out:st=${t.fadeOutAtSec.toFixed(3)}:d=${(t.fadeOutDurSec ?? 1).toFixed(3)}`;
+  const fadeIn =
+    t.fadeInAtSec === undefined
+      ? ""
+      : `,afade=t=in:st=${t.fadeInAtSec.toFixed(3)}:d=${(t.fadeInDurSec ?? 1).toFixed(3)}`;
+  return `[${i + 1}:a]adelay=${t.delayMs}|${t.delayMs}${vol}${fadeOut}${fadeIn}`;
 }
 
 // Build the ffmpeg `filter_complex` that delays each audio input to its place on
 // the timeline (and scales its volume) and mixes them into one stereo track
 // [aout]. Inputs are ffmpeg indices 1..N (input 0 is the video), in the SAME
-// order as `tracks`. Returns "" for no tracks (caller then skips the mix).
+// order as `tracks`. When both a `music` bed and at least one non-music (voice)
+// track are present, each bed is sidechain-ducked under the summed voice so it
+// dips beneath the narration and recovers in the gaps. Returns "" for no tracks
+// (caller then skips the mix).
 export function buildAudioMix(tracks: AudioTrack[]): string {
   if (tracks.length === 0) {
     return "";
   }
-  const chains = tracks
-    .map((t, i) => {
-      const vol =
-        t.volume === undefined ? "" : `,volume=${t.volume.toFixed(3)}`;
-      const fadeOut =
-        t.fadeOutAtSec === undefined
-          ? ""
-          : `,afade=t=out:st=${t.fadeOutAtSec.toFixed(3)}:d=${(t.fadeOutDurSec ?? 1).toFixed(3)}`;
-      const fadeIn =
-        t.fadeInAtSec === undefined
-          ? ""
-          : `,afade=t=in:st=${t.fadeInAtSec.toFixed(3)}:d=${(t.fadeInDurSec ?? 1).toFixed(3)}`;
-      return `[${i + 1}:a]adelay=${t.delayMs}|${t.delayMs}${vol}${fadeOut}${fadeIn}[a${i}]`;
-    })
-    .join(";");
-  const labels = tracks.map((_, i) => `[a${i}]`).join("");
+  const beds = tracks.flatMap((t, i) => (t.music ? [{ t, i }] : []));
+  const voices = tracks.flatMap((t, i) => (t.music ? [] : [{ t, i }]));
   // normalize=0 keeps each track at its set level; dropout_transition=0 stops
-  // amix from ducking when a track ends (so the bed doesn't swell between lines).
-  return `${chains};${labels}amix=inputs=${tracks.length}:normalize=0:dropout_transition=0[aout]`;
+  // amix from swelling a track when another ends (so the bed doesn't jump between
+  // lines). Shared by both the flat and the ducked mixes.
+  const finalMix = (labels: string) =>
+    `${labels}amix=inputs=${tracks.length}:normalize=0:dropout_transition=0[aout]`;
+
+  // Nothing to duck (no bed) or nothing to duck against (no voice): flat mix.
+  if (beds.length === 0 || voices.length === 0) {
+    const chains = tracks
+      .map((t, i) => `${audioTrackChain(t, i)}[a${i}]`)
+      .join(";");
+    const labels = tracks.map((_, i) => `[a${i}]`).join("");
+    return `${chains};${finalMix(labels)}`;
+  }
+
+  const parts: string[] = [];
+  // Voice tracks: split each into a mix copy [m{i}] and a sidechain-key copy [k{i}].
+  for (const { t, i } of voices) {
+    parts.push(`${audioTrackChain(t, i)},asplit=2[m${i}][k${i}]`);
+  }
+  // Sum the voice keys into one sidechain, normalize its format, then fan it out —
+  // one copy per bed (a filter output can only be consumed once).
+  const keyInputs = voices.map(({ i }) => `[k${i}]`).join("");
+  const keyOuts = beds.map((_, j) => `[key${j}]`).join("");
+  parts.push(
+    `${keyInputs}amix=inputs=${voices.length}:normalize=0,${SC_FORMAT},asplit=${beds.length}${keyOuts}`
+  );
+  // Each bed: build it, match formats, then duck it under the voice key → [m{i}].
+  beds.forEach(({ t, i }, j) => {
+    parts.push(`${audioTrackChain(t, i)},${SC_FORMAT}[bed${i}]`);
+    parts.push(`[bed${i}][key${j}]sidechaincompress=${MUSIC_DUCK}[m${i}]`);
+  });
+  // Final mix: every track's [m{i}] (voice mix copy or ducked bed), original order.
+  parts.push(finalMix(tracks.map((_, i) => `[m${i}]`).join("")));
+  return parts.join(";");
 }
 
 // How many characters fit on one title-card line. drawtext has no measuring API,
@@ -1871,6 +1921,8 @@ async function mixAudioAndCaptions(args: {
       fadeInDurSec: m.fadeInDurSec,
       fadeOutAtSec: m.fadeOutAtSec,
       fadeOutDurSec: m.fadeOutDurSec,
+      // Duck the bed under the narration voice (buildAudioMix sidechains it).
+      music: true,
     })),
   ];
   const filter = buildAudioMix(tracks);

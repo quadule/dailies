@@ -139,6 +139,35 @@ describe("buildAudioMix", () => {
         "[a0][a1]amix=inputs=2:normalize=0:dropout_transition=0[aout]"
     );
   });
+
+  it("ducks a music bed under the summed voice via sidechaincompress", () => {
+    const f = buildAudioMix([
+      { delayMs: 2500 },
+      { delayMs: 0, volume: 0.15, music: true },
+    ]);
+    // Voice is split into a mix copy and a sidechain-key copy…
+    expect(f).toContain("[1:a]adelay=2500|2500,asplit=2[m0][k0]");
+    // …summed into one key and fanned out per bed…
+    expect(f).toContain("[k0]amix=inputs=1:normalize=0,");
+    expect(f).toContain("asplit=1[key0]");
+    // …and the bed is compressed under that key, not mixed flat.
+    expect(f).toContain("sidechaincompress=");
+    expect(f).toContain("[bed1][key0]sidechaincompress=");
+    expect(f).toContain(
+      "[m0][m1]amix=inputs=2:normalize=0:dropout_transition=0[aout]"
+    );
+    expect(f).not.toContain("[a1]");
+  });
+
+  it("does not duck when there is no voice to key off (music only)", () => {
+    // All tracks are beds → nothing to duck against → flat mix, no sidechain.
+    const f = buildAudioMix([{ delayMs: 0, volume: 0.15, music: true }]);
+    expect(f).toBe(
+      "[1:a]adelay=0|0,volume=0.150[a0];" +
+        "[a0]amix=inputs=1:normalize=0:dropout_transition=0[aout]"
+    );
+    expect(f).not.toContain("sidechaincompress");
+  });
 });
 
 describe("parseNarrationJson", () => {
