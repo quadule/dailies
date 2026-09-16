@@ -37,6 +37,27 @@ describe("pickTtsModel", () => {
   it("returns undefined when none look like TTS", () => {
     expect(pickTtsModel(["ACE-Step1.5-MLX-4bit"], {})).toBeUndefined();
   });
+  it("recognizes a known TTS family with no 'tts' in the id (Kokoro)", () => {
+    expect(pickTtsModel(["ACE-Step1.5-MLX-4bit", "Kokoro-82M-bf16"], {})).toBe(
+      "Kokoro-82M-bf16"
+    );
+  });
+  it("prefers a ready model over a CustomVoice one that needs a speaker", () => {
+    // Qwen3-TTS-CustomVoice 500s without a voice; Kokoro speaks out of the box.
+    expect(
+      pickTtsModel(
+        ["Kokoro-82M-bf16", "Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"],
+        {}
+      )
+    ).toBe("Kokoro-82M-bf16");
+  });
+  it("takes a CustomVoice model only when a voice is configured", () => {
+    const only = ["Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"];
+    expect(pickTtsModel(only, {})).toBeUndefined();
+    expect(pickTtsModel(only, { DAILIES_OMLX_TTS_VOICE: "Chelsie" })).toBe(
+      "Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
+    );
+  });
 });
 
 describe("buildSpeechBody", () => {

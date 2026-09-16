@@ -65,9 +65,20 @@ export async function readOmlxApiKey(
   }
 }
 
+// A loaded model id that looks like a speech-synthesis model. Beyond a literal
+// "tts", match the common on-device TTS families whose ids don't say "tts" (e.g.
+// Kokoro, Piper). Deliberately excludes ASR/STT models like parakeet/whisper.
+const TTS_MODEL_RE =
+  /tts|kokoro|piper|xtts|styletts|speecht5|\bvits\b|orpheus|\bbark\b|\bdia\b|\bcsm\b/i;
+// A model that needs a speaker name (`voice`) to synthesize at all — oMLX returns
+// HTTP 500 for these when none is given. The id carries the "CustomVoice" signal.
+const NEEDS_VOICE_RE = /custom[-_ ]?voice/i;
+
 // Choose the TTS model: an explicit $DAILIES_OMLX_TTS_MODEL wins; otherwise the
-// first loaded model whose id looks like a TTS model. Returns undefined when
-// none match (no TTS available via oMLX). Pure → unit-tested.
+// first loaded model that looks like TTS AND speaks out of the box — a
+// CustomVoice model is only chosen when $DAILIES_OMLX_TTS_VOICE names a speaker,
+// since it 500s otherwise. Returns undefined when no usable TTS model is loaded.
+// Pure → unit-tested.
 export function pickTtsModel(
   modelIds: string[],
   env: NodeJS.ProcessEnv
@@ -76,7 +87,12 @@ export function pickTtsModel(
   if (override) {
     return override;
   }
-  return modelIds.find((id) => /tts/i.test(id));
+  const hasVoice = Boolean(env.DAILIES_OMLX_TTS_VOICE?.trim());
+  const candidates = modelIds.filter((id) => TTS_MODEL_RE.test(id));
+  return (
+    candidates.find((id) => !NEEDS_VOICE_RE.test(id)) ??
+    (hasVoice ? candidates.find((id) => NEEDS_VOICE_RE.test(id)) : undefined)
+  );
 }
 
 // Build the /v1/audio/speech request body. `wav` keeps the bytes trivially

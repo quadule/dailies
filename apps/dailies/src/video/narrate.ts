@@ -2119,12 +2119,19 @@ async function resolveMedia(args: {
   log: Logger;
   echo: Echo;
   notes: string[];
+  // Song mode has no spoken narration, so oMLX (TTS-only) is neither used nor
+  // relevant — skip it so its "no TTS model / using fallback narration" notes
+  // don't surface on a cut that has no voice-over. Song's vocals come from the
+  // singing music model (ACE-Step / Lyria) resolved below.
+  song?: boolean;
 }): Promise<{
   providers: MediaProviders;
   singingMusic: MusicProvider | undefined;
 }> {
-  const { ffmpeg, log, echo, notes } = args;
-  const omlx = await resolveOmlxProviders({ env: process.env, log, echo });
+  const { ffmpeg, log, echo, notes, song = false } = args;
+  const omlx = song
+    ? { tts: undefined, notes: [] as string[] }
+    : await resolveOmlxProviders({ env: process.env, log, echo });
   const acestep = await resolveAceStepMusic({ env: process.env, log, echo });
   const gemini = resolveMediaProviders({ env: process.env, log });
   // Title-background sources: a configured local image server ($DAILIES_IMAGE_URL)
@@ -2214,7 +2221,13 @@ async function prepareCinematic(args: {
   // a line, change the voice/model, and re-run it by hand. `progress` already
   // matches the Echo shape, so commands ride the same stderr channel.
   const echo: Echo = progress;
-  const media = await resolveMedia({ ffmpeg: ffmpegPath, log, echo, notes });
+  const media = await resolveMedia({
+    ffmpeg: ffmpegPath,
+    log,
+    echo,
+    notes,
+    song: options.song,
+  });
   return {
     echo,
     ffmpeg: ffmpegPath,
