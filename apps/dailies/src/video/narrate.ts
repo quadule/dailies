@@ -160,22 +160,20 @@ export function titleStyle(category: ThemeCategory | undefined): {
 }
 
 // Score gains: the single cinematic-mode song plays softly under the spoken
-// narration, then swells to (near-)full for the credits roll. The ramp is the
-// cross-fade length in seconds between the two. The bed sits at a modest resting
-// level and is DUCKED under the voice (see MUSIC_DUCK), so it breathes in the
-// gaps between lines but drops beneath the words — rather than a flat low level.
-const NARRATION_MUSIC_GAIN = 0.15;
+// narration — dipping further while a line is actually being read (see
+// MUSIC_DUCK_FACTOR) so the words sit clearly in front, then recovering between
+// lines — before swelling to (near-)full for the credits roll. The swell ramp is
+// the cross-fade length in seconds between the narration and credits levels.
+const NARRATION_MUSIC_GAIN = 0.1;
 const CREDITS_MUSIC_GAIN = 0.6;
 const MUSIC_SWELL_RAMP_SEC = 1.5;
-// Subtle sidechain ducking of the bed under the summed narration voice. Gentle on
-// purpose — ratio 2 with rms detection gives a few dB of dip, and a 300 ms release
-// with a 20 ms attack recovers smoothly between lines without pumping. The two
-// compressor inputs are format-normalized first (sidechaincompress needs matching
-// layout/rate; the beds and the voice clips don't always agree).
-const MUSIC_DUCK =
-  "threshold=0.03:ratio=2:attack=20:release=300:detection=rms:makeup=1";
-const SC_FORMAT =
-  "aformat=sample_fmts=fltp:channel_layouts=stereo:sample_rates=44100";
+// Deterministic ducking: while a narration line plays, the bed is multiplied down
+// to this fraction of its resting level (≈ -10 dB) and ramped back up in the gaps.
+// Time-based rather than sidechain-keyed on purpose — the voice (a quiet, variable
+// on-device TTS) is an unreliable compressor key, but its clip times are known
+// exactly, so the dip is predictable and never truncates the score.
+const MUSIC_DUCK_FACTOR = 0.3;
+const MUSIC_DUCK_RAMP_SEC = 0.25;
 
 export interface CinematicStep {
   durationMs: number;
@@ -392,6 +390,10 @@ export function layoutSongCues(
 // (narration plays at 1.0; a music bed sits low, e.g. 0.18).
 export interface AudioTrack {
   delayMs: number;
+  // An extra time-varying gain applied AFTER `volume` (an ffmpeg `volume` filter
+  // expression over `t`, evaluated per frame). Used to duck a music bed under the
+  // narration lines — see duckEnvelope. Absent means a constant level.
+  duckExpr?: string;
   // Optional linear fades on the GLOBAL timeline (seconds — the same clock as
   // delayMs, since adelay shifts the stream so its t matches video time). Used
   // to cross the single score track from its quiet narration level into the full
@@ -400,15 +402,11 @@ export interface AudioTrack {
   fadeInDurSec?: number;
   fadeOutAtSec?: number;
   fadeOutDurSec?: number;
-  // A duckable music bed: it is sidechain-compressed under the (summed) non-music
-  // tracks so it dips beneath the narration voice and recovers between lines.
-  // Unmarked tracks are the voice — they are the sidechain key, never ducked.
-  music?: boolean;
   volume?: number;
 }
 
-// The per-track chain: delay to its timeline position, scale volume, apply fades.
-// (No output label — the caller appends one.)
+// The per-track chain: delay to its timeline position, scale volume, apply fades,
+// then an optional time-varying duck gain. (No output label — caller appends one.)
 function audioTrackChain(t: AudioTrack, i: number): string {
   const vol = t.volume === undefined ? "" : `,volume=${t.volume.toFixed(3)}`;
   const fadeOut =
@@ -419,57 +417,57 @@ function audioTrackChain(t: AudioTrack, i: number): string {
     t.fadeInAtSec === undefined
       ? ""
       : `,afade=t=in:st=${t.fadeInAtSec.toFixed(3)}:d=${(t.fadeInDurSec ?? 1).toFixed(3)}`;
-  return `[${i + 1}:a]adelay=${t.delayMs}|${t.delayMs}${vol}${fadeOut}${fadeIn}`;
+  // Single-quoted so its commas aren't read as filter-graph separators.
+  const duck = t.duckExpr ? `,volume='${t.duckExpr}':eval=frame` : "";
+  return `[${i + 1}:a]adelay=${t.delayMs}|${t.delayMs}${vol}${fadeOut}${fadeIn}${duck}`;
 }
 
 // Build the ffmpeg `filter_complex` that delays each audio input to its place on
-// the timeline (and scales its volume) and mixes them into one stereo track
-// [aout]. Inputs are ffmpeg indices 1..N (input 0 is the video), in the SAME
-// order as `tracks`. When both a `music` bed and at least one non-music (voice)
-// track are present, each bed is sidechain-ducked under the summed voice so it
-// dips beneath the narration and recovers in the gaps. Returns "" for no tracks
-// (caller then skips the mix).
+// the timeline (and scales its volume, fades, and any duck envelope) and mixes
+// them into one stereo track [aout]. Inputs are ffmpeg indices 1..N (input 0 is
+// the video), in the SAME order as `tracks`. Returns "" for no tracks (caller
+// then skips the mix). Ducking a music bed under the narration is done per-track
+// via `duckExpr` (see duckEnvelope), not by mixing — so a shorter voice track can
+// never truncate the score.
 export function buildAudioMix(tracks: AudioTrack[]): string {
   if (tracks.length === 0) {
     return "";
   }
-  const beds = tracks.flatMap((t, i) => (t.music ? [{ t, i }] : []));
-  const voices = tracks.flatMap((t, i) => (t.music ? [] : [{ t, i }]));
+  const chains = tracks
+    .map((t, i) => `${audioTrackChain(t, i)}[a${i}]`)
+    .join(";");
+  const labels = tracks.map((_, i) => `[a${i}]`).join("");
   // normalize=0 keeps each track at its set level; dropout_transition=0 stops
   // amix from swelling a track when another ends (so the bed doesn't jump between
-  // lines). Shared by both the flat and the ducked mixes.
-  const finalMix = (labels: string) =>
-    `${labels}amix=inputs=${tracks.length}:normalize=0:dropout_transition=0[aout]`;
+  // lines).
+  return `${chains};${labels}amix=inputs=${tracks.length}:normalize=0:dropout_transition=0[aout]`;
+}
 
-  // Nothing to duck (no bed) or nothing to duck against (no voice): flat mix.
-  if (beds.length === 0 || voices.length === 0) {
-    const chains = tracks
-      .map((t, i) => `${audioTrackChain(t, i)}[a${i}]`)
-      .join(";");
-    const labels = tracks.map((_, i) => `[a${i}]`).join("");
-    return `${chains};${finalMix(labels)}`;
+// A `volume` expression (over `t`, seconds on the global timeline) that rests at
+// 1.0 and dips to `factor` while any narration window is playing, with linear
+// `ramp`-second edges so the transitions are smooth. Multiplies a bed's own
+// volume, so the bed plays at its resting level in the gaps and `factor`× that
+// under the words. Returns "" when there are no windows (nothing to duck under).
+// Pure → unit-tested.
+export function duckEnvelope(
+  windows: { startSec: number; endSec: number }[],
+  opts: { factor: number; ramp: number }
+): string {
+  if (windows.length === 0) {
+    return "";
   }
-
-  const parts: string[] = [];
-  // Voice tracks: split each into a mix copy [m{i}] and a sidechain-key copy [k{i}].
-  for (const { t, i } of voices) {
-    parts.push(`${audioTrackChain(t, i)},asplit=2[m${i}][k${i}]`);
-  }
-  // Sum the voice keys into one sidechain, normalize its format, then fan it out —
-  // one copy per bed (a filter output can only be consumed once).
-  const keyInputs = voices.map(({ i }) => `[k${i}]`).join("");
-  const keyOuts = beds.map((_, j) => `[key${j}]`).join("");
-  parts.push(
-    `${keyInputs}amix=inputs=${voices.length}:normalize=0,${SC_FORMAT},asplit=${beds.length}${keyOuts}`
-  );
-  // Each bed: build it, match formats, then duck it under the voice key → [m{i}].
-  beds.forEach(({ t, i }, j) => {
-    parts.push(`${audioTrackChain(t, i)},${SC_FORMAT}[bed${i}]`);
-    parts.push(`[bed${i}][key${j}]sidechaincompress=${MUSIC_DUCK}[m${i}]`);
+  const { factor, ramp } = opts;
+  const r = ramp.toFixed(3);
+  // Each window is a trapezoid: 0 outside, ramping to 1 across `ramp` seconds at
+  // each edge. clip(min(rise, fall), 0, 1) — rise crosses 0→1 approaching the
+  // window, fall crosses 1→0 leaving it.
+  const pulses = windows.map(({ startSec, endSec }) => {
+    const s = (startSec - ramp).toFixed(3);
+    const e = (endSec + ramp).toFixed(3);
+    return `clip(min((t-${s})/${r},(${e}-t)/${r}),0,1)`;
   });
-  // Final mix: every track's [m{i}] (voice mix copy or ducked bed), original order.
-  parts.push(finalMix(tracks.map((_, i) => `[m${i}]`).join("")));
-  return parts.join(";");
+  const anyLine = pulses.reduce((acc, p) => (acc ? `max(${acc},${p})` : p));
+  return `1-${(1 - factor).toFixed(3)}*(${anyLine})`;
 }
 
 // How many characters fit on one title-card line. drawtext has no measuring API,
@@ -1910,8 +1908,18 @@ async function mixAudioAndCaptions(args: {
     outPath,
     echo,
   } = args;
+  // Where each narration line actually plays — used to duck the bed under it.
+  const voiceWindows = clips.map((c, i) => ({
+    startSec: offsetsSec[i] ?? 0,
+    endSec: (offsetsSec[i] ?? 0) + c.durationSec,
+  }));
+  const duckExpr = duckEnvelope(voiceWindows, {
+    factor: MUSIC_DUCK_FACTOR,
+    ramp: MUSIC_DUCK_RAMP_SEC,
+  });
   // Audio inputs (and their mix tracks) in lockstep: narration clips at full
-  // volume first, then any music underneath at its set gain.
+  // volume first, then any music underneath at its set gain, ducked under the
+  // narration lines (empty duckExpr → constant level, e.g. when nothing is voiced).
   const tracks: AudioTrack[] = [
     ...offsetsSec.map((s) => ({ delayMs: Math.round(s * 1000) })),
     ...music.map((m) => ({
@@ -1921,8 +1929,7 @@ async function mixAudioAndCaptions(args: {
       fadeInDurSec: m.fadeInDurSec,
       fadeOutAtSec: m.fadeOutAtSec,
       fadeOutDurSec: m.fadeOutDurSec,
-      // Duck the bed under the narration voice (buildAudioMix sidechains it).
-      music: true,
+      duckExpr: duckExpr || undefined,
     })),
   ];
   const filter = buildAudioMix(tracks);

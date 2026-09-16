@@ -7,6 +7,7 @@ import {
   buildAudioMix,
   buildModelCredits,
   captionBandPx,
+  duckEnvelope,
   groupedLyricSteps,
   groupStepsForLyrics,
   layoutSongCues,
@@ -140,33 +141,44 @@ describe("buildAudioMix", () => {
     );
   });
 
-  it("ducks a music bed under the summed voice via sidechaincompress", () => {
+  it("appends a duck envelope after a bed's volume, single-quoted", () => {
     const f = buildAudioMix([
       { delayMs: 2500 },
-      { delayMs: 0, volume: 0.15, music: true },
+      { delayMs: 0, volume: 0.1, duckExpr: "1-0.700*(X)" },
     ]);
-    // Voice is split into a mix copy and a sidechain-key copy…
-    expect(f).toContain("[1:a]adelay=2500|2500,asplit=2[m0][k0]");
-    // …summed into one key and fanned out per bed…
-    expect(f).toContain("[k0]amix=inputs=1:normalize=0,");
-    expect(f).toContain("asplit=1[key0]");
-    // …and the bed is compressed under that key, not mixed flat.
-    expect(f).toContain("sidechaincompress=");
-    expect(f).toContain("[bed1][key0]sidechaincompress=");
-    expect(f).toContain(
-      "[m0][m1]amix=inputs=2:normalize=0:dropout_transition=0[aout]"
+    expect(f).toBe(
+      "[1:a]adelay=2500|2500[a0];" +
+        "[2:a]adelay=0|0,volume=0.100,volume='1-0.700*(X)':eval=frame[a1];" +
+        "[a0][a1]amix=inputs=2:normalize=0:dropout_transition=0[aout]"
     );
-    expect(f).not.toContain("[a1]");
+  });
+});
+
+describe("duckEnvelope", () => {
+  it("is empty when there are no narration windows", () => {
+    expect(duckEnvelope([], { factor: 0.3, ramp: 0.25 })).toBe("");
   });
 
-  it("does not duck when there is no voice to key off (music only)", () => {
-    // All tracks are beds → nothing to duck against → flat mix, no sidechain.
-    const f = buildAudioMix([{ delayMs: 0, volume: 0.15, music: true }]);
-    expect(f).toBe(
-      "[1:a]adelay=0|0,volume=0.150[a0];" +
-        "[a0]amix=inputs=1:normalize=0:dropout_transition=0[aout]"
+  it("rests at 1 and dips to `factor` across a ramped window", () => {
+    const e = duckEnvelope([{ startSec: 2, endSec: 5 }], {
+      factor: 0.3,
+      ramp: 0.25,
+    });
+    // 1 minus (1-factor)=0.700 times a single clamped trapezoid pulse.
+    expect(e).toBe("1-0.700*(clip(min((t-1.750)/0.250,(5.250-t)/0.250),0,1))");
+  });
+
+  it("takes the max across multiple windows so any line ducks", () => {
+    const e = duckEnvelope(
+      [
+        { startSec: 1, endSec: 2 },
+        { startSec: 4, endSec: 6 },
+      ],
+      { factor: 0.3, ramp: 0.25 }
     );
-    expect(f).not.toContain("sidechaincompress");
+    expect(e).toContain("max(");
+    expect(e.match(/clip\(/g)).toHaveLength(2);
+    expect(e.startsWith("1-0.700*(")).toBe(true);
   });
 });
 
