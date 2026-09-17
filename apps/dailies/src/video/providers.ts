@@ -15,22 +15,33 @@
 // leave a half-written file the caller might use", each method writes to a
 // sibling temp path and only `rename`s it into place once the bytes are valid.
 //
-// API SURFACE: these providers target Google's "Interactions API"
-// (POST .../v1beta/interactions), the current surface that documents image
-// (Nano Banana), TTS, and Lyria music behind one request/response shape. (The
-// older `generateContent` surface is now labeled "Legacy".) Endpoint, auth
-// header, model ids, and the modality field all live in the constants below so a
-// maintainer can adjust them in one place. See the per-feature docs:
-//   - https://ai.google.dev/gemini-api/docs/image-generation (Nano Banana)
-//   - https://ai.google.dev/gemini-api/docs/speech-generation (TTS)
-//   - https://ai.google.dev/gemini-api/docs/music-generation (Lyria)
-//   - https://ai.google.dev/api/interactions-api (request/response reference)
+// API SURFACE: two credentials are supported, and they speak DIFFERENT surfaces.
+//   - AI Studio (GEMINI_API_KEY): Google's unified "Interactions API"
+//     (POST .../v1beta/interactions), one request/response shape for image
+//     (Nano Banana), TTS, and Lyria music, keyed by an x-goog-api-key header.
+//   - Vertex AI (GOOGLE_APPLICATION_CREDENTIALS): a service account, Bearer
+//     token. Vertex does NOT serve the Interactions API for these models;
+//     instead TTS + image use each model's native `:generateContent`, and Lyria
+//     music uses the `.../interactions` host at the `global` location. Verified
+//     against a live project 2026-09-17. See the Vertex section further down.
+// Endpoints, model ids, and the auth headers live in the constants/factories
+// below so a maintainer can adjust them in one place. Docs:
+//   - https://ai.google.dev/gemini-api/docs/interactions-overview (AI Studio)
+//   - https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-generation (Vertex image)
+//   - https://docs.cloud.google.com/text-to-speech/docs/gemini-tts (Vertex TTS)
+//   - https://ai.google.dev/gemini-api/docs/migrate-to-cloud (AI Studio vs Vertex)
 //
 // PRIVACY: the directionText and per-step narration text are session-derived and
-// are sent to Google's API. The API key is read from `env` only and is never
-// logged, embedded in an error message, or written to disk.
+// are sent to Google's API. The API key / service-account key are read from
+// `env` only; neither the key nor a minted token is ever logged, embedded in an
+// error message, or written to disk.
 import { rename, rm, writeFile } from "node:fs/promises";
 import type { Logger } from "dailies-logger";
+import {
+  createTokenSource,
+  loadServiceAccount,
+  type TokenSource,
+} from "./gcp-auth.js";
 
 // ---------------------------------------------------------------------------
 // Public interfaces (the only contract: each method writes `outPath` or throws).
@@ -111,14 +122,29 @@ export interface MediaProviders {
 }
 
 // ---------------------------------------------------------------------------
-// Configuration constants. Endpoint + model ids + the modality field live here
-// so the surface can be swapped in one place (see the API SURFACE note above).
+// Configuration constants. Endpoints + model ids live here so a maintainer can
+// adjust them in one place (see the API SURFACE note above).
 // ---------------------------------------------------------------------------
 
-// The Interactions API is a single endpoint for every modality; the `model`
-// field in the body selects the capability. Auth travels in the header.
-const INTERACTIONS_URL =
+// AI Studio's Interactions API: one endpoint for every modality, the `model`
+// field in the body selecting the capability, keyed by an x-goog-api-key header.
+// (Vertex does NOT serve this — it uses per-model native surfaces built from the
+// constants below; see the Vertex section.)
+const AI_STUDIO_INTERACTIONS_URL =
   "https://generativelanguage.googleapis.com/v1beta/interactions";
+
+// Default Vertex location. The Interactions surface is served ONLY from the
+// `global` location (measured: us/eu multi-region hosts 404, us-central1 reports
+// "Unsupported location"), and `global` uses the un-prefixed host. Overridable
+// via GOOGLE_CLOUD_LOCATION (the ADC-standard var) for a future regional rollout.
+const DEFAULT_VERTEX_LOCATION = "global";
+
+// Vertex host for a location: `global` has no region prefix, regions do.
+function vertexHost(location: string): string {
+  return location === "global"
+    ? "aiplatform.googleapis.com"
+    : `${location}-aiplatform.googleapis.com`;
+}
 
 // Image generation ("Nano Banana 2"). Confirmed on the image-generation docs.
 // Fall-back / higher-quality alternative: "gemini-3-pro-image".
@@ -416,6 +442,224 @@ export function readApiKey(env: NodeJS.ProcessEnv): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+// AI Studio (Gemini Developer API) transport: the API key rides in a constant
+// header and every modality is served through the ONE Interactions URL. Vertex
+// does not use this — it speaks per-model native surfaces (see the Vertex section
+// below), so the two surfaces don't share a transport shape.
+export interface GeminiTransport {
+  // Auth header for every call (API-key form; constant). Never logged.
+  readonly headers: Record<string, string>;
+  // Non-secret label for notes/debug, e.g. "AI Studio (API key)".
+  readonly label: string;
+  // Absolute URL to POST an interaction to.
+  readonly url: string;
+}
+
+function createStudioTransport(apiKey: string): GeminiTransport {
+  return {
+    url: AI_STUDIO_INTERACTIONS_URL,
+    headers: { "x-goog-api-key": apiKey },
+    label: "AI Studio (API key)",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Vertex AI (service account) surface.
+//
+// Vertex does NOT serve these media models through the unified Interactions API
+// the AI Studio path uses. Measured against a live project (2026-09-17), all
+// three modalities work via NATIVE surfaces instead:
+//   - TTS   → `<model>:generateContent`, PCM (audio/l16 24kHz) in
+//             candidates[].content.parts[].inlineData.
+//   - image → `<model>:generateContent`, PNG in the same inlineData shape;
+//             gemini-3.1-flash-image is served ONLY in the `global` location.
+//   - music → the `.../interactions` host at `global`, Lyria 3 returning mp3 in a
+//             top-level `outputs[]` array (the `:predict` path only has Lyria 2).
+// So the Vertex providers below build those native shapes; they do not reuse the
+// interactions transport/body/parser the AI Studio providers use.
+// ---------------------------------------------------------------------------
+
+interface VertexContext {
+  location: string;
+  project: string;
+  token: TokenSource;
+}
+
+// Build a Vertex context from a service-account key path. Throws on a bad path
+// (the resolver catches it and falls back). Token minting is lazy and cached.
+function createVertexContext(
+  credPath: string,
+  env: NodeJS.ProcessEnv
+): VertexContext {
+  const sa = loadServiceAccount(credPath);
+  return {
+    token: createTokenSource(sa),
+    project: env.GOOGLE_CLOUD_PROJECT?.trim() || sa.project_id,
+    location: env.GOOGLE_CLOUD_LOCATION?.trim() || DEFAULT_VERTEX_LOCATION,
+  };
+}
+
+// A model's native method URL, e.g. `<model>:generateContent`. Exported so tests
+// can pin host/path construction — the `global` → bare-host vs region → prefixed-
+// host distinction is easy to break and only fails at runtime against live Vertex.
+export function vertexModelUrl(
+  ctx: { project: string; location: string },
+  model: string,
+  method: string
+): string {
+  return (
+    `https://${vertexHost(ctx.location)}/v1beta1` +
+    `/projects/${ctx.project}/locations/${ctx.location}` +
+    `/publishers/google/models/${model}:${method}`
+  );
+}
+
+// The interactions host (Lyria music only, `global`). Exported for URL-shape tests.
+export function vertexInteractionsUrl(ctx: {
+  project: string;
+  location: string;
+}): string {
+  return (
+    `https://${vertexHost(ctx.location)}/v1beta1` +
+    `/projects/${ctx.project}/locations/${ctx.location}/interactions`
+  );
+}
+
+// POST JSON to a Vertex URL with a freshly-minted Bearer token. Clean errors
+// (carrying NEITHER the token NOR the request text). Mirrors postInteraction for
+// the Vertex surface.
+async function postVertex(args: {
+  model: string;
+  url: string;
+  ctx: VertexContext;
+  body: unknown;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const { model, url, ctx, body, timeoutMs } = args;
+  let response: Response;
+  try {
+    const token = await ctx.token();
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Vertex ${model} request failed: ${reason}`);
+  }
+  if (!response.ok) {
+    // Status only — the body can echo request text.
+    throw new Error(`Vertex ${model} returned HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+// Vertex `:generateContent` request body for TTS. The text part is spoken; the
+// voice is a prebuilt voice name (all of TTS_VOICES are valid on Vertex). Pure →
+// unit-tested.
+export function buildVertexTtsBody(
+  text: string,
+  voice: string
+): Record<string, unknown> {
+  return {
+    contents: [{ role: "user", parts: [{ text }] }],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } },
+      },
+    },
+  };
+}
+
+// Vertex `:generateContent` request body for image. `aspectRatio` steers the
+// output shape (best-effort). Pure → unit-tested.
+export function buildVertexImageBody(
+  prompt: string,
+  aspectRatio: string
+): Record<string, unknown> {
+  return {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseModalities: ["IMAGE"],
+      imageConfig: { aspectRatio },
+    },
+  };
+}
+
+// Extract the first inline media block of `wantType` from a Vertex
+// `:generateContent` response (candidates[].content.parts[].inlineData, camel or
+// snake case), matched by mime prefix ("audio/"/"image/"). Returns null when
+// absent or empty. Pure → unit-tested.
+export function extractGenerateContentMedia(
+  body: unknown,
+  wantType: InteractionMediaType
+): { bytes: Buffer; mimeType: string } | null {
+  if (typeof body !== "object" || body === null) {
+    return null;
+  }
+  const candidates = (body as { candidates?: unknown }).candidates;
+  if (!Array.isArray(candidates)) {
+    return null;
+  }
+  for (const cand of candidates) {
+    const parts = (cand as { content?: { parts?: unknown } })?.content?.parts;
+    if (!Array.isArray(parts)) {
+      continue;
+    }
+    for (const part of parts) {
+      const inline =
+        (part as { inlineData?: unknown; inline_data?: unknown })?.inlineData ??
+        (part as { inline_data?: unknown })?.inline_data;
+      const data = (inline as { data?: unknown })?.data;
+      const mimeType =
+        (inline as { mimeType?: unknown; mime_type?: unknown })?.mimeType ??
+        (inline as { mime_type?: unknown })?.mime_type;
+      if (
+        typeof data === "string" &&
+        data.length > 0 &&
+        typeof mimeType === "string" &&
+        mimeType.toLowerCase().startsWith(`${wantType}/`)
+      ) {
+        return { bytes: Buffer.from(data, "base64"), mimeType };
+      }
+    }
+  }
+  return null;
+}
+
+// Extract the first audio block from a Vertex interactions (Lyria) response,
+// whose media lives in a top-level `outputs[]` array of {type,data,mime_type}.
+// Returns null when absent or empty. Pure → unit-tested.
+export function extractVertexOutputsAudio(
+  body: unknown
+): { bytes: Buffer; mimeType: string } | null {
+  if (typeof body !== "object" || body === null) {
+    return null;
+  }
+  const outputs = (body as { outputs?: unknown }).outputs;
+  if (!Array.isArray(outputs)) {
+    return null;
+  }
+  for (const out of outputs) {
+    const type = (out as { type?: unknown })?.type;
+    const data = (out as { data?: unknown })?.data;
+    if (type === "audio" && typeof data === "string" && data.length > 0) {
+      const mimeType = (out as { mime_type?: unknown })?.mime_type;
+      return {
+        bytes: Buffer.from(data, "base64"),
+        mimeType: typeof mimeType === "string" ? mimeType : "",
+      };
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // HTTP + file helpers (network; not unit-tested — covered by manual/live runs).
 // ---------------------------------------------------------------------------
@@ -425,19 +669,19 @@ export function readApiKey(env: NodeJS.ProcessEnv): string | undefined {
 // failure. Uses the global fetch with an AbortSignal timeout.
 async function postInteraction(args: {
   model: string;
-  apiKey: string;
+  transport: GeminiTransport;
   body: unknown;
   timeoutMs: number;
 }): Promise<unknown> {
-  const { model, apiKey, body, timeoutMs } = args;
+  const { model, transport, body, timeoutMs } = args;
   let response: Response;
   try {
-    response = await fetch(INTERACTIONS_URL, {
+    // The API key travels in the header form, never in the URL or logs.
+    response = await fetch(transport.url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        // Key travels in the header form, never in the URL or logs.
-        "x-goog-api-key": apiKey,
+        ...transport.headers,
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
@@ -502,7 +746,7 @@ function audioBytesForWriting(bytes: Buffer, mimeType: string): Buffer {
 // ---------------------------------------------------------------------------
 
 function createTtsProvider(
-  apiKey: string,
+  transport: GeminiTransport,
   env: NodeJS.ProcessEnv
 ): TtsProvider {
   // One voice for the whole session: every step's clip uses it, and `label`
@@ -521,7 +765,7 @@ function createTtsProvider(
       });
       const json = await postInteraction({
         model: TTS_MODEL,
-        apiKey,
+        transport,
         body,
         timeoutMs: TTS_TIMEOUT_MS,
       });
@@ -533,7 +777,7 @@ function createTtsProvider(
 }
 
 function createTitleBackgroundProvider(
-  apiKey: string
+  transport: GeminiTransport
 ): TitleBackgroundProvider {
   return {
     id: "gemini-image",
@@ -554,7 +798,7 @@ function createTitleBackgroundProvider(
       });
       const json = await postInteraction({
         model: IMAGE_MODEL,
-        apiKey,
+        transport,
         body,
         timeoutMs: IMAGE_TIMEOUT_MS,
       });
@@ -565,7 +809,7 @@ function createTitleBackgroundProvider(
   };
 }
 
-function createMusicProvider(apiKey: string): MusicProvider {
+function createMusicProvider(transport: GeminiTransport): MusicProvider {
   const generate = async (
     model: string,
     prompt: string,
@@ -578,7 +822,7 @@ function createMusicProvider(apiKey: string): MusicProvider {
     });
     const json = await postInteraction({
       model,
-      apiKey,
+      transport,
       body,
       timeoutMs: MUSIC_TIMEOUT_MS,
     });
@@ -623,34 +867,191 @@ function createMusicProvider(apiKey: string): MusicProvider {
 }
 
 // ---------------------------------------------------------------------------
+// Vertex provider factories (native surfaces; each closes over the context).
+// ---------------------------------------------------------------------------
+
+function createVertexTtsProvider(
+  ctx: VertexContext,
+  env: NodeJS.ProcessEnv
+): TtsProvider {
+  const voice = pickTtsVoice(env);
+  return {
+    id: "gemini-tts",
+    label: `gemini:${voice}`,
+    async synthesize(text: string, outPath: string): Promise<void> {
+      const json = await postVertex({
+        model: TTS_MODEL,
+        url: vertexModelUrl(ctx, TTS_MODEL, "generateContent"),
+        ctx,
+        body: buildVertexTtsBody(buildTtsPrompt(text), voice),
+        timeoutMs: TTS_TIMEOUT_MS,
+      });
+      const media = extractGenerateContentMedia(json, "audio");
+      if (!media || media.bytes.length === 0) {
+        throw new Error(`Vertex ${TTS_MODEL} returned no audio`);
+      }
+      // Vertex TTS returns raw PCM (audio/l16) → wrap as WAV.
+      await writeFileAtomic(
+        outPath,
+        audioBytesForWriting(media.bytes, media.mimeType)
+      );
+    },
+  };
+}
+
+function createVertexTitleBackgroundProvider(
+  ctx: VertexContext
+): TitleBackgroundProvider {
+  return {
+    id: "gemini-image",
+    async render(
+      directionText: string,
+      width: number,
+      height: number,
+      outPath: string
+    ): Promise<void> {
+      const json = await postVertex({
+        model: IMAGE_MODEL,
+        url: vertexModelUrl(ctx, IMAGE_MODEL, "generateContent"),
+        ctx,
+        body: buildVertexImageBody(
+          buildImagePrompt(directionText),
+          aspectRatioFor(width, height)
+        ),
+        timeoutMs: IMAGE_TIMEOUT_MS,
+      });
+      const media = extractGenerateContentMedia(json, "image");
+      if (!media || media.bytes.length === 0) {
+        throw new Error(`Vertex ${IMAGE_MODEL} returned no image`);
+      }
+      await writeFileAtomic(outPath, media.bytes);
+    },
+  };
+}
+
+function createVertexMusicProvider(ctx: VertexContext): MusicProvider {
+  // Lyria 3 lives on the interactions host (not :predict), returning audio in a
+  // top-level outputs[] array. The body is a bare {model, input}: Vertex rejects
+  // the response_format the AI Studio interactions body carries. song() returns
+  // void (no lrcText) — like the AI Studio provider, so captions fall back to
+  // transcribe-and-align; Lyria's own lyric timestamps are not wired up.
+  const generate = async (
+    model: string,
+    prompt: string,
+    outPath: string
+  ): Promise<void> => {
+    const json = await postVertex({
+      model,
+      url: vertexInteractionsUrl(ctx),
+      ctx,
+      body: { model, input: prompt },
+      timeoutMs: MUSIC_TIMEOUT_MS,
+    });
+    const media = extractVertexOutputsAudio(json);
+    if (!media || media.bytes.length === 0) {
+      throw new Error(`Vertex ${model} returned no audio`);
+    }
+    await writeFileAtomic(
+      outPath,
+      audioBytesForWriting(media.bytes, media.mimeType)
+    );
+  };
+  return {
+    id: "gemini-music",
+    singsLyrics: true,
+    credit(): Promise<string | undefined> {
+      return Promise.resolve("Lyria (Google Gemini)");
+    },
+    bed(
+      directionText: string,
+      seconds: number,
+      outPath: string
+    ): Promise<void> {
+      return generate(
+        MUSIC_CLIP_MODEL,
+        buildMusicPrompt(directionText, seconds, false),
+        outPath
+      );
+    },
+    song(
+      directionText: string,
+      seconds: number,
+      outPath: string,
+      lyrics?: string
+    ): Promise<void> {
+      return generate(
+        MUSIC_PRO_MODEL,
+        buildMusicPrompt(directionText, seconds, true, lyrics),
+        outPath
+      );
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Resolver.
 // ---------------------------------------------------------------------------
 
-// Returns Gemini-backed providers when a key is set; otherwise {} (just notes),
-// so the caller falls back to its local say/drawtext/no-music paths. Each
-// capability is independent: a throw in any one falls back without affecting the
-// others.
+// Returns Gemini-backed providers for whichever credential is set, else just
+// notes so the caller falls back to its local say/drawtext/no-music paths.
+// A Vertex service account (GOOGLE_APPLICATION_CREDENTIALS) takes precedence over
+// an AI Studio key; a bad credentials path warns and falls through to the key.
+// Each capability is independent: a throw in any one falls back to local without
+// affecting the others (so e.g. a non-`global` GOOGLE_CLOUD_LOCATION, where the
+// image model isn't served, just yields a local title card).
 export function resolveMediaProviders(opts: {
   env: NodeJS.ProcessEnv;
   log: Logger;
 }): MediaProviders {
   const { env, log } = opts;
+
+  const credPath = env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
+  if (credPath) {
+    try {
+      const ctx = createVertexContext(credPath, env);
+      // Only the non-secret project/location is logged, never the token.
+      log.debug(
+        `media providers: Vertex AI (project ${ctx.project}, ${ctx.location})`
+      );
+      return {
+        tts: createVertexTtsProvider(ctx, env),
+        titleBackground: createVertexTitleBackgroundProvider(ctx),
+        music: createVertexMusicProvider(ctx),
+        notes: [
+          `Gemini media providers enabled via Vertex AI (project ${ctx.project}, ${ctx.location}): ` +
+            "generated narration and music, plus a title background when the location serves the image model " +
+            "(only `global` does — elsewhere the title card falls back to local). " +
+            "Session-derived text is sent to Google.",
+        ],
+      };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      log.warn(
+        `GOOGLE_APPLICATION_CREDENTIALS set but unusable (${reason}); ` +
+          "falling back to GEMINI_API_KEY if set."
+      );
+    }
+  }
+
   const apiKey = readApiKey(env);
-  if (!apiKey) {
+  if (apiKey) {
+    const transport = createStudioTransport(apiKey);
+    // Note: only the non-secret transport label is logged, never the key.
+    log.debug(`media providers: ${transport.label}, enabling generated media`);
     return {
+      tts: createTtsProvider(transport, env),
+      titleBackground: createTitleBackgroundProvider(transport),
+      music: createMusicProvider(transport),
       notes: [
-        "No GEMINI_API_KEY/GOOGLE_GENAI_API_KEY set — using local narration (say), drawtext title card, and no music.",
+        `Gemini media providers enabled via ${transport.label} (Interactions API): ` +
+          "generated narration, title background, and music. Session-derived text is sent to Google.",
       ],
     };
   }
-  // Note: the key was found but never logged; only that it is present.
-  log.debug("media providers: Gemini key present, enabling generated media");
+
   return {
-    tts: createTtsProvider(apiKey, env),
-    titleBackground: createTitleBackgroundProvider(apiKey),
-    music: createMusicProvider(apiKey),
     notes: [
-      "Gemini media providers enabled (Interactions API): generated narration, title background, and music. Session-derived text is sent to Google.",
+      "No GEMINI_API_KEY/GOOGLE_GENAI_API_KEY or GOOGLE_APPLICATION_CREDENTIALS set — using local narration (say), drawtext title card, and no music.",
     ],
   };
 }

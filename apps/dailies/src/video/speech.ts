@@ -245,7 +245,7 @@ export async function resolveSpeech(
       const fellBackToCompact = !chosen || chosen.quality === "Default";
       if (!(providers.tts || voiceOverride) && fellBackToCompact) {
         notes.push(
-          "no premium/enhanced English voice installed — narration uses the compact (robotic-sounding) voice; download one in System Settings › Accessibility › Spoken Content › System Voice (e.g. Ava, Zoe), or set GEMINI_API_KEY for higher-quality TTS"
+          "no premium/enhanced English voice installed — narration uses the compact (robotic-sounding) voice; download one in System Settings › Accessibility › Spoken Content › System Voice (e.g. Ava, Zoe), or set GEMINI_API_KEY (or GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account) for higher-quality TTS"
         );
       }
     }

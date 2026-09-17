@@ -316,7 +316,7 @@ export function buildProgram(): CommandType {
     )
     .option(
       "--song",
-      "Score the whole video with ONE sung song (LLM-written themed lyrics performed by a local/AI music model) instead of spoken narration; needs ACE-Step or GEMINI_API_KEY (a flavor of --cinematic)"
+      "Score the whole video with ONE sung song (LLM-written themed lyrics performed by a local/AI music model) instead of spoken narration; needs ACE-Step or GEMINI_API_KEY/GOOGLE_APPLICATION_CREDENTIALS (a flavor of --cinematic)"
     )
     .option(
       "--video <page>",

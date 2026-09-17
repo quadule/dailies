@@ -2463,7 +2463,7 @@ async function runNarrationPass(
   const speech = await resolveSpeech(providers, notes, echo);
   if (!speech) {
     return notApplied(
-      "cinematic narration needs macOS `say` or a TTS provider (set GEMINI_API_KEY)"
+      "cinematic narration needs macOS `say` or a TTS provider (set GEMINI_API_KEY, or GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account)"
     );
   }
 
@@ -2902,7 +2902,7 @@ async function runSongPass(ctx: CinematicContext): Promise<CinematicResult> {
   } = ctx;
   if (!singingMusic) {
     return notApplied(
-      "song mode needs a lyrics-capable music model — start the ACE-Step server (set DAILIES_ACESTEP_URL for a non-default port) or set GEMINI_API_KEY"
+      "song mode needs a lyrics-capable music model — start the ACE-Step server (set DAILIES_ACESTEP_URL for a non-default port) or set GEMINI_API_KEY (or GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account)"
     );
   }
 

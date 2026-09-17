@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   aspectRatioFor,
@@ -5,12 +8,39 @@ import {
   buildInteractionBody,
   buildMusicPrompt,
   buildTtsPrompt,
+  buildVertexImageBody,
+  buildVertexTtsBody,
+  extractGenerateContentMedia,
   extractInteractionMedia,
+  extractVertexOutputsAudio,
   pcmToWav,
   pickTtsVoice,
   readApiKey,
   resolveMediaProviders,
+  vertexInteractionsUrl,
+  vertexModelUrl,
 } from "./providers.js";
+
+// Write a structurally-valid service-account key to a temp file and return its
+// path. The placeholder private_key is safe because token minting is lazy: these
+// tests only resolve providers (never invoke a provider method), so the key is
+// never signed.
+function writeSaFixture(overrides: Record<string, unknown> = {}): string {
+  const dir = mkdtempSync(join(tmpdir(), "dailies-sa-"));
+  const path = join(dir, "sa.json");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      type: "service_account",
+      client_email: "sa@example-project.iam.gserviceaccount.com",
+      private_key: "PLACEHOLDER",
+      project_id: "example-project",
+      token_uri: "https://oauth2.googleapis.com/token",
+      ...overrides,
+    })
+  );
+  return path;
+}
 
 // A no-op logger satisfying the bits resolveMediaProviders touches.
 const noopLog = {
@@ -372,5 +402,235 @@ describe("resolveMediaProviders", () => {
       expect(note).not.toContain("super-secret-key");
     }
     expect(providers.tts?.label).not.toContain("super-secret-key");
+  });
+
+  it("enables all three providers for a Vertex service account", () => {
+    const path = writeSaFixture();
+    const providers = resolveMediaProviders({
+      env: { GOOGLE_APPLICATION_CREDENTIALS: path },
+      log: noopLog,
+    });
+    expect(providers.tts?.id).toBe("gemini-tts");
+    expect(providers.titleBackground?.id).toBe("gemini-image");
+    expect(providers.music?.id).toBe("gemini-music");
+    expect(providers.notes[0]).toContain(
+      "Vertex AI (project example-project, global)"
+    );
+  });
+
+  it("prefers the Vertex service account over an API key when both are set", () => {
+    const path = writeSaFixture();
+    const providers = resolveMediaProviders({
+      env: { GOOGLE_APPLICATION_CREDENTIALS: path, GEMINI_API_KEY: "k" },
+      log: noopLog,
+    });
+    // Vertex note names the project/location (the interactions-path note does not).
+    expect(providers.notes[0]).toContain(
+      "Vertex AI (project example-project, global)"
+    );
+  });
+
+  it("routes GOOGLE_GENAI_API_KEY to the AI Studio path", () => {
+    const providers = resolveMediaProviders({
+      env: { GOOGLE_GENAI_API_KEY: "k" },
+      log: noopLog,
+    });
+    expect(providers.tts?.id).toBe("gemini-tts");
+    expect(providers.notes[0]).toContain("Interactions API");
+  });
+
+  it("falls back to the API key when the credentials path is unusable", () => {
+    const providers = resolveMediaProviders({
+      env: {
+        GOOGLE_APPLICATION_CREDENTIALS: "/no/such/file.json",
+        GEMINI_API_KEY: "k",
+      },
+      log: noopLog,
+    });
+    // Bad Vertex path → warn + fall through to the AI Studio interactions path.
+    expect(providers.tts?.id).toBe("gemini-tts");
+    expect(providers.notes[0]).toContain("Interactions API");
+  });
+
+  it("does not leak the service-account project path or a token into notes", () => {
+    const path = writeSaFixture();
+    const providers = resolveMediaProviders({
+      env: { GOOGLE_APPLICATION_CREDENTIALS: path },
+      log: noopLog,
+    });
+    for (const note of providers.notes) {
+      expect(note).not.toContain(path);
+    }
+  });
+});
+
+describe("buildVertexTtsBody", () => {
+  it("wraps text + a prebuilt voice for :generateContent AUDIO", () => {
+    const body = buildVertexTtsBody("hello", "Charon") as {
+      contents: { parts: { text: string }[] }[];
+      generationConfig: {
+        responseModalities: string[];
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: string } };
+        };
+      };
+    };
+    expect(body.contents[0]?.parts[0]?.text).toBe("hello");
+    expect(body.generationConfig.responseModalities).toEqual(["AUDIO"]);
+    expect(
+      body.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig
+        .voiceName
+    ).toBe("Charon");
+  });
+});
+
+describe("buildVertexImageBody", () => {
+  it("requests IMAGE with an aspect ratio via imageConfig", () => {
+    const body = buildVertexImageBody("a gradient", "16:9") as {
+      contents: { parts: { text: string }[] }[];
+      generationConfig: {
+        responseModalities: string[];
+        imageConfig: { aspectRatio: string };
+      };
+    };
+    expect(body.contents[0]?.parts[0]?.text).toBe("a gradient");
+    expect(body.generationConfig.responseModalities).toEqual(["IMAGE"]);
+    expect(body.generationConfig.imageConfig.aspectRatio).toBe("16:9");
+  });
+});
+
+describe("extractGenerateContentMedia", () => {
+  it("reads inlineData audio/image from candidates[].content.parts[]", () => {
+    const audio = Buffer.from("pcm-bytes");
+    const body = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              { text: "here you go" },
+              {
+                inlineData: {
+                  mimeType: "audio/l16; rate=24000",
+                  data: audio.toString("base64"),
+                },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const found = extractGenerateContentMedia(body, "audio");
+    expect(found?.bytes.equals(audio)).toBe(true);
+    expect(found?.mimeType).toBe("audio/l16; rate=24000");
+  });
+
+  it("accepts snake_case inline_data and matches by wanted type", () => {
+    const img = Buffer.from("png-bytes");
+    const body = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                inline_data: {
+                  mime_type: "image/png",
+                  data: img.toString("base64"),
+                },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    expect(extractGenerateContentMedia(body, "image")?.bytes.equals(img)).toBe(
+      true
+    );
+    // Wanting audio but only an image is present → null.
+    expect(extractGenerateContentMedia(body, "audio")).toBeNull();
+  });
+
+  it("returns null for missing/empty/malformed responses", () => {
+    expect(extractGenerateContentMedia(null, "audio")).toBeNull();
+    expect(extractGenerateContentMedia({}, "audio")).toBeNull();
+    expect(extractGenerateContentMedia({ candidates: [] }, "image")).toBeNull();
+    expect(
+      extractGenerateContentMedia(
+        {
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { mimeType: "image/png", data: "" } }],
+              },
+            },
+          ],
+        },
+        "image"
+      )
+    ).toBeNull();
+  });
+});
+
+describe("extractVertexOutputsAudio", () => {
+  it("finds the audio block in a Lyria outputs[] response", () => {
+    const audio = Buffer.from("mp3-bytes");
+    const body = {
+      outputs: [
+        { type: "text", text: "<instrumental>" },
+        { type: "text", text: "Caption: ..." },
+        {
+          type: "audio",
+          mime_type: "audio/mpeg",
+          data: audio.toString("base64"),
+        },
+      ],
+    };
+    const found = extractVertexOutputsAudio(body);
+    expect(found?.bytes.equals(audio)).toBe(true);
+    expect(found?.mimeType).toBe("audio/mpeg");
+  });
+
+  it("returns null when outputs[] carries no usable audio", () => {
+    expect(extractVertexOutputsAudio(null)).toBeNull();
+    expect(extractVertexOutputsAudio({})).toBeNull();
+    expect(
+      extractVertexOutputsAudio({ outputs: [{ type: "text", text: "x" }] })
+    ).toBeNull();
+    expect(
+      extractVertexOutputsAudio({ outputs: [{ type: "audio", data: "" }] })
+    ).toBeNull();
+  });
+});
+
+describe("vertex URL construction", () => {
+  // `global` uses the un-prefixed host; a region prefixes it. Getting this wrong
+  // 404s only at runtime against live Vertex (it cost a real debugging cycle).
+  it("uses the bare host for the global location", () => {
+    const ctx = { project: "example-project", location: "global" };
+    expect(
+      vertexModelUrl(ctx, "gemini-3.1-flash-tts-preview", "generateContent")
+    ).toBe(
+      "https://aiplatform.googleapis.com/v1beta1" +
+        "/projects/example-project/locations/global" +
+        "/publishers/google/models/gemini-3.1-flash-tts-preview:generateContent"
+    );
+    expect(vertexInteractionsUrl(ctx)).toBe(
+      "https://aiplatform.googleapis.com/v1beta1" +
+        "/projects/example-project/locations/global/interactions"
+    );
+  });
+
+  it("prefixes the host for a non-global region", () => {
+    const ctx = { project: "other-proj", location: "us-central1" };
+    expect(
+      vertexModelUrl(ctx, "gemini-3.1-flash-image", "generateContent")
+    ).toBe(
+      "https://us-central1-aiplatform.googleapis.com/v1beta1" +
+        "/projects/other-proj/locations/us-central1" +
+        "/publishers/google/models/gemini-3.1-flash-image:generateContent"
+    );
+    expect(vertexInteractionsUrl(ctx)).toBe(
+      "https://us-central1-aiplatform.googleapis.com/v1beta1" +
+        "/projects/other-proj/locations/us-central1/interactions"
+    );
   });
 });

@@ -6,6 +6,17 @@ coverage/
 *.log
 *.tsbuildinfo
 .DS_Store
+
+# Credentials — never commit. Service-account keys / API keys belong outside the
+# repo (referenced by path via an env var). These patterns are defense against a
+# stray `git add`; they are not where secrets should live.
+*.pem
+*-service-account*.json
+*-sa*.json
+*credentials*.json
+gcp-*.json
+.env
+.env.*
 .idea/
 .ruby-lsp/
 .vscode/*
