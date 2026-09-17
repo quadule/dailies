@@ -9,6 +9,7 @@ import {
   sessionResultsPath,
 } from "dailies-daemon-client";
 import {
+  type ArtifactInfo,
   type CaptionEvent,
   CaptionEventSchema,
   SESSION_CAPTIONS_FILE,
@@ -249,6 +250,65 @@ export interface CaptionCue {
   text: string;
 }
 
+// A session records ONE VIDEO PER PAGE, and everything downstream — the cinematic
+// pass, burnt captions, the video the report shows, the path `--json` reports for CI
+// to attach — takes "the" session video as the first video artifact. With more than
+// one page that was whatever order the daemon happened to return, and it picked wrong
+// in the way that matters: a run that opened a feature-flag page in a second tab got
+// its song burnt into 40 seconds of an unstyled toggle page, while the 67 seconds
+// actually demonstrating the feature was left silent and unreported.
+//
+// So order them by how much footage survived condensing. Condensing trims idle around
+// the recorded steps, which makes kept time a direct measure of how much of the
+// session happened on that page — the page you drove keeps its minutes, a page you
+// passed through to flip a switch keeps seconds. Bytes are the fallback when there is
+// nothing to trim or no ffmpeg to trim with: more pixels changed, more happened.
+//
+// Pure → unit-tested. Returns the indices of `videos` in primary-first order.
+export function videosByPrimacy(
+  videos: { bytes: number; keptSec?: number }[]
+): number[] {
+  return videos
+    .map((video, index) => ({ index, video }))
+    .sort((a, b) => {
+      const kept = (b.video.keptSec ?? -1) - (a.video.keptSec ?? -1);
+      // Ties include "neither was condensed", where both are undefined.
+      return kept === 0 ? b.video.bytes - a.video.bytes : kept;
+    })
+    .map((entry) => entry.index);
+}
+
+// Put the page the session actually happened on first, so every later
+// `find(kind === "video")` — cinematic, captions, report, `--json` — means the same
+// video, and it is the right one. Reordered in place: the artifact list is the
+// session's own record of what it produced, and its order is now meaningful.
+function promotePrimaryVideo(
+  result: SessionEndResult,
+  videos: ArtifactInfo[],
+  keptSecByPath: Map<string, number>
+): void {
+  if (videos.length < 2) {
+    return;
+  }
+  const ordered = videosByPrimacy(
+    videos.map((video) => ({
+      bytes: video.bytes,
+      keptSec: keptSecByPath.get(video.path),
+    }))
+  ).map((index) => videos[index] as ArtifactInfo);
+  let slot = 0;
+  for (const [index, artifact] of result.artifacts.entries()) {
+    if (artifact.kind === "video") {
+      result.artifacts[index] = ordered[slot] as ArtifactInfo;
+      slot += 1;
+    }
+  }
+  logger.info(
+    { others: ordered.slice(1).map((v) => v.path), video: ordered[0]?.path },
+    `${videos.length} pages recorded; finishing the one with the most footage: ${ordered[0]?.path}`
+  );
+}
+
 async function condenseSessionVideos(
   result: SessionEndResult,
   record: SessionRecord,
@@ -280,6 +340,7 @@ async function condenseSessionVideos(
   // segments give the same original→condensed time remap. Capture the first to
   // stamp each step's position in the trimmed video for the timeline.
   let mappingKeeps: Segment[] | undefined;
+  const keptSecByPath = new Map<string, number>();
   for (const video of videos) {
     const outcome = await condenseVideo(video.path, logger, {
       ffmpegPath: ffmpeg,
@@ -289,6 +350,7 @@ async function condenseSessionVideos(
     });
     if (outcome.condensed) {
       mappingKeeps ??= outcome.keeps;
+      keptSecByPath.set(video.path, outcome.keptSec ?? 0);
       video.bytes = await stat(video.path)
         .then((s) => s.size)
         .catch(() => video.bytes);
@@ -324,6 +386,8 @@ async function condenseSessionVideos(
       );
     }
   }
+
+  promotePrimaryVideo(result, videos, keptSecByPath);
 
   // Stamp each step's position in the condensed video so the report/viewer
   // timeline can sync to it. Mutating record.steps here flows into the manifest

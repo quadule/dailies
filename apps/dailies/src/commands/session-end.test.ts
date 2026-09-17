@@ -10,6 +10,7 @@ import {
   STEP_PAD_AFTER_SEC,
   STEP_PAD_BEFORE_SEC,
   stepKeepWindows,
+  videosByPrimacy,
 } from "./session-end.js";
 
 const CREATED_AT = "2026-06-02T10:00:00.000Z";
@@ -236,5 +237,37 @@ describe("stepKeepWindows", () => {
       ])
     );
     expect(windows).toEqual([]);
+  });
+});
+
+describe("videosByPrimacy", () => {
+  // The case that cost a real demo its subject: a run that opened a feature-flag page
+  // in a second tab, where the flag page sorted first and got the song burnt into it
+  // while the page showing the feature was left silent.
+  it("puts the page that kept the most footage first", () => {
+    const order = videosByPrimacy([
+      { bytes: 5_263_260, keptSec: 40.16 },
+      { bytes: 5_550_424, keptSec: 66.92 },
+    ]);
+
+    expect(order).toEqual([1, 0]);
+  });
+
+  it("falls back to bytes when nothing could be condensed", () => {
+    expect(
+      videosByPrimacy([{ bytes: 100 }, { bytes: 900 }, { bytes: 500 }])
+    ).toEqual([1, 2, 0]);
+  });
+
+  it("prefers a condensed video over one with no kept time at all", () => {
+    // An un-condensed video is unknown, not zero: a huge raw file must not outrank
+    // a page we measured.
+    expect(
+      videosByPrimacy([{ bytes: 9_000_000 }, { bytes: 10, keptSec: 1 }])
+    ).toEqual([1, 0]);
+  });
+
+  it("leaves a single video alone", () => {
+    expect(videosByPrimacy([{ bytes: 10, keptSec: 3 }])).toEqual([0]);
   });
 });

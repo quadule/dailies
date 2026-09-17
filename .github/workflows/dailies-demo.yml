@@ -480,12 +480,21 @@ jobs:
           echo "status=$(echo "$OUT" | jq -r '.status // "unknown"')" >> "$GITHUB_OUTPUT"
           # Compact `name=value …` for the comment and the next run's marker.
           echo "metrics=$(echo "$OUT" | jq -r '[.metrics[]? | "\(.name)=\(.value)"] | join(" ")')" >> "$GITHUB_OUTPUT"
-          # Exclude `*.precinematic.webm` — the raw, silent recording the
-          # cinematic cut is built FROM. It sits in the same directory and sorts
-          # first, so a bare `-name '*.webm' | head -1` attaches the uncut video
-          # with no narration, captions or title card, and the cinematic step's
-          # whole output is silently discarded.
-          VIDEO=$(find "$ARTIFACT_DIR" -name '*.webm' ! -name '*.precinematic.webm' | head -1)
+          # Ask `session end` which video it finished, rather than guessing from the
+          # directory. Globbing got this wrong twice. `*.precinematic.webm` is the raw
+          # silent source the cinematic cut is built FROM and sorts first, so a bare
+          # `-name '*.webm' | head -1` attached the uncut video and silently discarded
+          # the cinematic pass. And a session records ONE VIDEO PER PAGE: with two
+          # pages, filename order is a hash, so the glob can attach a page the run
+          # merely passed through — a real run posted 40 seconds of a feature-flag
+          # toggle page instead of the feature. The artifacts array is ordered by
+          # `session end` with the finished video first, which is the answer.
+          VIDEO=$(echo "$OUT" | jq -r '[.artifacts[]? | select(.kind == "video")][0].path // empty')
+          # Older CLI, or a run that produced no artifacts array: fall back to the
+          # glob, still excluding the pre-cinematic source.
+          if [ -z "$VIDEO" ]; then
+            VIDEO=$(find "$ARTIFACT_DIR" -name '*.webm' ! -name '*.precinematic.webm' | head -1)
+          fi
           # Copy out ONLY the artifacts that are safe to hand around. Zipping the
           # whole session directory would publish `profile/` (a real Chrome cookie
           # database for the logged-in review app) and `trace.zip` (the run's
