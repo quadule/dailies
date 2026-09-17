@@ -327,7 +327,10 @@ async function handleExecute(
           targetSession,
           request.step
         );
-        await sessions.endStep(targetSession);
+        // …and record WHICH page that was, by the same rule. A session records one
+        // video per page and `session end` finishes one of them; this is what lets
+        // it finish the page the run was about instead of the longest recording.
+        await sessions.endStep(targetSession, request.step);
       }
       if (targetSession) {
         sessions.noteRun(targetSession);

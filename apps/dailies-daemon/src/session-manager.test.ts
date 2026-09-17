@@ -21,6 +21,10 @@ interface RecorderSink {
 
 const log = createLogger({ level: "silent" });
 
+// Which page the fake BrowserManager reports as active, so a test can move the
+// session from one page to another between steps.
+let activePage: string | undefined;
+
 function makeSession(): {
   entry: BrowserEntry;
   calls: string[];
@@ -109,6 +113,7 @@ function makeManager(
       launched.push({ name, options });
       return Promise.resolve(entry);
     },
+    activePageName: () => activePage,
     onBrowserDisconnect: () => undefined,
     screenshotActivePage: () => Promise.resolve(),
     stopBrowser: () => {
@@ -137,6 +142,7 @@ const originalUserProfile = process.env.USERPROFILE;
 beforeEach(async () => {
   tempHome = await mkdtemp(join(tmpdir(), "dailies-session-"));
   process.env.HOME = tempHome;
+  activePage = undefined;
   process.env.USERPROFILE = tempHome;
 });
 
@@ -358,6 +364,52 @@ describe("SessionManager", () => {
     // A second end on a now-unknown session throws (the orchestrator reconciles
     // the on-disk record in that case).
     await expect(sessions.end("s1", "end")).rejects.toThrow(/not found/);
+  });
+
+  it("records which page each step ended on, and carries it into the manifest", async () => {
+    // A session records one video per page and `session end` finishes one of them.
+    // The step history is how it knows which page the run was actually about — the
+    // page a run FINISHES on, not the one it spent longest being stuck on.
+    const { entry, calls } = makeSession();
+    entry.pages.set("flailing", {} as never);
+    entry.pages.set("retake", {} as never);
+    const sessions = new SessionManager(makeManager(entry, calls, []), log);
+    await sessions.start(startReq());
+
+    activePage = "flailing";
+    await sessions.beginStep("s1", "get-stuck");
+    await sessions.endStep("s1", "get-stuck");
+    activePage = "retake";
+    await sessions.beginStep("s1", "start-over");
+    await sessions.endStep("s1", "start-over");
+
+    const result = await sessions.end("s1", "end");
+
+    expect(result.stepPages).toEqual([
+      { page: "flailing", step: "get-stuck" },
+      { page: "retake", step: "start-over" },
+    ]);
+    const manifest = JSON.parse(
+      await readFile(join(getSessionDir("s1"), "manifest.json"), "utf8")
+    );
+    expect(manifest.stepPages).toEqual(result.stepPages);
+  });
+
+  it("attributes a step even when the caller does not repeat its name", async () => {
+    // The takeover path ends the step without naming it again.
+    const { entry, calls } = makeSession();
+    entry.pages.set("checkout", {} as never);
+    const sessions = new SessionManager(makeManager(entry, calls, []), log);
+    await sessions.start(startReq());
+
+    activePage = "checkout";
+    await sessions.beginStep("s1", "let-the-human-drive");
+    await sessions.endStep("s1");
+
+    const result = await sessions.end("s1", "end");
+    expect(result.stepPages).toEqual([
+      { page: "checkout", step: "let-the-human-drive" },
+    ]);
   });
 
   it("labels each recording with the page name its script used", async () => {

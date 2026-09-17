@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { sessionDir, sessionManifestPath } from "dailies-daemon-client";
 import {
@@ -13,6 +13,7 @@ import {
   SESSION_VIDEO_EXT,
   type SessionEndResult,
   type SessionPhase,
+  type StepPage,
 } from "dailies-protocol";
 import type { SessionRecord } from "./registry.js";
 
@@ -63,6 +64,31 @@ async function attachmentArtifacts(dir: string): Promise<ArtifactInfo[]> {
   return refs.filter((r): r is ArtifactInfo => r !== undefined && r.bytes > 0);
 }
 
+// What the daemon recorded about this session when it ended, or undefined when
+// there is no readable manifest. The filesystem knows which videos exist; only the
+// manifest knows which PAGE each one was and which page each step ended on — and a
+// re-finalize (`session end` on an already-ended session) has no daemon to ask.
+// Without this, re-cutting a two-page session goes back to guessing.
+async function readManifest(sessionId: string): Promise<
+  | {
+      artifacts?: { pageName?: string; path?: string }[];
+      stepPages?: StepPage[];
+    }
+  | undefined
+> {
+  try {
+    const raw = await readFile(sessionManifestPath(sessionId), "utf8");
+    const parsed = JSON.parse(raw) as {
+      artifacts?: { pageName?: string; path?: string }[];
+      stepPages?: StepPage[];
+    };
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    // No manifest, or unreadable/corrupt — the caller carries on without it.
+    return;
+  }
+}
+
 // Reconstruct a SessionEndResult by scanning the session dir on disk. Used when
 // the daemon can no longer finalize the session (restarted / lost it) but the
 // artifacts it already flushed remain — so `session end`/`abort` can still emit
@@ -92,6 +118,20 @@ export async function endResultFromDisk(
     ...attachments,
   ];
 
+  // Re-attach what only the manifest knows: which page each recording is of.
+  const manifest = await readManifest(record.id);
+  const pageNames = new Map(
+    (manifest?.artifacts ?? [])
+      .filter((a) => a.path && a.pageName)
+      .map((a) => [a.path as string, a.pageName as string])
+  );
+  for (const artifact of artifacts) {
+    const pageName = pageNames.get(artifact.path);
+    if (pageName) {
+      artifact.pageName = pageName;
+    }
+  }
+
   const phase: SessionPhase = record.status === "aborted" ? "aborted" : "ended";
   return {
     artifacts,
@@ -109,5 +149,6 @@ export async function endResultFromDisk(
       sessionId: record.id,
       startedAt: Date.parse(record.createdAt) || Date.now(),
     },
+    stepPages: manifest?.stepPages,
   };
 }

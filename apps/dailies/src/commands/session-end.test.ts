@@ -8,6 +8,7 @@ import {
   contentStartFloorSec,
   isDegradedEnd,
   matchRequestedVideo,
+  pageFromSteps,
   promotePrimaryVideo,
   STEP_PAD_AFTER_SEC,
   STEP_PAD_BEFORE_SEC,
@@ -400,5 +401,89 @@ describe("promotePrimaryVideo with --video", () => {
     await expect(promotePrimaryVideo(result as never, "nope")).rejects.toThrow(
       /matched no recording/
     );
+  });
+});
+
+describe("pageFromSteps", () => {
+  const videos = [
+    { pageName: "flailing", path: "/t/a.webm" },
+    { pageName: "retake", path: "/t/b.webm" },
+  ];
+
+  it("takes the page the last step ended on, not the busiest one", () => {
+    // The restart: six steps of getting stuck, then a clean re-run elsewhere.
+    // A tally would pick "flailing"; the take worth keeping is "retake".
+    const steps = [
+      { page: "flailing", step: "open-form" },
+      { page: "flailing", step: "click-save" },
+      { page: "flailing", step: "click-save-again" },
+      { page: "flailing", step: "read-error" },
+      { page: "flailing", step: "try-other-selector" },
+      { page: "retake", step: "restart-the-flow" },
+      { page: "retake", step: "assert-result" },
+    ];
+
+    expect(pageFromSteps(steps, videos)).toBe(videos[1]);
+  });
+
+  it("skips steps on anonymous tabs and steps whose page has no recording", () => {
+    const steps = [
+      { page: "retake", step: "do-the-flow" },
+      { step: "peek-in-a-throwaway-tab" },
+      { page: "a-page-with-no-video", step: "later" },
+    ];
+
+    expect(pageFromSteps(steps, videos)).toBe(videos[1]);
+  });
+
+  it("gives up rather than guessing when nothing matches", () => {
+    expect(pageFromSteps(undefined, videos)).toBeUndefined();
+    expect(pageFromSteps([{ step: "unnamed" }], videos)).toBeUndefined();
+    expect(
+      pageFromSteps([{ page: "elsewhere", step: "x" }], videos)
+    ).toBeUndefined();
+  });
+});
+
+describe("promotePrimaryVideo from step history", () => {
+  function resultWith(
+    videos: { bytes: number; pageName?: string; path: string }[],
+    stepPages?: { page?: string; step: string }[]
+  ) {
+    return {
+      artifacts: videos.map((v) => ({ ...v, kind: "video" as const })),
+      stepPages,
+    };
+  }
+
+  it("finishes the page the steps ended on, over the longer recording", async () => {
+    const result = resultWith(
+      [
+        { bytes: 9_000_000, pageName: "flailing", path: "/t/a.webm" },
+        { bytes: 1_000_000, pageName: "retake", path: "/t/b.webm" },
+      ],
+      [
+        { page: "flailing", step: "stuck" },
+        { page: "retake", step: "clean-run" },
+      ]
+    );
+
+    await promotePrimaryVideo(result as never);
+
+    expect(result.artifacts[0]?.path).toBe("/t/b.webm");
+  });
+
+  it("still lets --video override the step history", async () => {
+    const result = resultWith(
+      [
+        { bytes: 10, pageName: "flailing", path: "/t/a.webm" },
+        { bytes: 20, pageName: "retake", path: "/t/b.webm" },
+      ],
+      [{ page: "retake", step: "clean-run" }]
+    );
+
+    await promotePrimaryVideo(result as never, "flailing");
+
+    expect(result.artifacts[0]?.path).toBe("/t/a.webm");
   });
 });

@@ -296,6 +296,28 @@ export function videosByPrimacy(
 // entirely (the sidecars are already there), which is exactly when a wrong pick
 // gets cemented — it is how a demo ended up with its song over a feature-flag page
 // twice.
+// The recording the run's own steps point at: the page the LAST step to name one
+// ended on. Recency rather than a tally on purpose — a run that gets stuck racks up
+// steps on the page it is stuck on, and the take worth keeping is the one it
+// finished on. Returns undefined when no step named a page that matches a
+// recording, which is when the caller falls back to measuring footage. Pure →
+// unit-tested.
+export function pageFromSteps<T extends { pageName?: string }>(
+  stepPages: { page?: string; step: string }[] | undefined,
+  videos: T[]
+): T | undefined {
+  for (const { page } of [...(stepPages ?? [])].reverse()) {
+    if (!page) {
+      continue;
+    }
+    const match = videos.find((video) => video.pageName === page);
+    if (match) {
+      return match;
+    }
+  }
+  return;
+}
+
 // Name a video artifact the way a person would: the page name the script gave it,
 // falling back to the file's own name when the page went unlabelled. Pure →
 // unit-tested.
@@ -351,6 +373,24 @@ export async function promotePrimaryVideo(
     );
     return;
   }
+  // What the run itself says: the page its steps ended on. A session records one
+  // video per page, and the page the session FINISHED on is the one it was about —
+  // which is right in the case footage gets wrong, where an agent flailed on one
+  // page, gave up, and re-ran the flow clean on another. The good take is the
+  // short one there, and only the step history knows it.
+  const fromSteps = pageFromSteps(result.stepPages, videos);
+  if (fromSteps) {
+    reorderVideos(result, [
+      fromSteps,
+      ...videos.filter((v) => v !== fromSteps),
+    ]);
+    logger.info(
+      { video: fromSteps.path },
+      `finishing ${videoLabel(fromSteps)} — the page the run's steps ended on`
+    );
+    return;
+  }
+
   const ffmpeg = await findFfmpeg();
   const measured = await Promise.all(
     videos.map(async (video) => {
@@ -366,11 +406,8 @@ export async function promotePrimaryVideo(
     (index) => videos[index] as ArtifactInfo
   );
   reorderVideos(result, ordered);
-  // Said as a guess, because it is one. Most footage is a decent proxy for "where
-  // the session happened" and a bad one for a run that flailed on one page and
-  // then restarted clean on another — the good take is the SHORT one there.
-  // Whoever drove the session knows which page was the subject; `--video` is how
-  // they say so.
+  // Reached only when the steps named no page Dailies can match — an older
+  // session, or a run that drove anonymous tabs. Said as a guess, because it is.
   logger.info(
     {
       others: ordered.slice(1).map((v) => videoLabel(v)),

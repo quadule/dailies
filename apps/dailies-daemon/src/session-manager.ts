@@ -20,6 +20,7 @@ import {
   type SessionPhase,
   type SessionStartRequest,
   type SessionSummary,
+  type StepPage,
 } from "dailies-protocol";
 import type { ConsoleMessage, Page, WebError } from "playwright";
 import type { BrowserEntry, BrowserManager } from "./browser-manager.js";
@@ -49,6 +50,8 @@ interface SessionState {
   consoleStream?: WriteStream;
   // Wall-clock (ms) the start URL finished loading + settling, if one was given.
   contentStartedAt?: number;
+  // The step currently open, so endStep can name it without being told again.
+  currentStep?: string;
   endedAt?: number;
   entry: BrowserEntry;
   errorDisposers: Array<() => void>;
@@ -65,6 +68,8 @@ interface SessionState {
   runCount: number;
   sessionId: string;
   startedAt: number;
+  // The page each step ended on, in order — see endStep.
+  stepPages: StepPage[];
   videoDir: string;
 }
 
@@ -233,6 +238,7 @@ export class SessionManager {
       runCount: 0,
       sessionId: req.sessionId,
       startedAt: Date.now(),
+      stepPages: [],
       videoDir,
     };
 
@@ -341,13 +347,31 @@ export class SessionManager {
 
   async beginStep(sessionId: string, step: string): Promise<void> {
     const state = this.sessions.get(sessionId);
+    if (state) {
+      // Remembered so endStep can attribute the step even where the caller does
+      // not repeat its name (the takeover path).
+      state.currentStep = step;
+    }
     if (state?.capture.trace) {
       await state.entry.context.tracing.group(step).catch(() => undefined);
     }
   }
 
-  async endStep(sessionId: string): Promise<void> {
+  // Records the page the step ended on (BrowserManager.activePageName — the same
+  // "last page in the context" the step's screenshot is taken of), so `session
+  // end` can finish the recording of the page the run was actually about rather
+  // than guessing from how long each one is. Resolved here rather than by the
+  // caller so a takeover step is recorded exactly like an executed one.
+  async endStep(sessionId: string, step?: string): Promise<void> {
     const state = this.sessions.get(sessionId);
+    const stepName = step ?? state?.currentStep;
+    if (state && stepName) {
+      state.stepPages.push({
+        page: this.manager.activePageName(sessionBrowserName(sessionId)),
+        step: stepName,
+      });
+      state.currentStep = undefined;
+    }
     if (state?.capture.trace) {
       await state.entry.context.tracing.groupEnd().catch(() => undefined);
     }
@@ -727,9 +751,13 @@ export class SessionManager {
     const manifestPath = path.join(state.artifactsDir, "manifest.json");
     await writeFile(
       manifestPath,
-      JSON.stringify({ session, artifacts, reason }, null, 2)
+      JSON.stringify(
+        { artifacts, reason, session, stepPages: state.stepPages },
+        null,
+        2
+      )
     );
-    return { session, artifacts, manifestPath };
+    return { artifacts, manifestPath, session, stepPages: state.stepPages };
   }
 
   private summarize(state: SessionState): SessionSummary {

@@ -155,10 +155,9 @@ One session, small steps that reproduce it, `session end` — the report bundles
 8. End + render, declaring your verdict: `npx dailies-cli session end "$id" --pass` (or
    `--fail "<reason>"`) → `~/.dailies/sessions/<id>/report.html`. Your verdict sets the report's
    PASS/FAIL; a recovered/retried step failure stays as evidence but won't fail the run.
-   **Drove more than one named page? Add `--video <page name>`** naming the page the flow was
-   ON — one video is recorded per page, and only one gets finished. Left to itself Dailies takes
-   the longest recording, which is wrong exactly when you restarted a flow after getting stuck:
-   the good take is then the SHORT one. You know which page was the subject; say so.
+   One video is recorded per page, and only one gets finished: the page your LAST step ended
+   on, which is normally the one you were demonstrating. Override with `--video <page name>`
+   when it isn't — e.g. you finished on a settings page after the flow you actually want.
 9. Report the `report.html` path and the video path so the user can open them.
 10. Done? Leave the daemon running for the next session, or `npx dailies-cli stop` to shut it
     (and every browser) down — or pass `--stop-daemon` to step 8 (`session end --stop-daemon`).

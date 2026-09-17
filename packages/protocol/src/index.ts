@@ -292,6 +292,16 @@ export interface SessionEndResult {
   artifacts: ArtifactInfo[];
   manifestPath: string;
   session: SessionSummary;
+  // Which page each step ended on, in order — the same "active page" the step's
+  // report screenshot was taken of. A session records one video per page, so this
+  // is how `session end` knows which recording the run was actually about without
+  // being told. Unnamed (anonymous) pages leave `page` undefined.
+  stepPages?: StepPage[];
+}
+
+export interface StepPage {
+  page?: string;
+  step: string;
 }
 
 export interface SessionStatusResult {

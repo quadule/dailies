@@ -320,7 +320,7 @@ export function buildProgram(): CommandType {
     )
     .option(
       "--video <page>",
-      "Which recording to finish when the session drove more than one page — a page name from your scripts, or a video filename. Without it the longest condensed recording is used, which is only a guess: a run that flailed on one page and then restarted clean on another has its GOOD take in the shorter video"
+      "Which recording to finish when the session drove more than one page — a page name from your scripts, or a video filename. Without it, the page the last step ended on wins (then, for a session with no step history, the longest recording)"
     )
     .option(
       "--prompt <text>",

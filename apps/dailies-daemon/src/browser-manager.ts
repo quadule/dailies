@@ -482,6 +482,28 @@ export class BrowserManager {
   // Best-effort screenshot of the most-recently-active page in a browser, used
   // to populate the report's per-step timeline. Silent if no page is open; the
   // caller must never let a screenshot failure fail the underlying step.
+  // The name of the page a step ended on, by the same "last page in the context"
+  // rule screenshotActivePage uses — so the page recorded for a step is the page
+  // the report's screenshot for that step shows. Anonymous `newPage()` tabs are
+  // unnamed (and closed at step end), so they come back undefined rather than
+  // inventing a name.
+  activePageName(browserName: string): string | undefined {
+    const entry = this.browsers.get(browserName);
+    if (!entry?.browser.isConnected()) {
+      return;
+    }
+    const last = this.getContextPages(entry).at(-1);
+    if (!last) {
+      return;
+    }
+    for (const [name, candidate] of entry.pages) {
+      if (candidate === last.page) {
+        return name;
+      }
+    }
+    return;
+  }
+
   async screenshotActivePage(
     browserName: string,
     outPath: string
