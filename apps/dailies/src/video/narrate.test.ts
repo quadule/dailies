@@ -621,12 +621,33 @@ describe("subtitleStyle", () => {
     expect(style).toContain("PlayResY=850");
   });
 
-  it("keeps two lines inside the band", () => {
+  it("puts two lines at the top of the band, inside it", () => {
     const band = 130;
     const style = subtitleStyle(850, band);
     const size = Number(/FontSize=(\d+)/.exec(style)?.[1]);
     const margin = Number(/MarginV=(\d+)/.exec(style)?.[1]);
-    expect(size * 2 * 1.2 + margin).toBeLessThanOrEqual(band);
+
+    // Bottom-anchored, because Alignment=8 is not an option: measured against the
+    // subtitles filter it centres the caption over the recording and ignores
+    // MarginV entirely. So the margin is the clearance BELOW the text, and two
+    // lines of ink (~2 * FontSize) have to fit above it without leaving the band.
+    expect(style).toContain("Alignment=2");
+    expect(margin + 2 * size).toBeLessThanOrEqual(band);
+    // Sitting at the TOP means little band left above the text.
+    expect(band - (margin + 2 * size)).toBeLessThanOrEqual(
+      Math.round(band * 0.2)
+    );
+  });
+
+  it("leaves a seek bar's worth of empty band under the text", () => {
+    // The whole point: a player draws its scrubber and timecode along the bottom
+    // edge, so the last row of text has to stay well clear of it.
+    const band = 130;
+    const style = subtitleStyle(850, band);
+    const size = Number(/FontSize=(\d+)/.exec(style)?.[1]);
+    const margin = Number(/MarginV=(\d+)/.exec(style)?.[1]);
+
+    expect(margin).toBeGreaterThanOrEqual(size);
   });
 
   it("stays legible on a small frame", () => {

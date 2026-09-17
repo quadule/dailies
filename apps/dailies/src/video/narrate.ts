@@ -2060,10 +2060,28 @@ const MIN_CAPTION_BAND_PX = 96;
 // black band rather than over the page — there is nothing to see through.
 // Pure → unit-tested.
 export function subtitleStyle(frameHeightPx: number, bandPx: number): string {
-  // Two lines plus leading must fit the band: 2 * size * 1.2 + padding <= band.
+  // Two lines plus their clearance must fit the band — see marginV below.
   const fontSize = Math.max(14, Math.round(bandPx * 0.26));
-  const textHeight = fontSize * 2 * 1.2;
-  const marginV = Math.max(4, Math.round((bandPx - textHeight) / 2));
+  // Text sits at the TOP of the band, so a player's seek bar, timecode and
+  // controls — drawn along the bottom edge — cover empty band instead of words.
+  //
+  // It has to be done from the bottom. Alignment 8 (top-centre) looks like the
+  // obvious way and does not work: measured against ffmpeg's subtitles filter,
+  // it centres the caption over the RECORDING and ignores MarginV completely
+  // (identical output for MarginV 20, 200, 400 and 913). Alignment 2 honours it
+  // exactly — 1px of lift per 1 of margin — so MarginV is the clearance BELOW the
+  // text, which is the thing that actually keeps the scrubber off it.
+  //
+  // Size that clearance so the worst case — the two lines the SRT writer wraps to
+  // — starts at the top of the band. A one-line caption then hangs one line lower
+  // while keeping the same clearance underneath, which is the part that matters.
+  //
+  // Two rendered lines measure very close to 2 * FontSize of actual ink (libass
+  // advances ~1.17 * FontSize per line and the first line's ink starts ~0.83 below
+  // the anchor), so this needs no fudge factor — it was measured against the
+  // filter, not derived from the ASS spec.
+  const gap = Math.max(2, Math.round(bandPx * 0.08));
+  const marginV = Math.max(4, Math.round(bandPx - gap - 2 * fontSize));
   return [
     `PlayResX=${Math.round((frameHeightPx * 16) / 9)}`,
     `PlayResY=${frameHeightPx}`,
