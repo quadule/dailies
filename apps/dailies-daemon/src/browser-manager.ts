@@ -59,6 +59,10 @@ export interface BrowserEntry {
   // Session contexts are launched with recordVideo/recordHar + tracing and must
   // never be relaunched by a later execute (that would drop the recording).
   isSession: boolean;
+  // The page this browser last drove — getPage/newPage record the page the
+  // caller asked for. Read it through activePage(), never directly: it may be
+  // closed by the time anyone looks.
+  lastDrivenPage?: Page;
   name: string;
   pages: Map<string, Page>;
   profileDir?: string;
@@ -294,6 +298,7 @@ export class BrowserManager {
     const existingPage = entry.pages.get(pageNameOrId);
 
     if (existingPage && !existingPage.isClosed()) {
+      entry.lastDrivenPage = existingPage;
       return existingPage;
     }
 
@@ -302,6 +307,7 @@ export class BrowserManager {
     if (TARGET_ID_PATTERN.test(pageNameOrId)) {
       const page = await this.findPageByTargetId(entry, pageNameOrId);
       if (page) {
+        entry.lastDrivenPage = page;
         return page;
       }
     }
@@ -309,13 +315,16 @@ export class BrowserManager {
     const page =
       this.takeInitialBlankPage(entry) ?? (await entry.context.newPage());
     this.registerNamedPage(entry, pageNameOrId, page);
+    entry.lastDrivenPage = page;
     return page;
   }
 
-  newPage(browserName: string): Promise<Page> {
+  async newPage(browserName: string): Promise<Page> {
     const entry = this.getBrowserEntry(browserName);
-    const initial = this.takeInitialBlankPage(entry);
-    return initial ? Promise.resolve(initial) : entry.context.newPage();
+    const page =
+      this.takeInitialBlankPage(entry) ?? (await entry.context.newPage());
+    entry.lastDrivenPage = page;
+    return page;
   }
 
   // Scripts dedupe by content (SHA-256). Already-applied scripts are no-ops, so
@@ -482,17 +491,36 @@ export class BrowserManager {
   // Best-effort screenshot of the most-recently-active page in a browser, used
   // to populate the report's per-step timeline. Silent if no page is open; the
   // caller must never let a screenshot failure fail the underlying step.
-  // The name of the page a step ended on, by the same "last page in the context"
-  // rule screenshotActivePage uses — so the page recorded for a step is the page
-  // the report's screenshot for that step shows. Anonymous `newPage()` tabs are
-  // unnamed (and closed at step end), so they come back undefined rather than
-  // inventing a name.
+  // The page a session is actually on: the one it last asked for by name, not
+  // the last tab it happened to open. `context.pages()` is creation-ordered, so
+  // the newest tab stays "active" even after a step navigates back to an earlier
+  // page — which mis-reports every step that returns to where it started. Falls
+  // back to the newest tab before anything has been asked for, and when the page
+  // that was asked for has since closed (anonymous tabs close at step end).
+  private activePage(
+    entry: BrowserEntry
+  ): { context: BrowserContext; page: Page } | undefined {
+    const pages = this.getContextPages(entry);
+    const driven = entry.lastDrivenPage;
+    if (driven && !driven.isClosed()) {
+      const match = pages.find((candidate) => candidate.page === driven);
+      if (match) {
+        return match;
+      }
+    }
+    return pages.at(-1);
+  }
+
+  // The name of the page a step ended on, by the same rule screenshotActivePage
+  // uses — so the page recorded for a step is the page the report's screenshot
+  // for that step shows. Anonymous `newPage()` tabs are unnamed (and closed at
+  // step end), so they come back undefined rather than inventing a name.
   activePageName(browserName: string): string | undefined {
     const entry = this.browsers.get(browserName);
     if (!entry?.browser.isConnected()) {
       return;
     }
-    const last = this.getContextPages(entry).at(-1);
+    const last = this.activePage(entry);
     if (!last) {
       return;
     }
@@ -513,8 +541,7 @@ export class BrowserManager {
       return;
     }
 
-    const pages = this.getContextPages(entry);
-    const last = pages.at(-1);
+    const last = this.activePage(entry);
     if (!last) {
       return;
     }
@@ -536,7 +563,7 @@ export class BrowserManager {
       return null;
     }
 
-    const last = this.getContextPages(entry).at(-1);
+    const last = this.activePage(entry);
     if (!last) {
       return null;
     }

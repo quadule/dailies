@@ -39,6 +39,42 @@ describe.sequential("BrowserManager page discovery", () => {
     });
   }
 
+  it("activePageName follows the page a step went back to, not the newest tab", async () => {
+    await ensureBrowser();
+
+    const alpha = await manager.getPage(browserName, "alpha");
+    await alpha.goto(createDataUrl("Alpha", "<main>alpha</main>"));
+    const beta = await manager.getPage(browserName, "beta");
+    await beta.goto(createDataUrl("Beta", "<main>beta</main>"));
+
+    expect(manager.activePageName(browserName)).toBe("beta");
+
+    // Going back to an earlier page is the case that broke: context.pages() is
+    // creation-ordered, so "the last page in the context" stays on beta and the
+    // step gets filed under the page it left. The step screenshot and the
+    // video promotion both read this, so both were wrong together.
+    await manager.getPage(browserName, "alpha");
+
+    expect(manager.activePageName(browserName)).toBe("alpha");
+
+    const info = await manager.getActivePageInfo(browserName);
+    expect(info?.title).toBe("Alpha");
+  }, 180_000);
+
+  it("falls back to the newest tab when the page it last drove is gone", async () => {
+    await ensureBrowser();
+
+    const named = await manager.getPage(browserName, "named");
+    await named.goto(createDataUrl("Named", "<main>named</main>"));
+    // Anonymous tabs are closed at step end, so the page last driven is
+    // routinely a closed one by the time anybody asks.
+    const anonymous = await manager.newPage(browserName);
+    await anonymous.goto(createDataUrl("Anon", "<main>anon</main>"));
+    await anonymous.close();
+
+    expect(manager.activePageName(browserName)).toBe("named");
+  }, 180_000);
+
   it("listPages returns objects with id, url, title, and name fields", async () => {
     await ensureBrowser();
 
