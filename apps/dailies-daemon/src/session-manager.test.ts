@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "dailies-logger";
@@ -358,6 +358,55 @@ describe("SessionManager", () => {
     // A second end on a now-unknown session throws (the orchestrator reconciles
     // the on-disk record in that case).
     await expect(sessions.end("s1", "end")).rejects.toThrow(/not found/);
+  });
+
+  it("labels each recording with the page name its script used", async () => {
+    // One video per page, and `session end` finishes exactly one of them. Playwright
+    // names the files after an internal id, so without this the manifest offers no
+    // way to say WHICH page mattered — see `session end --video`.
+    const { entry, calls } = makeSession();
+    const videoDir = join(getSessionDir("s1"), "video");
+    await mkdir(videoDir, { recursive: true });
+    const flowVideo = join(videoDir, "page@aaa.webm");
+    const flagsVideo = join(videoDir, "page@bbb.webm");
+    await writeFile(flowVideo, "v");
+    await writeFile(flagsVideo, "v");
+    entry.pages.set("checkout", {
+      video: () => ({ path: () => Promise.resolve(flowVideo) }),
+    } as never);
+    entry.pages.set("flags", {
+      video: () => ({ path: () => Promise.resolve(flagsVideo) }),
+    } as never);
+    const sessions = new SessionManager(makeManager(entry, calls, []), log);
+    await sessions.start(startReq());
+
+    const result = await sessions.end("s1", "end");
+    const videos = result.artifacts.filter((a) => a.kind === "video");
+
+    expect(videos.map((v) => [v.path.split("/").at(-1), v.pageName])).toEqual(
+      expect.arrayContaining([
+        ["page@aaa.webm", "checkout"],
+        ["page@bbb.webm", "flags"],
+      ])
+    );
+  });
+
+  it("leaves a recording unlabelled rather than failing when its page has no video", async () => {
+    const { entry, calls } = makeSession();
+    const videoDir = join(getSessionDir("s1"), "video");
+    await mkdir(videoDir, { recursive: true });
+    await writeFile(join(videoDir, "page@ccc.webm"), "v");
+    entry.pages.set("gone", {
+      video: () => ({ path: () => Promise.reject(new Error("closed")) }),
+    } as never);
+    const sessions = new SessionManager(makeManager(entry, calls, []), log);
+    await sessions.start(startReq());
+
+    const result = await sessions.end("s1", "end");
+    const video = result.artifacts.find((a) => a.kind === "video");
+
+    expect(video?.path.endsWith("page@ccc.webm")).toBe(true);
+    expect(video?.pageName).toBeUndefined();
   });
 
   it("does not record artifacts that capture disabled", async () => {

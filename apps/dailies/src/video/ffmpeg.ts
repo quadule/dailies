@@ -313,6 +313,36 @@ export async function probeVideo(
   return;
 }
 
+// How long a video runs, in seconds. After condensing, a recording's length IS how
+// much of the session happened on that page, which is how the finalizer decides
+// which page to finish when a run recorded more than one.
+export async function probeDurationSec(
+  ffmpeg: string,
+  videoPath: string
+): Promise<number | undefined> {
+  const ffprobe = ffprobeFor(ffmpeg);
+  try {
+    const { stdout } = await run(
+      ffprobe,
+      [
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        videoPath,
+      ],
+      PROBE_TIMEOUT_MS
+    );
+    const seconds = Number(stdout.trim());
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
+  } catch {
+    // No ffprobe — the caller falls back to comparing file sizes.
+    return;
+  }
+}
+
 // The set of filters this ffmpeg build supports. Minimal builds — notably
 // Playwright's bundled ffmpeg — omit drawtext (title card) and subtitles
 // (caption burn); even some Homebrew builds lack drawtext when compiled without

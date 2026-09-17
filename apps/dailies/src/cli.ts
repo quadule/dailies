@@ -186,6 +186,7 @@ interface SessionEndOpts {
   scrubHar?: boolean;
   song?: boolean;
   stopDaemon?: boolean;
+  video?: string;
 }
 
 interface CiDecideOpts {
@@ -318,6 +319,10 @@ export function buildProgram(): CommandType {
       "Score the whole video with ONE sung song (LLM-written themed lyrics performed by a local/AI music model) instead of spoken narration; needs ACE-Step or GEMINI_API_KEY (a flavor of --cinematic)"
     )
     .option(
+      "--video <page>",
+      "Which recording to finish when the session drove more than one page — a page name from your scripts, or a video filename. Without it the longest condensed recording is used, which is only a guess: a run that flailed on one page and then restarted clean on another has its GOOD take in the shorter video"
+    )
+    .option(
       "--prompt <text>",
       'Steer the cinematic narration (or, with --song, the song) — theme, tone, and style — in your own words, e.g. "1970s heist film, narrated as a limerick" (implies --cinematic)'
     )
@@ -344,6 +349,7 @@ export function buildProgram(): CommandType {
         scrubHar: opts.scrubHar,
         cinematic: opts.cinematic === true || typeof opts.prompt === "string",
         song: opts.song === true,
+        video: opts.video,
         prompt: opts.prompt,
         captions: opts.captions,
         open: opts.open === true,

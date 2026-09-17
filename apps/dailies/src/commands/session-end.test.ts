@@ -7,9 +7,12 @@ import {
   captionReadMs,
   contentStartFloorSec,
   isDegradedEnd,
+  matchRequestedVideo,
+  promotePrimaryVideo,
   STEP_PAD_AFTER_SEC,
   STEP_PAD_BEFORE_SEC,
   stepKeepWindows,
+  videoLabel,
   videosByPrimacy,
 } from "./session-end.js";
 
@@ -269,5 +272,133 @@ describe("videosByPrimacy", () => {
 
   it("leaves a single video alone", () => {
     expect(videosByPrimacy([{ bytes: 10, keptSec: 3 }])).toEqual([0]);
+  });
+});
+
+describe("promotePrimaryVideo", () => {
+  // The comparator was right the first time and the demo still came out wrong,
+  // because the reorder lived inside the condense pass and a re-finalize skips it.
+  // This exercises the plumbing: paths that do not exist cannot be probed, so it
+  // falls back to bytes and stays deterministic.
+  function resultWith(videos: { bytes: number; path: string }[]) {
+    return {
+      artifacts: [
+        { bytes: 1, kind: "trace" as const, path: "/t/trace.zip" },
+        ...videos.map((v) => ({ ...v, kind: "video" as const })),
+        { bytes: 2, kind: "har" as const, path: "/t/network.har" },
+      ],
+    };
+  }
+
+  it("moves the fuller recording to the front of the artifact list", async () => {
+    const result = resultWith([
+      { bytes: 5_262_293, path: "/t/video/page@flags.webm" },
+      { bytes: 5_550_424, path: "/t/video/page@theflow.webm" },
+    ]);
+
+    await promotePrimaryVideo(result as never);
+
+    const videos = result.artifacts.filter((a) => a.kind === "video");
+    expect(videos[0]?.path).toBe("/t/video/page@theflow.webm");
+    // Non-video artifacts keep their places; only the video slots are reordered.
+    expect(result.artifacts[0]?.kind).toBe("trace");
+    expect(result.artifacts.at(-1)?.kind).toBe("har");
+  });
+
+  it("leaves a single-page session untouched", async () => {
+    const result = resultWith([{ bytes: 10, path: "/t/video/page@only.webm" }]);
+    const before = [...result.artifacts];
+
+    await promotePrimaryVideo(result as never);
+
+    expect(result.artifacts).toEqual(before);
+  });
+});
+
+describe("matchRequestedVideo", () => {
+  const videos = [
+    { pageName: "flags", path: "/t/video/page@aaa.webm" },
+    { pageName: "checkout", path: "/t/video/page@bbb.webm" },
+    { path: "/t/video/page@ccc.webm" },
+  ];
+
+  it("finds a page by the name the script gave it", () => {
+    expect(matchRequestedVideo(videos, "checkout")).toEqual([videos[1]]);
+    expect(matchRequestedVideo(videos, "CheckOut")).toEqual([videos[1]]);
+  });
+
+  it("finds an unlabelled page by its filename", () => {
+    expect(matchRequestedVideo(videos, "page@ccc.webm")).toEqual([videos[2]]);
+    // …and by a fragment of it, so nobody has to type a full hash.
+    expect(matchRequestedVideo(videos, "ccc")).toEqual([videos[2]]);
+  });
+
+  it("returns every match so the caller can refuse to guess", () => {
+    // "page@" is in all three: ambiguous, and session end must say so rather
+    // than pick one — guessing is the bug this flag exists to fix.
+    expect(matchRequestedVideo(videos, "page@")).toHaveLength(3);
+    expect(matchRequestedVideo(videos, "nothing-like-this")).toHaveLength(0);
+  });
+
+  it("prefers an exact name over a substring of another", () => {
+    const pages = [
+      { pageName: "cart", path: "/t/a.webm" },
+      { pageName: "cart-review", path: "/t/b.webm" },
+    ];
+    expect(matchRequestedVideo(pages, "cart")).toEqual([pages[0]]);
+  });
+});
+
+describe("videoLabel", () => {
+  it("prefers the page name and falls back to the filename", () => {
+    expect(videoLabel({ pageName: "checkout", path: "/t/page@bbb.webm" })).toBe(
+      "checkout"
+    );
+    expect(videoLabel({ path: "/t/page@bbb.webm" })).toBe("page@bbb.webm");
+  });
+});
+
+describe("promotePrimaryVideo with --video", () => {
+  function resultWith(
+    videos: { bytes: number; pageName?: string; path: string }[]
+  ) {
+    return {
+      artifacts: [
+        ...videos.map((v) => ({ ...v, kind: "video" as const })),
+        { bytes: 2, kind: "har" as const, path: "/t/network.har" },
+      ],
+    };
+  }
+
+  it("finishes the page asked for, even when it is the shorter recording", async () => {
+    // The restart case: the agent flailed on one page, then re-ran the flow clean
+    // on another. The good take is the SMALLER file, so the heuristic would pick
+    // wrong and only the caller knows better.
+    const result = resultWith([
+      {
+        bytes: 9_000_000,
+        pageName: "flailing",
+        path: "/t/video/page@aaa.webm",
+      },
+      { bytes: 1_000_000, pageName: "retake", path: "/t/video/page@bbb.webm" },
+    ]);
+
+    await promotePrimaryVideo(result as never, "retake");
+
+    expect(result.artifacts[0]?.path).toBe("/t/video/page@bbb.webm");
+  });
+
+  it("refuses an ambiguous or unknown request, naming what there is", async () => {
+    const result = resultWith([
+      { bytes: 10, pageName: "one", path: "/t/video/page@aaa.webm" },
+      { bytes: 20, pageName: "two", path: "/t/video/page@bbb.webm" },
+    ]);
+
+    await expect(promotePrimaryVideo(result as never, "page@")).rejects.toThrow(
+      /ambiguous.*one, two/s
+    );
+    await expect(promotePrimaryVideo(result as never, "nope")).rejects.toThrow(
+      /matched no recording/
+    );
   });
 });

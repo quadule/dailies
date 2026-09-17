@@ -619,16 +619,48 @@ export class SessionManager {
     return;
   }
 
+  // Which page each recording belongs to. Playwright names video files after an
+  // internal id, so `page@<hash>.webm` says nothing about what was recorded — and a
+  // session with more than one page then offers no way to say which one matters.
+  // Ask the pages themselves: scripts name them (`newPage("checkout")`), and that
+  // name is what a person or an agent can pass to `session end --video`.
+  //
+  // Safe here and nowhere earlier: Playwright resolves a video's path when its
+  // context closes, which the caller has already done before collecting.
+  private async videoPageNames(
+    state: SessionState
+  ): Promise<Map<string, string>> {
+    const namesByPath = new Map<string, string>();
+    await Promise.all(
+      [...state.entry.pages].map(async ([name, page]) => {
+        try {
+          const filePath = await page.video()?.path();
+          if (filePath) {
+            namesByPath.set(filePath, name);
+          }
+        } catch {
+          // A page that never recorded, or one whose video never landed: the
+          // artifact simply goes unlabelled rather than failing the manifest.
+        }
+      })
+    );
+    return namesByPath;
+  }
+
   private async collect(
     state: SessionState,
     reason: EndReason
   ): Promise<SessionEndResult> {
     const artifacts: ArtifactInfo[] = [];
-    const add = async (kind: ArtifactInfo["kind"], filePath: string) => {
+    const add = async (
+      kind: ArtifactInfo["kind"],
+      filePath: string,
+      pageName?: string
+    ) => {
       try {
         const info = await stat(filePath);
         if (info.isFile()) {
-          artifacts.push({ kind, path: filePath, bytes: info.size });
+          artifacts.push({ bytes: info.size, kind, pageName, path: filePath });
         }
       } catch {
         // missing/partial artifact — leave it out of the manifest
@@ -645,10 +677,12 @@ export class SessionManager {
       await add("console", state.consolePath);
     }
     if (state.capture.video) {
+      const namesByPath = await this.videoPageNames(state);
       const files = await readdir(state.videoDir).catch(() => [] as string[]);
       for (const file of files) {
         if (file.endsWith(SESSION_VIDEO_EXT)) {
-          await add("video", path.join(state.videoDir, file));
+          const filePath = path.join(state.videoDir, file);
+          await add("video", filePath, namesByPath.get(filePath));
         }
       }
     }

@@ -35,7 +35,7 @@ import {
   remapToCondensed,
   type Segment,
 } from "../video/condense.js";
-import { probeVideo } from "../video/ffmpeg.js";
+import { probeDurationSec, probeVideo } from "../video/ffmpeg.js";
 import {
   burnCaptionBand,
   type CinematicStep,
@@ -68,6 +68,10 @@ interface SessionEndOpts {
   // record so the report's pass/fail reflects the agent's judgment, not just the
   // per-step exit codes.
   verdict?: { status: "pass" | "fail"; reason?: string };
+  // Which recording to finish, when the session drove more than one page: a page
+  // name from the script, or a video filename. Whoever drove the session knows
+  // which page was the subject; without this the finalizer has to guess.
+  video?: string;
 }
 
 // Open a file/URL in the OS default app, detached and best-effort: opening the
@@ -282,20 +286,106 @@ export function videosByPrimacy(
 // `find(kind === "video")` — cinematic, captions, report, `--json` — means the same
 // video, and it is the right one. Reordered in place: the artifact list is the
 // session's own record of what it produced, and its order is now meaningful.
-function promotePrimaryVideo(
+//
+// Measured from the CONDENSED cut, which trims idle around the recorded steps: its
+// length is how much of the session happened on that page. The `.precinematic`
+// sidecar is that cut, and preferring it matters on a re-finalize — the video
+// itself may already carry a song from a previous run, while the sidecar is clean.
+//
+// Deliberately NOT inside the condense pass: a re-finalize skips condensing
+// entirely (the sidecars are already there), which is exactly when a wrong pick
+// gets cemented — it is how a demo ended up with its song over a feature-flag page
+// twice.
+// Name a video artifact the way a person would: the page name the script gave it,
+// falling back to the file's own name when the page went unlabelled. Pure →
+// unit-tested.
+export function videoLabel(video: { pageName?: string; path: string }): string {
+  return video.pageName ?? path.basename(video.path);
+}
+
+// Find the recording the caller asked for by `--video`. Matches a page name or a
+// filename, exactly first and then case-insensitively by substring, so `--video
+// checkout` finds the page named "checkout" without anyone typing a hash. Returns
+// the matches so the caller can refuse an ambiguous one rather than guess — the
+// whole point of the flag is to stop guessing. Pure → unit-tested.
+export function matchRequestedVideo<
+  T extends { pageName?: string; path: string },
+>(videos: T[], requested: string): T[] {
+  const wanted = requested.trim().toLowerCase();
+  const exact = videos.filter(
+    (video) =>
+      video.pageName?.toLowerCase() === wanted ||
+      path.basename(video.path).toLowerCase() === wanted
+  );
+  if (exact.length > 0) {
+    return exact;
+  }
+  return videos.filter((video) =>
+    `${video.pageName ?? ""} ${video.path}`.toLowerCase().includes(wanted)
+  );
+}
+
+export async function promotePrimaryVideo(
   result: SessionEndResult,
-  videos: ArtifactInfo[],
-  keptSecByPath: Map<string, number>
-): void {
+  requested?: string
+): Promise<void> {
+  const videos = result.artifacts.filter((a) => a.kind === "video");
   if (videos.length < 2) {
     return;
   }
-  const ordered = videosByPrimacy(
-    videos.map((video) => ({
-      bytes: video.bytes,
-      keptSec: keptSecByPath.get(video.path),
-    }))
-  ).map((index) => videos[index] as ArtifactInfo);
+  if (requested) {
+    const matches = matchRequestedVideo(videos, requested);
+    const choices = videos.map((v) => videoLabel(v)).join(", ");
+    if (matches.length !== 1) {
+      throw new Error(
+        `--video "${requested}" ${matches.length === 0 ? "matched no recording" : `is ambiguous (matched ${matches.length})`}. This session recorded: ${choices}`
+      );
+    }
+    reorderVideos(result, [
+      matches[0] as ArtifactInfo,
+      ...videos.filter((v) => v !== matches[0]),
+    ]);
+    logger.info(
+      { video: matches[0]?.path },
+      `finishing ${videoLabel(matches[0] as ArtifactInfo)}, as asked`
+    );
+    return;
+  }
+  const ffmpeg = await findFfmpeg();
+  const measured = await Promise.all(
+    videos.map(async (video) => {
+      const condensed = precinematicVideoPath(video.path);
+      const source = existsSync(condensed) ? condensed : video.path;
+      return {
+        bytes: video.bytes,
+        keptSec: ffmpeg ? await probeDurationSec(ffmpeg, source) : undefined,
+      };
+    })
+  );
+  const ordered = videosByPrimacy(measured).map(
+    (index) => videos[index] as ArtifactInfo
+  );
+  reorderVideos(result, ordered);
+  // Said as a guess, because it is one. Most footage is a decent proxy for "where
+  // the session happened" and a bad one for a run that flailed on one page and
+  // then restarted clean on another — the good take is the SHORT one there.
+  // Whoever drove the session knows which page was the subject; `--video` is how
+  // they say so.
+  logger.info(
+    {
+      others: ordered.slice(1).map((v) => videoLabel(v)),
+      video: ordered[0]?.path,
+    },
+    `${videos.length} pages recorded; guessing ${videoLabel(ordered[0] as ArtifactInfo)} (most footage). Pass --video <page> to choose.`
+  );
+}
+
+// Move `ordered` into the artifact list's video slots, leaving every other
+// artifact where it was.
+function reorderVideos(
+  result: SessionEndResult,
+  ordered: ArtifactInfo[]
+): void {
   let slot = 0;
   for (const [index, artifact] of result.artifacts.entries()) {
     if (artifact.kind === "video") {
@@ -303,10 +393,6 @@ function promotePrimaryVideo(
       slot += 1;
     }
   }
-  logger.info(
-    { others: ordered.slice(1).map((v) => v.path), video: ordered[0]?.path },
-    `${videos.length} pages recorded; finishing the one with the most footage: ${ordered[0]?.path}`
-  );
 }
 
 async function condenseSessionVideos(
@@ -340,7 +426,6 @@ async function condenseSessionVideos(
   // segments give the same original→condensed time remap. Capture the first to
   // stamp each step's position in the trimmed video for the timeline.
   let mappingKeeps: Segment[] | undefined;
-  const keptSecByPath = new Map<string, number>();
   for (const video of videos) {
     const outcome = await condenseVideo(video.path, logger, {
       ffmpegPath: ffmpeg,
@@ -350,7 +435,6 @@ async function condenseSessionVideos(
     });
     if (outcome.condensed) {
       mappingKeeps ??= outcome.keeps;
-      keptSecByPath.set(video.path, outcome.keptSec ?? 0);
       video.bytes = await stat(video.path)
         .then((s) => s.size)
         .catch(() => video.bytes);
@@ -386,8 +470,6 @@ async function condenseSessionVideos(
       );
     }
   }
-
-  promotePrimaryVideo(result, videos, keptSecByPath);
 
   // Stamp each step's position in the condensed video so the report/viewer
   // timeline can sync to it. Mutating record.steps here flows into the manifest
@@ -808,6 +890,11 @@ export async function sessionEnd(
       "  ↻ re-running cinematic from the preserved condensed cut\n"
     );
   }
+
+  // Decide WHICH recording gets finished before anything finishes one. Runs on
+  // every path, including the re-finalize above that skips condensing — that is
+  // the path where picking the wrong page would otherwise be permanent.
+  await promotePrimaryVideo(endResult, opts.video);
 
   // Cinematic narration (or a cinematic song) is opt-in and runs after condensing
   // (it keys off the stamped step.videoTime and the trimmed video). Default output

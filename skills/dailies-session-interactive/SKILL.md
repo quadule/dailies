@@ -164,7 +164,10 @@ build on). Read the printed code, then continue driving the flow.
 8. End, render, and open the report: `npx dailies-cli session end "$id" --open`. The `--open`
    flag opens the self-contained `~/.dailies/sessions/<id>/report.html` in the browser for you —
    always pass it here. (If the host has no opener and nothing appears, open the printed path
-   yourself.) Then report the `report.html` and video paths.
+   yourself.) Then report the `report.html` and video paths. **Drove more than one named page?
+   Add `--video <page name>`** for the page the flow was on: one video is recorded per page and
+   only one gets finished, and the automatic pick (longest recording) is wrong precisely when you
+   restarted after getting stuck.
 
 ## Hard rules
 
