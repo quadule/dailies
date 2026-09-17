@@ -1,12 +1,14 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  fetchProject,
   isWorthDemoing,
   loadProject,
   PROJECT_DIR,
   parseProjectConfig,
+  REMOTE_MAX_BYTES,
 } from "./config.js";
 
 async function project(files: Record<string, string>): Promise<string> {
@@ -174,5 +176,149 @@ describe("loadProject", () => {
     const onlyFlows = await loadProject(await project({ "flows.md": "# hi" }));
     expect(onlyFlows.flowsPath).not.toBeNull();
     expect(onlyFlows.config.url).toBeNull();
+  });
+});
+
+// A non-production environment can serve `.dailies/` so someone with no checkout can
+// still record against it. Every served byte becomes agent input, so these tests are as
+// much about what is REFUSED as about what is fetched.
+describe("fetchProject", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function serve(files: Record<string, string>, init: ResponseInit = {}): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL) => {
+        const url = String(input);
+        const name = url.endsWith(".json") ? "config.json" : "flows.md";
+        const body = files[name];
+        return Promise.resolve(
+          body === undefined
+            ? new Response("not found", { status: 404 })
+            : new Response(body, { status: 200, ...init })
+        );
+      })
+    );
+  }
+
+  it("caches what the app served and reports it as remote", async () => {
+    serve({
+      "config.json": '{"demo":{"paths":["app/views/**"]}}',
+      "flows.md": "# Driving this app\nsign in first",
+    });
+    const cacheDir = await mkdtemp(path.join(tmpdir(), "dailies-remote-"));
+
+    const loaded = await fetchProject("https://app.example.test", cacheDir);
+
+    expect(loaded.source).toBe("remote");
+    expect(loaded.flowsLines).toBe(2);
+    expect(await readFile(loaded.flowsPath as string, "utf8")).toContain(
+      "sign in first"
+    );
+    expect(loaded.config.demo.paths).toEqual(["app/views/**"]);
+    // The URL that answered is the URL we drive — the served config does not get to
+    // point the run at a different host.
+    expect(loaded.config.url).toBe("https://app.example.test");
+  });
+
+  it("asks the app for its own .dailies path", async () => {
+    serve({ "flows.md": "# hi" });
+    const cacheDir = await mkdtemp(path.join(tmpdir(), "dailies-remote-"));
+
+    await fetchProject("https://app.example.test", cacheDir);
+
+    const requested = vi
+      .mocked(fetch)
+      .mock.calls.map((call) => String(call[0]));
+    expect(requested).toContain("https://app.example.test/.dailies/flows.md");
+    expect(requested).toContain(
+      "https://app.example.test/.dailies/config.json"
+    );
+  });
+
+  it("refuses to follow a redirect, so the approved host is the host that answers", async () => {
+    serve({ "flows.md": "# hi" });
+    const cacheDir = await mkdtemp(path.join(tmpdir(), "dailies-remote-"));
+
+    await fetchProject("https://app.example.test", cacheDir);
+
+    for (const call of vi.mocked(fetch).mock.calls) {
+      expect((call[1] as RequestInit).redirect).toBe("error");
+    }
+  });
+
+  it("serves nothing from an environment that answers 404, and never throws", async () => {
+    serve({});
+    const loaded = await fetchProject(
+      "https://app.example.test",
+      await mkdtemp(path.join(tmpdir(), "dailies-remote-"))
+    );
+
+    expect(loaded.source).toBe("none");
+    expect(loaded.flowsPath).toBeNull();
+  });
+
+  it("drops a file that exceeds the size cap rather than caching it", async () => {
+    serve({ "flows.md": "x".repeat(REMOTE_MAX_BYTES + 1) });
+    const loaded = await fetchProject(
+      "https://app.example.test",
+      await mkdtemp(path.join(tmpdir(), "dailies-remote-"))
+    );
+
+    expect(loaded.source).toBe("none");
+  });
+
+  it("refuses a non-http scheme and an unreachable host without throwing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("ECONNREFUSED")))
+    );
+
+    expect((await fetchProject("file:///etc/passwd")).source).toBe("none");
+    expect((await fetchProject("not a url")).source).toBe("none");
+    expect((await fetchProject("https://nowhere.example.test")).source).toBe(
+      "none"
+    );
+  });
+
+  it("prefers a checkout over anything an environment serves", async () => {
+    serve({ "flows.md": "# from the app" });
+    const dir = await project({ "flows.md": "# from the repo" });
+
+    const loaded = await loadProject(dir, { url: "https://app.example.test" });
+
+    expect(loaded.source).toBe("local");
+    expect(await readFile(loaded.flowsPath as string, "utf8")).toBe(
+      "# from the repo"
+    );
+  });
+
+  it("falls back to the environment only when there is no checkout", async () => {
+    serve({ "flows.md": "# from the app" });
+    const bare = await mkdtemp(path.join(tmpdir(), "dailies-bare-"));
+    const cacheDir = await mkdtemp(path.join(tmpdir(), "dailies-remote-"));
+
+    const loaded = await loadProject(bare, {
+      cacheDir,
+      url: "https://app.example.test",
+    });
+
+    expect(loaded.source).toBe("remote");
+    expect(await readFile(loaded.flowsPath as string, "utf8")).toBe(
+      "# from the app"
+    );
+  });
+
+  it("does not reach the network unless a url was named", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const bare = await mkdtemp(path.join(tmpdir(), "dailies-bare-"));
+
+    const loaded = await loadProject(bare);
+
+    expect(loaded.source).toBe("none");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

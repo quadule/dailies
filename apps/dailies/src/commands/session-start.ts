@@ -21,6 +21,10 @@ interface SessionStartArgs {
   headless: boolean;
   json: boolean;
   name?: string;
+  // An environment that serves its own `.dailies/` (staging, a review app), for
+  // recording without a checkout. Only ever what the PERSON named — see the trust
+  // note on fetchProject.
+  projectUrl?: string;
   // Optional URL to open + settle at session start, so the recording begins on a
   // loaded page (not the initial about:blank) and the pre-load blank is trimmed.
   url?: string;
@@ -120,11 +124,20 @@ export async function sessionStart(args: SessionStartArgs): Promise<number> {
   // has it — and complain when it has outgrown being read every session. The
   // agent reads the file itself (see the `dailies-session` skill); this is just
   // the visible signal that it's there.
-  const project = await loadProject(process.cwd());
+  const projectUrl = args.projectUrl ?? process.env.DAILIES_PROJECT_URL ?? null;
+  const project = await loadProject(process.cwd(), { url: projectUrl });
   if (project.flowsPath) {
+    const from =
+      project.source === "remote"
+        ? ` — served by ${project.config.url}, cached here`
+        : "";
     logger.info(
-      { flows: project.flowsPath, lines: project.flowsLines },
-      `app knowledge: ${project.flowsPath} (${project.flowsLines} lines)`
+      {
+        flows: project.flowsPath,
+        lines: project.flowsLines,
+        source: project.source,
+      },
+      `app knowledge: ${project.flowsPath} (${project.flowsLines} lines)${from}`
     );
     if (project.flowsLines > FLOWS_LINE_BUDGET) {
       logger.warn(
@@ -132,6 +145,11 @@ export async function sessionStart(args: SessionStartArgs): Promise<number> {
         `${project.flowsPath} is ${project.flowsLines} lines, over the ${FLOWS_LINE_BUDGET}-line budget — it is read in full every session. Prune stale notes, and move generic Dailies/Playwright lessons out of it.`
       );
     }
+  } else if (projectUrl) {
+    logger.warn(
+      { url: projectUrl },
+      `${projectUrl} served no .dailies/flows.md — recording without app knowledge. Outside production the app can serve it; check the URL and that this is not production.`
+    );
   }
 
   if (args.json) {

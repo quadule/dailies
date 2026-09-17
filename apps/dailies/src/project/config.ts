@@ -15,11 +15,15 @@
 // it, and works for any harness (Claude Code, Codex, Cursor) rather than only
 // the one whose skill format it was written in.
 //
+// A running app can also SERVE these two files outside production, which is what
+// makes Dailies usable by someone with no checkout — see `fetchProject` below.
+//
 // TRUST: `flows.md` becomes agent instructions, so it is only as trustworthy as
 // the repo it came from. Don't run Dailies with a project config from a repo you
 // don't control (the demo workflow deliberately skips fork PRs).
 
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 export const PROJECT_DIR = ".dailies";
@@ -248,7 +252,21 @@ export interface LoadedProject {
   flowsPath: string | null;
   // Absolute path to the `.dailies` directory, when one was found.
   root: string | null;
+  // Where this came from: a checkout, an app that serves it, or nowhere. Worth
+  // saying out loud — "the agent has app knowledge" and "the agent has app
+  // knowledge THIS ENVIRONMENT handed us" are different claims.
+  source: ProjectSource;
 }
+
+export type ProjectSource = "local" | "remote" | "none";
+
+const NO_PROJECT: LoadedProject = {
+  config: EMPTY_CONFIG,
+  flowsLines: 0,
+  flowsPath: null,
+  root: null,
+  source: "none",
+};
 
 async function isDirectory(target: string): Promise<boolean> {
   try {
@@ -276,13 +294,144 @@ export async function findProjectDir(from: string): Promise<string | null> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// `.dailies/` served by the app itself.
+// ---------------------------------------------------------------------------
+
+// Outside production, an app can serve its own `.dailies/` over HTTP — a route gated to
+// non-production environments, serving those two files and nothing else. That is what
+// lets someone with NO checkout record against staging or a review app: the thing that
+// stops non-engineers recording their own flows is not installing Dailies, it is that
+// Dailies then knows nothing about the app.
+//
+// TRUST, and why this is not simply "fetch from the target": `flows.md` becomes agent
+// instructions the moment a session starts. So a URL is only ever fetched when the
+// PERSON named it (`--project-url`, `$DAILIES_PROJECT_URL`) — never one lifted from a
+// PR body, a redirect, or the page under test. Redirects are refused rather than
+// followed for the same reason: the host someone approved must be the host that answers.
+export const REMOTE_TIMEOUT_MS = 10_000;
+// flows.md lives under a 250-line budget and config.json is a handful of keys, so this
+// is far past any honest version of either — it exists so a misconfigured URL streams a
+// video into the cache instead of the cache swallowing it.
+export const REMOTE_MAX_BYTES = 512 * 1024;
+
+// Cache root for a fetched project. The agent READS flows.md, so a fetch has to land on
+// disk somewhere stable and outside the session, not in memory.
+export function remoteCacheDir(
+  url: string,
+  home: string = os.homedir()
+): string {
+  const slug = url
+    .replace(/^[a-z]+:\/\//i, "")
+    .replace(/[^a-zA-Z0-9.-]+/g, "-");
+  return path.join(home, ".dailies", "environments", slug.replace(/-+$/, ""));
+}
+
+async function fetchProjectFile(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url, {
+      redirect: "error",
+      signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const declared = Number(response.headers.get("content-length") ?? "0");
+    if (declared > REMOTE_MAX_BYTES) {
+      return null;
+    }
+    const body = await response.text();
+    return Buffer.byteLength(body, "utf8") > REMOTE_MAX_BYTES ? null : body;
+  } catch {
+    // Unreachable, redirected, timed out, TLS refused — the caller falls back to
+    // running with no app knowledge, which is worse but never fatal.
+    return null;
+  }
+}
+
+// Fetch `<base>/.dailies/{config.json,flows.md}` into `cacheDir` and load it. Never
+// throws, for the same reason `loadProject` doesn't: not knowing the app must not stop
+// someone recording. Returns source "none" when the environment served neither file.
+export async function fetchProject(
+  baseUrl: string,
+  cacheDir: string = remoteCacheDir(baseUrl)
+): Promise<LoadedProject> {
+  let base: URL;
+  try {
+    base = new URL(baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+  } catch {
+    return NO_PROJECT;
+  }
+  if (base.protocol !== "http:" && base.protocol !== "https:") {
+    return NO_PROJECT;
+  }
+
+  const [rawConfig, rawFlows] = await Promise.all([
+    fetchProjectFile(new URL(`${PROJECT_DIR}/${CONFIG_FILE}`, base).href),
+    fetchProjectFile(new URL(`${PROJECT_DIR}/${FLOWS_FILE}`, base).href),
+  ]);
+  if (rawConfig === null && rawFlows === null) {
+    return NO_PROJECT;
+  }
+
+  const root = path.join(cacheDir, PROJECT_DIR);
+  try {
+    await mkdir(root, { recursive: true });
+  } catch {
+    return NO_PROJECT;
+  }
+
+  let config = EMPTY_CONFIG;
+  if (rawConfig !== null) {
+    try {
+      config = parseProjectConfig(JSON.parse(rawConfig));
+      await writeFile(path.join(root, CONFIG_FILE), rawConfig, "utf8");
+    } catch {
+      // Served but not valid JSON — defaults stand, exactly as for a local file.
+    }
+  }
+  // An environment that serves `.dailies/` knows its own address better than the person
+  // typing it, but it does NOT get to redirect the run somewhere else: the URL that
+  // answered is the URL we drive.
+  config = { ...config, url: base.href.replace(/\/$/, "") };
+
+  if (rawFlows === null) {
+    return { config, flowsLines: 0, flowsPath: null, root, source: "remote" };
+  }
+  const flowsPath = path.join(root, FLOWS_FILE);
+  try {
+    await writeFile(flowsPath, rawFlows, "utf8");
+  } catch {
+    return { config, flowsLines: 0, flowsPath: null, root, source: "remote" };
+  }
+  return {
+    config,
+    flowsLines: rawFlows.split(/\r?\n/).length,
+    flowsPath,
+    root,
+    source: "remote",
+  };
+}
+
 // Load the project convention for `cwd`. Never throws: a missing directory,
 // unreadable file or malformed JSON yields defaults, because a bad project config
 // must not be able to stop someone recording a session.
-export async function loadProject(cwd: string): Promise<LoadedProject> {
+//
+// A checkout always wins over a served copy: if you are standing in the repo, the repo
+// is the truth — and a `flows.md` you are editing must be the one the agent reads.
+// `url` is only consulted when there is no `.dailies/` to be found.
+export async function loadProject(
+  cwd: string,
+  options: { cacheDir?: string; url?: string | null } = {}
+): Promise<LoadedProject> {
   const root = await findProjectDir(cwd);
   if (!root) {
-    return { config: EMPTY_CONFIG, flowsLines: 0, flowsPath: null, root: null };
+    return options.url
+      ? await fetchProject(
+          options.url,
+          options.cacheDir ?? remoteCacheDir(options.url)
+        )
+      : NO_PROJECT;
   }
   let config = EMPTY_CONFIG;
   try {
@@ -296,7 +445,7 @@ export async function loadProject(cwd: string): Promise<LoadedProject> {
   try {
     flowsLines = (await readFile(flowsPath, "utf8")).split(/\r?\n/).length;
   } catch {
-    return { config, flowsLines: 0, flowsPath: null, root };
+    return { config, flowsLines: 0, flowsPath: null, root, source: "local" };
   }
-  return { config, flowsLines, flowsPath, root };
+  return { config, flowsLines, flowsPath, root, source: "local" };
 }

@@ -160,6 +160,7 @@ interface SessionStartOpts {
   har: boolean;
   headless?: boolean;
   name?: string;
+  projectUrl?: string;
   trace: boolean;
   url?: string;
   video: boolean;
@@ -258,9 +259,14 @@ export function buildProgram(): CommandType {
       "--url <url>",
       "Open (and settle) this URL at session start so the recording begins on a loaded page, not a blank one — the pre-load blank is trimmed from the video head"
     )
+    .option(
+      "--project-url <url>",
+      "Fetch .dailies/ (the app's own browser guidance) from a non-production environment that serves it, when you have no checkout — e.g. staging or a review app. Ignored when a .dailies/ directory is found locally. Also $DAILIES_PROJECT_URL"
+    )
     .action(async (opts: SessionStartOpts) => {
       const code = await sessionStart({
         name: opts.name,
+        projectUrl: opts.projectUrl,
         headless: opts.headless === true,
         capture: {
           trace: opts.trace,
