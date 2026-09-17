@@ -71,6 +71,8 @@ interface SessionState {
   // The page each step ended on, in order — see endStep.
   stepPages: StepPage[];
   videoDir: string;
+  // name-by-video-path, read while the pages are still open (see end()).
+  videoNamesByPath?: Map<string, string>;
 }
 
 // Buffers the Playwright code the recorder generates for each manual action.
@@ -521,6 +523,14 @@ export class SessionManager {
       state.pageCount = ctx.pages().length;
     }
 
+    // Same reason, and the one that actually bit: which video belongs to which
+    // page can only be read while the pages exist. Closing the context fires
+    // page.on("close") for every page, which unregisters each one from
+    // entry.pages — so by the time collect() runs, there is nothing left to ask
+    // and every video lands unlabelled. That silently disables the whole
+    // step-page video promotion path downstream, which matches on pageName.
+    state.videoNamesByPath = await this.videoPageNames(state);
+
     // Flush the trace FULLY — await directly (no timeout race) so trace.zip
     // is completely written before collect() enumerates it.
     if (state.capture.trace) {
@@ -701,7 +711,10 @@ export class SessionManager {
       await add("console", state.consolePath);
     }
     if (state.capture.video) {
-      const namesByPath = await this.videoPageNames(state);
+      // Captured before the context closed; a re-entered end() on an
+      // already-terminal session has no live pages left, so fall back.
+      const namesByPath =
+        state.videoNamesByPath ?? (await this.videoPageNames(state));
       const files = await readdir(state.videoDir).catch(() => [] as string[]);
       for (const file of files) {
         if (file.endsWith(SESSION_VIDEO_EXT)) {

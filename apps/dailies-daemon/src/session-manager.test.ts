@@ -89,6 +89,16 @@ function makeSession(): {
     name: sessionBrowserName("s1"),
     pages: new Map(),
   } as unknown as BrowserEntry;
+  // Closing a context closes every page in it, and BrowserManager's own
+  // page.on("close") handler unregisters each one — so a real entry.pages is
+  // EMPTY after this point. A fake that skips that lets code pass here which
+  // cannot work against a browser: it is how video page labelling shipped
+  // broken while this file was green.
+  context.close = () => {
+    calls.push("context.close");
+    entry.pages.clear();
+    return Promise.resolve();
+  };
   const emit = (event: string, arg: unknown) => {
     for (const fn of listeners.get(event) ?? []) {
       fn(arg);
