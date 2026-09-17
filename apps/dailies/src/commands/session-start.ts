@@ -28,8 +28,8 @@ interface SessionStartArgs {
   // Optional URL to open + settle at session start, so the recording begins on a
   // loaded page (not the initial about:blank) and the pre-load blank is trimmed.
   url?: string;
-  // Raw `--viewport WxH` value; the daemon applies its 1280x720 default when
-  // omitted.
+  // Raw `--viewport WxH` value; the daemon applies DEFAULT_SESSION_VIEWPORT
+  // (1440x900) when omitted.
   viewport?: string;
 }
 

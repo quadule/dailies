@@ -71,10 +71,17 @@ export const ViewportSchema = z.object({
   height: z.number().int().min(1).max(4320),
 });
 
-// Default recording viewport: Playwright's own default, so a session records
-// at the size every other Playwright run renders at — set explicitly because
-// headed contexts would otherwise track the OS window size.
-export const DEFAULT_SESSION_VIEWPORT = { width: 1280, height: 720 } as const;
+// Default recording viewport. Set explicitly because headed contexts would
+// otherwise track the OS window size.
+//
+// NOT Playwright's 1280x720 default, which it was until a session recorded a
+// split-pane form with the pane invisible: `max-width: 1280px` MATCHES at 1280,
+// and that is the most common large breakpoint in the design systems Dailies
+// drives, so the default sat exactly on the edge where panes, sidebars and
+// responsive tables collapse. Worse, it is invisible from inside a script —
+// `isVisible()` just returns false, with nothing to suggest the viewport is why.
+// 1440x900 clears that boundary and is an ordinary laptop size.
+export const DEFAULT_SESSION_VIEWPORT = { width: 1440, height: 900 } as const;
 
 // Session ids double as on-disk directory names and the reserved browser key
 // `__session__<id>`. Reject path traversal and anything outside a safe set.

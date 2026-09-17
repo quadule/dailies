@@ -175,7 +175,7 @@ describe("SessionManager", () => {
     expect(calls).toContain("tracing.start");
   });
 
-  it("defaults the recording viewport to 1280x720 (Playwright default)", async () => {
+  it("defaults the recording viewport clear of the 1280px breakpoint", async () => {
     const { entry, calls } = makeSession();
     const launched: Array<{ name: string; options: SessionLaunchOptions }> = [];
     const sessions = new SessionManager(
@@ -185,9 +185,11 @@ describe("SessionManager", () => {
 
     await sessions.start(startReq());
 
+    // 1280 is where large breakpoints collapse (`max-width: 1280px` matches at
+    // 1280), which once cost a recording its subject.
     expect(launched[0]?.options.viewport).toEqual({
-      width: 1280,
-      height: 720,
+      width: 1440,
+      height: 900,
     });
   });
 

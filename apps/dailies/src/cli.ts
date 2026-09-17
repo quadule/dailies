@@ -249,7 +249,7 @@ export function buildProgram(): CommandType {
     .option("--no-console", "Disable console / page-error capture")
     .option(
       "--viewport <WxH>",
-      "Page viewport for the recording, e.g. 1440x900 (default 1280x720)"
+      "Page viewport for the recording, e.g. 1920x1080 (default 1440x900)"
     )
     .option(
       "--no-cursor",

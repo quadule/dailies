@@ -72,7 +72,9 @@ export const SESSION_START_LONG_ABOUT = `Start a capture-enabled session and pri
 
 Capture is on by default — disable per stream with --no-trace / --no-video / --no-har / --no-console.
 Use --headless for unattended runs; omit it to watch the browser window.
-The page records at a fixed 1280x720 desktop viewport — override with --viewport WxH.
+The page records at a fixed 1440x900 desktop viewport — override with --viewport WxH.
+Pick a size deliberately when a flow depends on a responsive breakpoint: an element
+hidden by a media query is in the DOM but never visible, and reads as a bad selector.
 A virtual cursor + click animation is drawn into the recording so interactions are visible
 in video and screenshots; disable it with --no-cursor.
 Pass --url <url> to open (and settle) a page at session start, so the recording begins on a
