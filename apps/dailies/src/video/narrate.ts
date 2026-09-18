@@ -79,7 +79,12 @@ import {
   runLlmJson,
 } from "./script-llm.js";
 import { selectSongCaptions } from "./song-captions.js";
-import { resolveSpeech, type SpeechSynth, speechText } from "./speech.js";
+import {
+  resolveSpeech,
+  type SpeechSynth,
+  speechText,
+  ttsTempo,
+} from "./speech.js";
 import { buildSrt, captionLineMax } from "./srt.js";
 import type { ThemeCategory } from "./themes.js";
 import { transcribeSong } from "./transcribe.js";
@@ -1385,12 +1390,22 @@ async function renderClip(args: {
 
   // Speak a for-the-ear rewrite; the caption/return value keeps the original.
   await synth.run(speechText(narration), rawPath);
+  // A synth that cannot set its own speaking rate asks for a speed-up here (see
+  // SpeechSynth.tempo). It rides along with the transcode this pass already runs,
+  // and because durationSec below is measured from the OUTPUT, the shorter length
+  // flows into every narration offset, caption end-time and the footage re-timing
+  // for free.
+  const tempoArgs =
+    synth.tempo && synth.tempo !== 1
+      ? ["-filter:a", `atempo=${synth.tempo}`]
+      : [];
   await run(
     ffmpeg,
     [
       ...FFMPEG_BASE_ARGS,
       "-i",
       rawPath,
+      ...tempoArgs,
       "-ac",
       "2",
       "-ar",
@@ -1499,6 +1514,7 @@ async function synthesizeClips(args: {
     const synth: SpeechSynth = {
       ext: "wav",
       run: (t, o) => tts.synthesize(t, o),
+      tempo: ttsTempo(),
     };
     let down = false;
     const voiced = await mapLimit(jobs, limit, async (job) => {

@@ -34,12 +34,48 @@ const DEFAULT_SAY_RATE = 175;
 
 const SAY_TIMEOUT_MS = 60_000;
 
+// Speed-up applied to hosted-TTS narration. The Gemini TTS model reads at a
+// slower, more deliberate pace than the pipeline wants — it is a talking-head
+// pace, not a voiceover pace — and the API exposes no rate parameter, so the
+// speed-up is applied to the rendered audio instead (ffmpeg `atempo`, which
+// time-stretches WITHOUT shifting pitch, so the voice keeps its character).
+//
+// Prompt wording alone was not enough: the directive already asked for pacing
+// and the model still read long. Tuned by ear on finished cuts: 1.33 was
+// audibly hurried, 1.2 reads as a voiceover without sounding rushed. Override
+// with $DAILIES_TTS_TEMPO — 1 disables the speed-up entirely.
+const DEFAULT_TTS_TEMPO = 1.2;
+
+// atempo's own supported range. Outside it ffmpeg errors, which would fail the
+// whole narration pass for a typo in an env var.
+const MIN_TTS_TEMPO = 0.5;
+const MAX_TTS_TEMPO = 2;
+
+// Resolve the hosted-TTS speed-up. Pure → unit-tested.
+export function ttsTempo(env: NodeJS.ProcessEnv = process.env): number {
+  const override = Number(env.DAILIES_TTS_TEMPO);
+  if (
+    Number.isFinite(override) &&
+    override >= MIN_TTS_TEMPO &&
+    override <= MAX_TTS_TEMPO
+  ) {
+    return override;
+  }
+  return DEFAULT_TTS_TEMPO;
+}
+
 // How to turn narration text into a raw audio file: `ext` is that file's
 // extension, `run` writes it. A say-backed synth writes .aiff; a TTS provider
 // writes .wav. renderClip is otherwise provider-agnostic.
+//
+// `tempo` asks renderClip to speed the rendered audio up by that factor while
+// it transcodes. It exists because a hosted TTS has no rate control the way
+// `say -r` does: `say` is told its words-per-minute up front (see pickRate), so
+// a say-backed synth leaves this unset and needs no post-processing.
 export interface SpeechSynth {
   ext: string;
   run: (text: string, outPath: string) => Promise<void>;
+  tempo?: number;
 }
 
 // Parse `say -v '?'` output into structured voices. Each line is

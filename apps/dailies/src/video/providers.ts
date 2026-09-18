@@ -326,9 +326,15 @@ export function pickTtsVoice(
 // steers delivery ("Say cheerfully: …"), so we prepend an expressive cinematic
 // directive before the verbatim narration line. The TtsProvider only receives the
 // per-step narration (not the session direction), so the directive is theme-
-// agnostic; the chosen voice carries the thematic flavor. Pure → unit-tested.
+// agnostic; the chosen voice carries the thematic flavor.
+//
+// It asks for a BRISK pace deliberately. The earlier wording ("with dramatic
+// pacing and emotion") read as an invitation to slow down and draw every line
+// out, and a line that overruns its step is narration playing over the wrong
+// footage. The model only partly honours this, so the rendered audio is also
+// sped up afterwards — see ttsTempo in speech.ts. Pure → unit-tested.
 export function buildTtsPrompt(text: string): string {
-  return `Read this aloud as an expressive cinematic voiceover, with dramatic pacing and emotion:\n\n${text}`;
+  return `Read this aloud as an expressive cinematic voiceover: brisk and energetic, moving at a confident clip, with emotion but without drawing words out or pausing between phrases:\n\n${text}`;
 }
 
 // Build the image prompt for a TITLE-CARD BACKGROUND. The title text is overlaid

@@ -271,6 +271,14 @@ describe("buildTtsPrompt", () => {
     expect(prompt.toLowerCase()).toContain("expressive");
     expect(prompt.toLowerCase()).toContain("voiceover");
   });
+
+  it("asks for a brisk pace and never for a drawn-out one", () => {
+    // The model read long enough to overrun a step when the directive asked for
+    // "dramatic pacing" — narration then plays over the wrong footage.
+    const prompt = buildTtsPrompt("The vault clicked open.").toLowerCase();
+    expect(prompt).toContain("brisk");
+    expect(prompt).not.toContain("dramatic pacing");
+  });
 });
 
 describe("pickTtsVoice", () => {
