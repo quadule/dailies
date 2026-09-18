@@ -74,6 +74,7 @@ import {
   type Narration,
   parseLyricsJson,
   parseNarrationJson,
+  planLyricGroups,
   resolveBase,
   resolveDirection,
   runLlmJson,
@@ -2971,12 +2972,16 @@ async function runSongPass(ctx: CinematicContext): Promise<CinematicResult> {
   }
 
   // Group short consecutive steps so one sung line spans >= GROUP_MIN_SEC — fewer,
-  // longer verses instead of a frantic line per tiny step. Grouping is
-  // deterministic for a recording, so a pinned-song reuse maps back the same way.
-  const groups = groupStepsForLyrics(
-    stepFootageSec(narratableSteps),
-    GROUP_MIN_SEC
-  );
+  // longer verses instead of a frantic line per tiny step. A run of setup/auth
+  // steps collapses into ONE section first, so getting into the app can only ever
+  // cost one line. Grouping is deterministic for a recording, so a pinned-song
+  // reuse maps back the same way.
+  const groups = planLyricGroups({
+    footageSec: stepFootageSec(narratableSteps),
+    group: groupStepsForLyrics,
+    minSec: GROUP_MIN_SEC,
+    steps: narratableSteps,
+  });
 
   const script = await resolveSongScript(ctx, groups);
   if ("skip" in script) {
