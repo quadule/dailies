@@ -407,9 +407,15 @@ export async function encodeSlice(args: {
   // Optional: freeze the FIRST frame for this long before the footage plays (a
   // "beat" before the action — frames both narration and song steps).
   startHoldSec?: number;
+  // Optional: play the footage this many times faster, so `durSec` of source
+  // occupies durSec/speed of the output. Used to fast-forward the stretches of a
+  // demo nobody narrates (see planRetime). Only the FOOTAGE is compressed, never
+  // a hold — the caller guarantees a sped slice has none.
+  speed?: number;
 }): Promise<void> {
   const { ffmpeg, src, startSec, durSec, holdSec, frameRate, outPath } = args;
   const startHold = args.startHoldSec ?? 0;
+  const speed = args.speed && args.speed > 1 ? args.speed : 1;
   // Force constant frame rate the way condense.ts does (fps + setpts), so each
   // slice's actual duration matches `-t`/`tpad` exactly. Without this, libvpx
   // slices come up tens of ms short and the per-segment error ACCUMULATES across
@@ -419,6 +425,18 @@ export async function encodeSlice(args: {
   // Pin CFR, then pad with frozen frames at the head/tail, then reset PTS for an
   // exact-duration segment.
   chain.push(`fps=${fps}`);
+  if (speed !== 1) {
+    // setpts compresses the timeline; the fps that follows drops the frames that
+    // compression made surplus, so the final CFR renumbering below lands on an
+    // exact durSec/speed. Doing it in one step (a lone fps=rate/speed) does NOT
+    // work: the closing setpts reads FRAME_RATE from the chain, so it would
+    // renumber at the reduced rate and undo the speed-up.
+    //
+    // This sits BEFORE tpad deliberately: only the FOOTAGE is meant to speed up.
+    // A hold is a freeze measured in OUTPUT seconds, so cloning it after the
+    // compression keeps it the length the caller planned.
+    chain.push(`setpts=PTS/${speed.toFixed(4)}`, `fps=${fps}`);
+  }
   if (startHold > 0 || holdSec > 0) {
     const opts: string[] = [];
     if (startHold > 0) {

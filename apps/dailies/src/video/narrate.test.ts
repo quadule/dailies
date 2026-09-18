@@ -18,6 +18,9 @@ import {
   planRetime,
   planSongTiming,
   precinematicVideoPath,
+  silentFootageSpeed,
+  silentFootageTargetSec,
+  silentRunSpeeds,
   songHoldSec,
   songTargetSec,
   stepFootageSec,
@@ -1208,6 +1211,131 @@ describe("parseFilterNames", () => {
     expect(parseFilterNames("Filters:\n  Legend without arrows\n").size).toBe(
       0
     );
+  });
+});
+
+describe("silentFootageSpeed", () => {
+  it("never speeds up a narrated step", () => {
+    expect(silentFootageSpeed(30, 4, 4)).toBe(1);
+  });
+
+  it("leaves a silent step already under the target alone", () => {
+    expect(silentFootageSpeed(3, 0, 4)).toBe(1);
+  });
+
+  it("brings a long silent step down to the target", () => {
+    expect(silentFootageSpeed(10, 0, 4)).toBeCloseTo(2.5);
+  });
+
+  it("caps the speed so a very long stretch stays legible", () => {
+    // 100s would need 25x to reach the target; capped, it lands at 25s instead.
+    expect(silentFootageSpeed(100, 0, 4)).toBe(4);
+  });
+
+  it("is disabled by a zero target", () => {
+    expect(silentFootageSpeed(30, 0, 0)).toBe(1);
+  });
+});
+
+describe("silentFootageTargetSec", () => {
+  it("honors $DAILIES_SILENT_FOOTAGE_SEC, including 0 for real time", () => {
+    expect(silentFootageTargetSec({ DAILIES_SILENT_FOOTAGE_SEC: "0" })).toBe(0);
+    expect(silentFootageTargetSec({ DAILIES_SILENT_FOOTAGE_SEC: "7" })).toBe(7);
+  });
+
+  it("falls back to the default on a bad value", () => {
+    expect(silentFootageTargetSec({ DAILIES_SILENT_FOOTAGE_SEC: "x" })).toBe(4);
+    expect(silentFootageTargetSec({})).toBe(4);
+  });
+});
+
+describe("planRetime — fast-forwarding silent footage", () => {
+  it("compresses an un-narrated stretch and pulls later steps earlier", () => {
+    // 20s of silent setup, then a narrated beat. The narration prompt cannot fix
+    // this: skipping the stretch leaves it silent but still full-length, because
+    // holds only ever EXTEND footage to fit a line.
+    const plan = planRetime({
+      stepTimes: [0, 20],
+      clipDurSec: [0, 3],
+      totalSec: 24,
+      gapSec: 0,
+      silentTargetSec: 4,
+      frameRateHz: 25,
+    });
+    // footage stays in SOURCE seconds — it is what the slice encoder cuts.
+    expect(plan.footage).toEqual([20, 4]);
+    expect(plan.speeds).toEqual([4, 1]);
+    // 20s of silence now occupies 5s, so the narrated beat starts at 5s, not 20s.
+    expect(plan.starts).toEqual([0, 5]);
+  });
+
+  it("leaves everything at real time when the target is 0", () => {
+    const plan = planRetime({
+      stepTimes: [0, 20],
+      clipDurSec: [0, 3],
+      totalSec: 24,
+      gapSec: 0,
+      silentTargetSec: 0,
+      frameRateHz: 25,
+    });
+    expect(plan.speeds).toEqual([1, 1]);
+    expect(plan.starts).toEqual([0, 20]);
+  });
+
+  it("snaps a sped step to a whole number of frames", () => {
+    // Measured: 12s at a nominal 3.25x encodes to 3.680s, not the 3.692s the
+    // arithmetic wants, so the plan has to agree with the encoder or the error
+    // accumulates across the concat.
+    const plan = planRetime({
+      stepTimes: [0, 12],
+      clipDurSec: [0, 1],
+      totalSec: 13,
+      gapSec: 0,
+      silentTargetSec: 3.692,
+      frameRateHz: 25,
+    });
+    const onScreen = (plan.starts[1] ?? 0) - (plan.starts[0] ?? 0);
+    expect(onScreen * 25).toBeCloseTo(Math.round(onScreen * 25), 6);
+    expect(12 / (plan.speeds[0] ?? 1)).toBeCloseTo(onScreen, 6);
+  });
+
+  it("compresses a RUN of short silent steps that no single step would trigger", () => {
+    // The real case: condense has already tightened every step, so a silent
+    // stretch arrives as 4.0s + 3.0s back to back. Per-step, neither clears the
+    // 4s target and all 7s played at real time; as one run they compress.
+    const plan = planRetime({
+      stepTimes: [0, 4, 7, 11],
+      clipDurSec: [2, 0, 0, 2],
+      totalSec: 13,
+      gapSec: 0,
+      silentTargetSec: 4,
+      frameRateHz: 25,
+    });
+    expect(plan.speeds[0]).toBe(1);
+    expect(plan.speeds[3]).toBe(1);
+    // 7s of silence over two steps → 4s on screen, so both share one speed.
+    // Each step is snapped to a whole frame, so the effective speed lands a
+    // hair off the run nominal.
+    expect(plan.speeds[1]).toBeCloseTo(1.75, 1);
+    expect(plan.speeds[2]).toBeCloseTo(1.75, 1);
+    const silentOnScreen = (plan.starts[3] ?? 0) - (plan.starts[1] ?? 0);
+    expect(silentOnScreen).toBeCloseTo(4, 1);
+  });
+
+  it("keeps a run's speed uniform so the stretch plays at one pace", () => {
+    const speeds = silentRunSpeeds([2, 5, 5, 3], [1, 0, 0, 1], 4);
+    expect(speeds[0]).toBe(1);
+    expect(speeds[3]).toBe(1);
+    expect(speeds[1]).toBe(speeds[2]);
+    expect(speeds[1]).toBeCloseTo(2.5); // 10s of silence → 4s
+  });
+
+  it("treats separate silent runs separately", () => {
+    // A narrated step between two silent stretches breaks the run.
+    const speeds = silentRunSpeeds([8, 2, 8], [0, 1, 0], 4);
+    expect(speeds[0]).toBe(2);
+    expect(speeds[1]).toBe(1);
+    expect(speeds[2]).toBe(2);
   });
 });
 

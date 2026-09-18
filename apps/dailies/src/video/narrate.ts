@@ -1019,6 +1019,7 @@ async function assembleVideo(args: {
     frameRate,
     temps,
     gapSec: narrationGapSec(process.env),
+    silentTargetSec: silentFootageTargetSec(process.env),
   });
   if (!retimed) {
     // Drain the in-flight jobs before bailing so neither can settle after we've
@@ -1682,14 +1683,34 @@ export function planRetime(args: {
   // `bodyEnd` closes the last step's window. Overrides the narration hold logic.
   onsets?: number[];
   bodyEnd?: number;
-}): { starts: number[]; footage: number[]; holds: number[]; leadSec: number } {
+  // Target length for an un-narrated stretch — see SILENT_FOOTAGE_TARGET_SEC.
+  // Omitted or 0 leaves every step at real time.
+  silentTargetSec?: number;
+  // Output frame rate, used to snap a sped-up step to a WHOLE number of frames.
+  // Without it a fractional speed leaves the planned length and the encoded
+  // length up to a frame apart, and that error accumulates across the concat —
+  // the same drift the CFR pinning in encodeSlice exists to prevent. Measured:
+  // 12s at speed 3.25 encodes to 3.680s, not the 3.692s the arithmetic wants.
+  frameRateHz?: number;
+}): {
+  starts: number[];
+  footage: number[];
+  holds: number[];
+  // Playback speed per step. `footage` stays in SOURCE seconds (it is what the
+  // slice encoder cuts); a step occupies footage/speed of the output.
+  speeds: number[];
+  leadSec: number;
+} {
   const { stepTimes, clipDurSec, totalSec, onsets, bodyEnd } = args;
   const startPad = Math.max(0, args.startPadSec ?? 0);
   const gap = Math.max(0, args.gapSec ?? 0);
+  const silentTarget = Math.max(0, args.silentTargetSec ?? 0);
+  const fps = args.frameRateHz && args.frameRateHz > 0 ? args.frameRateHz : 30;
   const n = stepTimes.length;
   const starts: number[] = [];
   const footage: number[] = [];
   const holds: number[] = [];
+  const speeds: number[] = [];
 
   if (onsets && onsets.length === n) {
     // Onset-anchored hard-cut. The lead is the instrumental run before the first
@@ -1707,27 +1728,46 @@ export function planRetime(args: {
       const play = Math.min(natural, slot); // clip the tail on overrun
       starts.push(winStart);
       footage.push(play);
+      speeds.push(1); // song sync hard-cuts to its own windows; never sped up
       holds.push(Math.max(0, slot - play)); // freeze-pad on underrun
     }
-    return { starts, footage, holds, leadSec };
+    return { starts, footage, holds, speeds, leadSec };
   }
 
   const leadSec = n > 0 ? Math.max(0, stepTimes[0] ?? 0) : 0;
-  let acc = leadSec;
+  // The natural footage each step owns, before any speed-up.
+  const natural: number[] = [];
   for (let i = 0; i < n; i++) {
     const start = stepTimes[i] ?? 0;
     const next = i < n - 1 ? (stepTimes[i + 1] ?? totalSec) : totalSec;
-    const f = Math.max(0.1, next - start);
+    natural.push(Math.max(0.1, next - start));
+  }
+  // One speed per run of consecutive un-narrated steps, decided before the
+  // layout so a stretch spread over several short steps still compresses.
+  const wanted = silentRunSpeeds(natural, clipDurSec, silentTarget);
+
+  let acc = leadSec;
+  for (let i = 0; i < n; i++) {
+    const f = natural[i] ?? 0.1;
     // No trailing gap after the final clip (nothing follows it to breathe from).
     const isLast = i === n - 1;
-    const hold = Math.max(0, (clipDurSec[i] ?? 0) - f + (isLast ? 0 : gap));
+    // What the step occupies on screen once sped up, snapped to a whole frame so
+    // the plan and the encoded slice agree exactly.
+    const w = wanted[i] ?? 1;
+    const onScreen = w === 1 ? f : Math.max(1, Math.round((f / w) * fps)) / fps;
+    const speed = f / onScreen;
+    const hold = Math.max(
+      0,
+      (clipDurSec[i] ?? 0) - onScreen + (isLast ? 0 : gap)
+    );
     // The action (and its narration) starts after the leading still.
     starts.push(acc + startPad);
     footage.push(f);
+    speeds.push(speed);
     holds.push(hold);
-    acc += startPad + f + hold;
+    acc += startPad + onScreen + hold;
   }
-  return { starts, footage, holds, leadSec };
+  return { starts, footage, holds, speeds, leadSec };
 }
 
 // Leading still pad before each step's action. DISABLED (0): freezing the first
@@ -1735,6 +1775,86 @@ export function planRetime(args: {
 // a step's window often opens partway into its own keystrokes. End-freeze only —
 // exactly like cinematic/narration mode — keeps the motion clean.
 const STEP_START_PAD_SEC = 0;
+
+// How long an UN-NARRATED stretch is allowed to take on screen. Narration is
+// never sped up, but footage nobody is talking over plays as a fast-forward
+// instead of in real time.
+//
+// This exists because the narration prompt cannot fix it. Told to skip the login
+// stretch, the model dutifully leaves it silent — and that buys back no time at
+// all, because the hold logic below only ever EXTENDS footage to fit a line and
+// never shortens it. Measured on a real demo: narration correctly ignored signing
+// in, and signing in still took 17 of the film's 51 seconds, in silence. So the
+// fix belongs here, in the timing, not in the words.
+//
+// Compressing rather than trimming is deliberate: a cut would drop the very
+// actions the recording is evidence of, while a fast-forward keeps every one of
+// them on camera and reads as the montage it is. Override the target with
+// $DAILIES_SILENT_FOOTAGE_SEC; 0 restores real-time playback.
+const SILENT_FOOTAGE_TARGET_SEC = 4;
+
+// Ceiling on the speed-up, so a very long silent stretch stays legible rather
+// than becoming a blur.
+const SILENT_FOOTAGE_MAX_SPEED = 4;
+
+export function silentFootageTargetSec(
+  env: NodeJS.ProcessEnv = process.env
+): number {
+  const override = Number(env.DAILIES_SILENT_FOOTAGE_SEC);
+  return Number.isFinite(override) && override >= 0
+    ? override
+    : SILENT_FOOTAGE_TARGET_SEC;
+}
+
+// The speed a stretch of footage plays at: 1 for anything narrated (never rush a
+// beat the viewer is being told about), otherwise just enough to bring it down
+// to `targetSec`, capped. Pure → unit-tested.
+export function silentFootageSpeed(
+  footageSec: number,
+  clipDurSec: number,
+  targetSec: number
+): number {
+  if (clipDurSec > 0 || targetSec <= 0 || footageSec <= targetSec) {
+    return 1;
+  }
+  return Math.min(SILENT_FOOTAGE_MAX_SPEED, footageSec / targetSec);
+}
+
+// One speed per step, computed over RUNS of consecutive un-narrated steps rather
+// than per step.
+//
+// The run is the unit because the condense pass has already been through this
+// footage and tightened every step, so a silent stretch arrives as several short
+// steps rather than one long one — and none of them individually clears the
+// target. Measured on a real demo: signing in and navigating were 4.0s and 3.0s
+// of un-narrated footage back to back, so a per-step rule left all 7s at real
+// time; as one run they compress to the target. Pure → unit-tested.
+export function silentRunSpeeds(
+  footageSec: number[],
+  clipDurSec: number[],
+  targetSec: number
+): number[] {
+  const speeds = footageSec.map(() => 1);
+  let i = 0;
+  while (i < footageSec.length) {
+    if ((clipDurSec[i] ?? 0) > 0) {
+      i += 1;
+      continue;
+    }
+    let end = i;
+    let total = 0;
+    while (end < footageSec.length && (clipDurSec[end] ?? 0) <= 0) {
+      total += footageSec[end] ?? 0;
+      end += 1;
+    }
+    const speed = silentFootageSpeed(total, 0, targetSec);
+    for (let k = i; k < end; k++) {
+      speeds[k] = speed;
+    }
+    i = end;
+  }
+  return speeds;
+}
 
 // Minimum silent beat held between consecutive narration lines so they don't run
 // together (a short step's line used to end and the next begin in the same frame).
@@ -1770,6 +1890,8 @@ async function retimeSegments(args: {
   // the body end. When given, planRetime hard-cuts each step to its onset window.
   onsets?: number[];
   bodyEnd?: number;
+  // Target length for an un-narrated stretch; see planRetime.
+  silentTargetSec?: number;
 }): Promise<{ segs: string[]; starts: number[] } | null> {
   const { ffmpeg, videoPath, steps, clipDurSec, frameRate, temps } = args;
   const totalSec = await audioDurationSec(ffmpeg, videoPath);
@@ -1784,6 +1906,8 @@ async function retimeSegments(args: {
     gapSec: args.gapSec,
     onsets: args.onsets,
     bodyEnd: args.bodyEnd,
+    silentTargetSec: args.silentTargetSec,
+    frameRateHz: frameRate,
   });
   const segs: string[] = [];
   if (plan.leadSec > 0.01) {
@@ -1809,6 +1933,7 @@ async function retimeSegments(args: {
       startSec: steps[i]?.videoTime ?? 0,
       durSec: plan.footage[i] ?? 0.1,
       holdSec: plan.holds[i] ?? 0,
+      speed: plan.speeds[i] ?? 1,
       startHoldSec: STEP_START_PAD_SEC,
       frameRate,
       outPath: segPath,
