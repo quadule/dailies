@@ -39,6 +39,8 @@ import { probeDurationSec, probeVideo } from "../video/ffmpeg.js";
 import {
   burnCaptionBand,
   type CinematicStep,
+  captionBandPx,
+  captionFontPx,
   cinematicProcess,
   precinematicVideoPath,
 } from "../video/narrate.js";
@@ -602,7 +604,13 @@ async function burnPlainCaptions(
       srtPath,
       buildSrt(
         cues.map((c) => ({ start: c.startSec, end: c.endSec, text: c.text })),
-        captionLineMax(probed?.width)
+        // Same budget the cinematic pass uses: chars per line depends on the
+        // caption font as well as the frame width, and the font comes from the
+        // band, which comes from the frame height.
+        captionLineMax(
+          probed?.width,
+          captionFontPx(captionBandPx(probed?.height))
+        )
       ),
       "utf8"
     );

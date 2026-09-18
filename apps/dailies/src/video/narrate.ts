@@ -1950,7 +1950,7 @@ async function mixAudioAndCaptions(args: {
   const probed = burnCaptions ? await probeVideo(ffmpeg, videoPath) : undefined;
   const band = captionBandPx(probed?.height);
   const filterComplex = burnCaptions
-    ? `${filter};[0:v]pad=iw:ih+${band}:0:0:color=black,subtitles='${escapeSubtitlesPath(srtPath)}':force_style='${subtitleStyle((probed?.height ?? 720) + band, band)}'[vout]`
+    ? `${filter};[0:v]pad=iw:ih+${band}:0:0:color=black,subtitles='${escapeSubtitlesPath(srtPath)}':force_style='${subtitleStyle((probed?.height ?? 720) + band, band, probed?.width ?? 1280)}'[vout]`
     : filter;
 
   const videoMap = burnCaptions ? "[vout]" : "0:v";
@@ -2017,7 +2017,7 @@ export async function burnCaptionBand(args: {
       "-i",
       videoPath,
       "-vf",
-      `pad=iw:ih+${band}:0:0:color=black,subtitles='${escapeSubtitlesPath(srtPath)}':force_style='${subtitleStyle((probed?.height ?? 720) + band, band)}'`,
+      `pad=iw:ih+${band}:0:0:color=black,subtitles='${escapeSubtitlesPath(srtPath)}':force_style='${subtitleStyle((probed?.height ?? 720) + band, band, probed?.width ?? 1280)}'`,
       "-c:v",
       "libvpx",
       "-b:v",
@@ -2046,22 +2046,46 @@ export function captionBandPx(videoHeightPx: number | undefined): number {
 
 const MIN_CAPTION_BAND_PX = 96;
 
+// Caption FontSize in pixels, from the band height. Shared by `subtitleStyle`
+// (which renders at this size) and the .srt writer (whose chars-per-line budget
+// is a multiple of it) so the two can't drift apart — a budget measured against
+// one font and rendered at another is how a caption line ends up too wide for
+// the frame. Pure → unit-tested.
+export function captionFontPx(bandPx: number): number {
+  return Math.max(14, Math.round(bandPx * 0.26));
+}
+
 // libass force_style: white text on black, sized to sit inside the band added
 // beneath the video.
 //
-// PlayResX/PlayResY are pinned to the real frame so FontSize and MarginV are in
-// PIXELS. Without them libass scales against its own default resolution, and the
-// same FontSize renders wildly different sizes depending on the frame — which
+// PlayResY is pinned to the real (padded) frame height so FontSize and MarginV
+// are in PIXELS. Without it libass scales against its own default resolution, and
+// the same FontSize renders wildly different sizes depending on the frame — which
 // put two lines of caption taller than the band and straddling its edge, half on
 // the recording.
+//
+// PlayResX is pinned to the real frame WIDTH. It used to be derived as
+// `frameHeight * 16 / 9`, which is wrong for every frame this filter ever sees:
+// the band makes the padded frame taller than the recording, so it is never 16:9
+// (1440x900 plus a 162px band gave PlayResX 1888 against a real width of 1440).
+// Measured, that made no difference to the pixels — glyph size comes from
+// PlayResY alone, and libass uses PlayResX only to map x positions, which for
+// centre-aligned text with default side margins lands in the same place; burned
+// frames at PlayResX 1888 and 1440 were identical. So this is a correctness fix
+// rather than a visual one: it stops the value being a trap for anything that
+// does read x (MarginL/MarginR, an inline `\pos`).
 //
 // BorderStyle=3 is libass's opaque-box mode (1=outline, 3=box); only 3 paints
 // BackColour as a box behind the text. Fully opaque, because it sits on the
 // black band rather than over the page — there is nothing to see through.
 // Pure → unit-tested.
-export function subtitleStyle(frameHeightPx: number, bandPx: number): string {
-  // Two lines plus their clearance must fit the band — see marginV below.
-  const fontSize = Math.max(14, Math.round(bandPx * 0.26));
+export function subtitleStyle(
+  frameHeightPx: number,
+  bandPx: number,
+  frameWidthPx: number
+): string {
+  // The full caption box plus its clearance must fit the band — see marginV.
+  const fontSize = captionFontPx(bandPx);
   // Text sits at the TOP of the band, so a player's seek bar, timecode and
   // controls — drawn along the bottom edge — cover empty band instead of words.
   //
@@ -2072,9 +2096,17 @@ export function subtitleStyle(frameHeightPx: number, bandPx: number): string {
   // exactly — 1px of lift per 1 of margin — so MarginV is the clearance BELOW the
   // text, which is the thing that actually keeps the scrubber off it.
   //
-  // Size that clearance so the worst case — the two lines the SRT writer wraps to
-  // — starts at the top of the band. A one-line caption then hangs one line lower
-  // while keeping the same clearance underneath, which is the part that matters.
+  // Size that clearance for the FULL caption box — the two lines the SRT writer
+  // wraps to — and the first line lands at the top of the band.
+  //
+  // That top-aligns EVERY cue only because the box is always two lines: the SRT
+  // writer pads a short cue up to the same count (`padCaptionBox` in srt.ts) and
+  // WrapStyle below stops libass adding one. Without the padding a one-line cue
+  // kept the same clearance underneath and so hung a whole line lower — measured
+  // at 1440x900, its first line started 62px below the band top against 20px for
+  // a two-line cue. That was the "song captions look vertically centred,
+  // cinematic ones don't" report; song lyrics are short enough to always be one
+  // line, cinematic narration usually wraps to two.
   //
   // Two rendered lines measure very close to 2 * FontSize of actual ink (libass
   // advances ~1.17 * FontSize per line and the first line's ink starts ~0.83 below
@@ -2083,7 +2115,7 @@ export function subtitleStyle(frameHeightPx: number, bandPx: number): string {
   const gap = Math.max(2, Math.round(bandPx * 0.08));
   const marginV = Math.max(4, Math.round(bandPx - gap - 2 * fontSize));
   return [
-    `PlayResX=${Math.round((frameHeightPx * 16) / 9)}`,
+    `PlayResX=${frameWidthPx}`,
     `PlayResY=${frameHeightPx}`,
     `FontSize=${fontSize}`,
     "PrimaryColour=&H00FFFFFF",
@@ -2091,6 +2123,16 @@ export function subtitleStyle(frameHeightPx: number, bandPx: number): string {
     "BackColour=&HFF000000",
     "Alignment=2",
     `MarginV=${marginV}`,
+    // WrapStyle=2 turns libass's own word wrapping OFF — `\N` becomes the only
+    // thing that can start a line. The caption box is exactly two lines and
+    // MarginV above is sized for exactly two; a line libass decided to re-wrap
+    // would add a third that the margin doesn't account for, pushing the bottom
+    // row out of the band and over the recording. Measured: no effect on ordinary
+    // prose (an all-caps line at the full chars-per-line budget rendered
+    // identically with and without it), and on a pathological line 1.3x wider
+    // than the frame it clips at the frame edge instead of spilling onto a third
+    // row — which is the lesser of those two.
+    "WrapStyle=2",
   ].join(",");
 }
 
@@ -2340,11 +2382,17 @@ async function writeCaptionSrt(args: {
 }): Promise<string> {
   const srtPath = srtPathFor(args.videoPath);
   args.temps.push(srtPath);
-  // Size each caption line to the actual video width so it holds to two lines on
-  // a narrow custom --viewport, not just the 1280px default.
+  // Size each caption line to the frame it will be burned into. The budget is a
+  // function of the caption FONT as well as the width — and the font comes from
+  // the band, which comes from the frame height — so a 16:10 or 4:3 capture gets
+  // a different budget from a 16:9 one of the same width.
+  const band = captionBandPx(args.geometry?.height);
   await writeFile(
     srtPath,
-    buildSrt(args.cues, captionLineMax(args.geometry?.width))
+    buildSrt(
+      args.cues,
+      captionLineMax(args.geometry?.width, captionFontPx(band))
+    )
   );
   return srtPath;
 }

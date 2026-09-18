@@ -7,6 +7,7 @@ import {
   buildAudioMix,
   buildModelCredits,
   captionBandPx,
+  captionFontPx,
   duckEnvelope,
   groupedLyricSteps,
   groupStepsForLyrics,
@@ -46,6 +47,7 @@ import {
 import {
   buildSrt,
   captionLineMax,
+  padCaptionBox,
   secToSrtTimestamp,
   wrapCaption,
 } from "./srt.js";
@@ -77,18 +79,45 @@ describe("secToSrtTimestamp", () => {
 
 describe("buildSrt", () => {
   it("numbers cues from 1 and emits start/end/text blocks", () => {
+    // Each one-line cue is padded to the two-line caption box with a U+00A0, so
+    // the burn's bottom-anchored margin puts every first line at the band top.
     const srt = buildSrt([
       { start: 2.5, end: 6.2, text: "Our operative approaches." },
       { start: 6.2, end: 9, text: "The credentials are entered." },
     ]);
     expect(srt).toBe(
-      "1\n00:00:02,500 --> 00:00:06,200\nOur operative approaches.\n\n" +
-        "2\n00:00:06,200 --> 00:00:09,000\nThe credentials are entered.\n"
+      "1\n00:00:02,500 --> 00:00:06,200\nOur operative approaches.\n\u00A0\n\n" +
+        "2\n00:00:06,200 --> 00:00:09,000\nThe credentials are entered.\n\u00A0\n"
     );
   });
 
   it("returns an empty string for no cues", () => {
     expect(buildSrt([])).toBe("");
+  });
+});
+
+describe("padCaptionBox", () => {
+  it("pads a one-line cue up to the two-line box", () => {
+    // The pad is what top-aligns a short cue: the burn style's MarginV is sized
+    // for the full box, so a cue rendering fewer lines floats down inside it.
+    expect(padCaptionBox("one line")).toBe("one line\n\u00A0");
+  });
+
+  it("leaves a full box alone", () => {
+    expect(padCaptionBox("line one\nline two")).toBe("line one\nline two");
+  });
+
+  it("pads with U+00A0, not a space", () => {
+    // Measured: ffmpeg's SRT decoder drops a whitespace-only trailing line, so
+    // an ASCII space pad renders at the unpadded height and defeats the point.
+    expect(padCaptionBox("x").split("\n").at(-1)).toBe("\u00A0");
+    expect(padCaptionBox("x")).not.toBe("x\n ");
+  });
+
+  it("leaves an empty cue empty", () => {
+    // Padding it would put a lone invisible character on screen, making a cue
+    // with no words look like a caption.
+    expect(padCaptionBox("")).toBe("");
   });
 });
 
@@ -613,17 +642,27 @@ describe("captionBandPx", () => {
 });
 
 describe("subtitleStyle", () => {
-  it("pins PlayRes to the frame so sizes are in pixels", () => {
+  it("pins PlayRes to the real frame so sizes are in pixels", () => {
     // Without this libass scales against its own default resolution and the
     // same FontSize renders at wildly different sizes per frame — which put two
     // lines taller than the band, half of them over the recording.
-    const style = subtitleStyle(850, 130);
+    const style = subtitleStyle(850, 130, 1280);
     expect(style).toContain("PlayResY=850");
+    // PlayResX is the REAL width, not frameHeight * 16/9. The band makes the
+    // padded frame taller than the recording, so it is never 16:9 — the old
+    // derivation gave 1511 here, and 1888 for a 1440x900 capture.
+    expect(style).toContain("PlayResX=1280");
+  });
+
+  it("stops libass adding a line of its own", () => {
+    // The caption box is exactly two lines and MarginV is sized for exactly
+    // two, so a line libass re-wrapped would put a third row over the recording.
+    expect(subtitleStyle(850, 130, 1280)).toContain("WrapStyle=2");
   });
 
   it("puts two lines at the top of the band, inside it", () => {
     const band = 130;
-    const style = subtitleStyle(850, band);
+    const style = subtitleStyle(850, band, 1280);
     const size = Number(/FontSize=(\d+)/.exec(style)?.[1]);
     const margin = Number(/MarginV=(\d+)/.exec(style)?.[1]);
 
@@ -639,11 +678,25 @@ describe("subtitleStyle", () => {
     );
   });
 
+  it("sizes the margin for the box, which is what top-aligns a short cue", () => {
+    // A one-line cue is padded to the same two-line box (padCaptionBox), so the
+    // clearance below the box is all that varies — never the first line's y.
+    // Measured at 1440x900 before the padding: a one-line cue's first line
+    // started 62px below the band top, a two-line cue's at 20px.
+    const band = captionBandPx(900);
+    const style = subtitleStyle(900 + band, band, 1440);
+    const size = Number(/FontSize=(\d+)/.exec(style)?.[1]);
+    const margin = Number(/MarginV=(\d+)/.exec(style)?.[1]);
+    expect(band - margin - 2 * size).toBeLessThanOrEqual(
+      Math.round(band * 0.1)
+    );
+  });
+
   it("leaves a seek bar's worth of empty band under the text", () => {
     // The whole point: a player draws its scrubber and timecode along the bottom
     // edge, so the last row of text has to stay well clear of it.
     const band = 130;
-    const style = subtitleStyle(850, band);
+    const style = subtitleStyle(850, band, 1280);
     const size = Number(/FontSize=(\d+)/.exec(style)?.[1]);
     const margin = Number(/MarginV=(\d+)/.exec(style)?.[1]);
 
@@ -651,8 +704,29 @@ describe("subtitleStyle", () => {
   });
 
   it("stays legible on a small frame", () => {
-    const size = Number(/FontSize=(\d+)/.exec(subtitleStyle(240, 96))?.[1]);
+    const size = Number(
+      /FontSize=(\d+)/.exec(subtitleStyle(240, 96, 320))?.[1]
+    );
     expect(size).toBeGreaterThanOrEqual(14);
+  });
+});
+
+describe("captionFontPx", () => {
+  it("scales with the band", () => {
+    expect(captionFontPx(captionBandPx(720))).toBe(34);
+    expect(captionFontPx(captionBandPx(900))).toBe(42);
+  });
+
+  it("is the same size subtitleStyle renders at", () => {
+    // The chars-per-line budget is a multiple of this, so a drift between the
+    // two would put a caption line over the frame width.
+    const band = captionBandPx(900);
+    const style = subtitleStyle(900 + band, band, 1440);
+    expect(style).toContain(`FontSize=${captionFontPx(band)}`);
+  });
+
+  it("stays legible on a tiny band", () => {
+    expect(captionFontPx(10)).toBe(14);
   });
 });
 
@@ -929,19 +1003,62 @@ describe("wrapCaption", () => {
 });
 
 describe("captionLineMax", () => {
-  it("gives the full budget at the 1280px default and scales down when narrow", () => {
-    expect(captionLineMax(1280)).toBe(48);
-    expect(captionLineMax(800)).toBe(30);
+  const budgetFor = (w: number, h: number) =>
+    captionLineMax(w, captionFontPx(captionBandPx(h)));
+
+  it("uses far more of the frame than the old width-only budget", () => {
+    // Both of these were 48 before, because the budget only looked at the width.
+    // Measured on burned frames, 48 chars of prose filled ~55% of a 1440x900
+    // frame — the "captions should use more of the width" report.
+    //
+    // The 1280x720 default computes 63 and takes the readability cap instead;
+    // 1440x900 is width-limited at 58.
+    expect(budgetFor(1280, 720)).toBe(60);
+    expect(budgetFor(1440, 900)).toBe(58);
   });
 
-  it("caps wide videos and floors tiny ones", () => {
-    expect(captionLineMax(1920)).toBe(48); // capped at CAPTION_LINE_MAX
-    expect(captionLineMax(320)).toBe(24); // floored
+  it("shrinks when the frame is taller for its width, not just narrower", () => {
+    // The font comes from the band, the band from the HEIGHT — so a 4:3 capture
+    // has a bigger font in the same width and must take fewer characters. A
+    // width-only budget gave all three of these the same 48 and overflowed the
+    // last one.
+    expect(budgetFor(1440, 900)).toBe(58);
+    expect(budgetFor(1440, 1080)).toBe(48);
+    expect(budgetFor(1280, 1024)).toBe(45);
   });
 
-  it("falls back to the default budget when width is unknown", () => {
-    expect(captionLineMax(undefined)).toBe(48);
-    expect(captionLineMax(0)).toBe(48);
+  it("caps a very wide frame for readability", () => {
+    // Two lines of the cap still hold the ~95-char narration maximum, and a
+    // longer single line stops being readable.
+    expect(budgetFor(3440, 1440)).toBe(60);
+  });
+
+  it("floors a tiny frame so it shows words rather than an ellipsis", () => {
+    expect(captionLineMax(120, 40)).toBe(12);
+  });
+
+  it("falls back to the cap when the probe gave nothing", () => {
+    expect(captionLineMax(undefined, undefined)).toBe(60);
+    expect(captionLineMax(0, 34)).toBe(60);
+    expect(captionLineMax(1280, 0)).toBe(60);
+    expect(captionLineMax(Number.NaN, 34)).toBe(60);
+  });
+
+  it("keeps the widest prose inside the frame at the budget it returns", () => {
+    // The invariant the measurements pin down: budget * (widest prose px/char)
+    // must stay under the frame width, or libass would have to re-wrap the line.
+    // 0.528 * FontSize is measured all-caps prose; the auto-wrap threshold is
+    // ~98% of the frame.
+    for (const [w, h] of [
+      [1280, 720],
+      [1440, 900],
+      [1440, 1080],
+      [800, 600],
+    ]) {
+      const font = captionFontPx(captionBandPx(h as number));
+      const widest = budgetFor(w as number, h as number) * 0.528 * font;
+      expect(widest).toBeLessThan((w as number) * 0.95);
+    }
   });
 });
 
