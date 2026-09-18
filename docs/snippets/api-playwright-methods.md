@@ -23,6 +23,11 @@
   for you, so you don't call `scrollIntoViewIfNeeded` first. `humanFill(target, text, opts)` takes
   `opts.click: false` (type without clicking — for a field that's already active, e.g. an open
   combobox a second click would dismiss) and `opts.clear: false` (append instead of replacing).
+  Typing has a human cadence (bursts, a slower reach for capitals and symbols, a hesitation at
+  word and clause breaks, a rare typo-and-correct) and is BOUNDED: the whole cadence is planned
+  up front and scaled to fit `opts.budgetMs` (default 4500) so a long value can't turn into
+  half a minute of film — raise it for a field where the typing itself is the demo, or pass
+  `opts.delay` for an exact, unscaled per-key delay. Every character always arrives
   NAVIGATING click (a link or a submit)?
   `humanClick` returns BEFORE the navigation commits — a `page.url()` or `snapshotForAI()` on the
   next line shows the OLD page. Either make that click the LAST action of the step (the step-end
@@ -44,10 +49,12 @@
   rendered into a caption band at `session end` in every mode; in cinematic/song cuts the text
   also feeds the narration/lyrics as intent — so keep calling it
 - `page.showSpotlight(target?)` — Dailies helper: animate a spotlight vignette to focus on an
-  element (`target` is a selector or locator). The spotlight opens wide then tightens to
-  circumscribe the element's bounding box, drawing the reviewer's eye before you interact.
-  Omit `target` to spotlight the current cursor position. Use for subtle elements a viewer
-  might miss — validation errors, small toggles, non-obvious fields
+  element (`target` is a selector or locator). The aperture opens wide then tightens to
+  circumscribe the element's bounding box while the surround deepens, so it reads as a camera
+  pushing in — drawing the reviewer's eye before you interact. Omit `target` to spotlight the
+  current cursor position. Use for subtle elements a viewer might miss — validation errors,
+  small toggles, non-obvious fields. There is deliberately NO page zoom: scaling the page would
+  move where clicks land, so this is how Dailies pushes in
 - `page.reveal(target)` — Dailies helper: smooth-scroll a region into view and glide the cursor onto
   it WITHOUT clicking (the `humanClick` motion minus the press). Use to show something in the
   recording; never `window.scrollTo` / `page.evaluate(() => scrollTo(...))` (invisible on camera).

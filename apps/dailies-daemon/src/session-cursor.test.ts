@@ -122,6 +122,114 @@ describe("session cursor", () => {
     }
   }, 30_000);
 
+  it("creeps briefly after landing, then goes completely still", async () => {
+    // The settle drift is what stops the cursor reading as a machine stopping
+    // dead — but it MUST end. `session end` condenses a recording by detecting
+    // frozen frames, so a cursor that never stops means nothing is trimmable
+    // and every film gets longer. This pins both halves of that contract.
+    const { context, page } = await pageWithCursor();
+    try {
+      const samples = await page.evaluate(async () => {
+        const el = document.getElementById("link");
+        if (!el) {
+          throw new Error("test fixture missing #link");
+        }
+        const r = el.getBoundingClientRect();
+        window.__dailiesCursor.glide(
+          r.left + r.width / 2,
+          r.top + r.height / 2,
+          el
+        );
+        const cursor = document.querySelector("dailies-virtual-cursor");
+        if (!cursor) {
+          throw new Error("cursor element missing");
+        }
+        const read = () => (cursor as HTMLElement).style.transform;
+        const wait = (ms: number) =>
+          new Promise((resolve) => setTimeout(resolve, ms));
+        // Let the glide itself finish first (its duration is distance-scaled
+        // and capped at GLIDE_MAX_MS), so what follows is the drift alone.
+        await wait(1300);
+        const afterLanding = read();
+        await wait(120);
+        const duringDrift = read();
+        // Past DRIFT_MS (900) plus the glide, the overlay must be static.
+        await wait(1400);
+        const settled = read();
+        await wait(350);
+        const stillSettled = read();
+        return { afterLanding, duringDrift, settled, stillSettled };
+      });
+
+      // It was still creeping shortly after the glide landed...
+      expect(samples.duringDrift).not.toBe(samples.afterLanding);
+      // ...and later it is genuinely frozen — two reads apart agree exactly.
+      expect(samples.stillSettled).toBe(samples.settled);
+    } finally {
+      await context.close();
+    }
+  }, 30_000);
+
+  it("paints the text caret transparent without disturbing the selection", async () => {
+    // A blinking caret toggles about twice a second, and the condense pass
+    // counts changed pixels — so each toggle is a lone changed frame that
+    // splits a long idle wait into stills too short to trim. Measured: a
+    // focused field held still for 9s produced changed frames 12-13 frames
+    // apart at 25fps. It cannot be filtered downstream (a typed character
+    // changes FEWER pixels than a caret toggle), so it is suppressed here.
+    const { context, page } = await pageWithCursor();
+    try {
+      await page.setContent(
+        '<input id="field" value="hello"><p id="para">some words</p>'
+      );
+      await page.waitForFunction(() =>
+        Boolean(document.querySelector("style[data-dailies-caret]"))
+      );
+      await page.focus("#field");
+
+      const computed = await page.evaluate(() => {
+        const field = document.getElementById("field");
+        const para = document.getElementById("para");
+        if (!(field && para)) {
+          throw new Error("test fixture missing");
+        }
+        return {
+          fieldCaret: getComputedStyle(field).caretColor,
+          rootCaret: getComputedStyle(document.documentElement).caretColor,
+          // Layout must be untouched — caret-color paints, it doesn't reflow.
+          fieldWidth: field.getBoundingClientRect().width,
+        };
+      });
+
+      expect(computed.fieldCaret).toBe("rgba(0, 0, 0, 0)");
+      expect(computed.rootCaret).toBe("rgba(0, 0, 0, 0)");
+      expect(computed.fieldWidth).toBeGreaterThan(0);
+
+      // Input still works — the caret is invisible, not disabled.
+      await page.fill("#field", "");
+      await page.type("#field", "typed");
+      expect(await page.inputValue("#field")).toBe("typed");
+
+      // And the native selection highlight that highlightText relies on is
+      // untouched: only caret-color is overridden, never ::selection.
+      const selected = await page.evaluate(() => {
+        const para = document.getElementById("para");
+        if (!para) {
+          throw new Error("test fixture missing #para");
+        }
+        const range = document.createRange();
+        range.selectNodeContents(para);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+        return window.getSelection()?.toString();
+      });
+      expect(selected).toBe("some words");
+    } finally {
+      await context.close();
+    }
+  }, 30_000);
+
   it("starts parked off-screen so it glides in on the first interaction", async () => {
     const { context, page } = await pageWithCursor();
     try {

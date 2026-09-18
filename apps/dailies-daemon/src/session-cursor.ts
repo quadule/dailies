@@ -62,6 +62,7 @@ export const SESSION_CURSOR_SCRIPT = `(() => {
   window.__dailiesCursor = state;
 
   const SIZE = 28;
+  let caretStyleEl = null;
   let animRaf = null;
   let vignetteEl = null;
   let vignetteHalfW = 0;
@@ -151,16 +152,40 @@ export const SESSION_CURSOR_SCRIPT = `(() => {
     v.style.transform = 'translate(' + (cx - vignetteHalfW) + 'px,' + (cy - vignetteHalfH) + 'px)';
     v.style.opacity = '1';
     // Animate radius: wide open → tight around the element (focus-in).
+    //
+    // This is as close to a ZOOM as Dailies gets, and deliberately so: a real
+    // zoom means scaling the page, and a CSS transform on the root makes that
+    // element the containing block for position:fixed descendants — which is
+    // exactly what this overlay and the cursor are — so the overlay's
+    // coordinate space stops agreeing with the viewport coordinates Playwright
+    // dispatches input in, and clicks land in the wrong place. A true zoom
+    // belongs in the video pipeline, after the fact, where it cannot move a
+    // click. So the push is sold with light instead of scale: the aperture
+    // closes AND the surround deepens together, which reads as the camera
+    // moving in even though nothing on the page has moved a pixel.
     var startR = 380;
     var duration = 650;
+    // Surround darkness travels with the aperture. A constant scrim made the
+    // tighten read as a mask sliding in; deepening it in step is what sells
+    // the push.
+    var startDark = 0.28;
+    var endDark = 0.66;
+    // A hair tighter than the target at ~85% of the way, then back out to
+    // exact — the same arrive-and-settle idea as the cursor's overshoot, and
+    // what a camera operator's hand does on a focus pull.
+    var settleR = Math.min(18, targetR * 0.12);
     var t0 = performance.now();
     function frame(now) {
       var t = Math.min((now - t0) / duration, 1);
       var et = t * t * (3 - 2 * t); // smooth-step ease-in-out
       var r = startR + (targetR - startR) * et;
+      if (et > 0.7) {
+        r -= Math.sin(((et - 0.7) / 0.3) * Math.PI) * settleR;
+      }
+      var dark = startDark + (endDark - startDark) * et;
       v.style.background =
-        'radial-gradient(circle ' + r.toFixed(0) + 'px at 50% 50%,' +
-        'transparent 35%,rgba(0,0,0,0.4) 100%)';
+        'radial-gradient(circle ' + Math.max(24, r).toFixed(0) + 'px at 50% 50%,' +
+        'transparent 35%,rgba(0,0,0,' + dark.toFixed(3) + ') 100%)';
       if (t < 1) {
         spotlightRaf = requestAnimationFrame(frame);
       } else {
@@ -197,11 +222,31 @@ export const SESSION_CURSOR_SCRIPT = `(() => {
   // Perpendicular bow of the path's mid-knots (tapers to 0 at both ends).
   const CURVE_FRAC = 0.12;
   const CURVE_MAX_PX = 48;
-  // Gentle arrive-with-momentum overshoot, long moves only, then settles exact.
-  const OVERSHOOT_MIN_PX = 280;
-  const OVERSHOOT_PX = 6;
+  // Gentle arrive-with-momentum overshoot, then settles exact. The threshold is
+  // deliberately well under half a viewport width: at a 1280x720 recording most
+  // purposeful moves are 150-400px, so a 280px floor meant the overshoot almost
+  // never fired and the cursor stopped dead on nearly every target — the one
+  // motion tell that reads unmistakably as a machine. Amplitude still scales
+  // with distance (dist * 0.03), so a move just over the threshold gets a
+  // barely-there correction and only a long reach gets the full OVERSHOOT_PX.
+  const OVERSHOOT_MIN_PX = 170;
+  const OVERSHOOT_PX = 9;
   // Sub-pixel liveness in flight; fades to 0 on landing so the rest is still.
   const TREMOR_PX = 0.6;
+  // Post-landing settle drift: a real hand doesn't stop dead, it creeps for a
+  // moment before going still. STRICTLY BOUNDED, and the bound is not about
+  // taste — "session end" condenses the recording by detecting FROZEN frames
+  // (ffmpeg freezedetect), so a cursor that drifts forever means no frame is
+  // ever frozen, nothing is trimmable, and every film gets longer instead of
+  // tighter. Sub-pixel doesn't save you either: antialiasing changes real
+  // pixels. So the drift runs for under a second and then the overlay is
+  // genuinely static, which leaves any hold longer than that trimmable.
+  // MEASURED at these values: a session whose only step glides once and then
+  // holds perfectly still for 12s condensed 16.4s -> 3.1s, i.e. freeze
+  // detection still found the hold. Raise DRIFT_MS much past a second and you
+  // are trading the film's pace for a motion tell nobody consciously notices.
+  const DRIFT_MS = 900;
+  const DRIFT_PX = 1.1;
 
   // Gesture tunables (circle / underline / point / highlight). A deliberate
   // gesture is shakier than a glide, so its hand-wobble is a touch larger.
@@ -328,10 +373,45 @@ export const SESSION_CURSOR_SCRIPT = `(() => {
         setTransform(x, y);
         updateVignette(x, y);
         animRaf = null;
+        if (!reduced) {
+          settleDrift(x, y);
+        }
       }
     }
     animRaf = requestAnimationFrame(step);
     return duration;
+  }
+
+  // Creep for DRIFT_MS after landing, then go completely still. Two sines at
+  // incommensurate rates so the path doesn't visibly repeat, and it finishes by
+  // snapping to the exact target (a sub-pixel correction) so the resting
+  // position is the one the host asked for — the click that follows lands on
+  // the element's centre either way, since the press is dispatched by
+  // Playwright from the element's own geometry, not from this overlay.
+  //
+  // Deliberately moves the TRANSFORM only, never state.x/state.y: the logical
+  // position stays the exact target, so the next glide measures its distance
+  // from where the cursor was sent rather than from wherever the creep left it,
+  // and nothing here writes to sessionStorage on every frame.
+  function settleDrift(x, y) {
+    const t0 = performance.now();
+    function drift(now) {
+      const t = (now - t0) / DRIFT_MS;
+      if (t >= 1) {
+        setTransform(x, y);
+        updateVignette(x, y);
+        animRaf = null;
+        return;
+      }
+      // Fade the amplitude out so the motion dies away rather than stopping.
+      const a = DRIFT_PX * (1 - t);
+      const bx = x + Math.sin(t * 7.1) * a;
+      const by = y + Math.sin(t * 4.3 + 1.7) * a;
+      setTransform(bx, by);
+      updateVignette(bx, by);
+      animRaf = requestAnimationFrame(drift);
+    }
+    animRaf = requestAnimationFrame(drift);
   }
 
   const ARROW_SVG =
@@ -421,6 +501,59 @@ export const SESSION_CURSOR_SCRIPT = `(() => {
     host.appendChild(el);
     state.cursor = el;
     return el;
+  }
+
+  // Paint the text caret transparent for the recording.
+  //
+  // WHY, measured. The condense pass detects motion by counting CHANGED PIXELS
+  // per frame, so it sees the virtual cursor (ffmpeg's freezedetect thresholds
+  // the MEAN frame difference and was blind to a 28px overlay). That
+  // sensitivity is what makes the cut safe, and it is also what makes a
+  // blinking caret expensive: the caret toggles about twice a second, each
+  // toggle is ONE changed frame, so a long idle wait in a focused field is
+  // chopped into ~0.46s stills that are each too short to trim, and a page
+  // doing nothing survives in full.
+  //
+  // It cannot be filtered downstream. Measured on real footage, typing one
+  // character changes 0.000086 of the frame and a 2x18px caret toggle changes
+  // 0.000028 — a typed character is SMALLER than a caret, and both arrive as a
+  // lone changed frame between stills. Any size bound that absorbs the caret
+  // also absorbs typing, which would make text appear in a field instantly
+  // instead of being typed. So it has to be fixed in the recording.
+  //
+  // And it does blink here. Measured on a recorded session that focused a field
+  // and then held still for 9s: 51 of the gaps between changed frames were
+  // exactly 12-13 frames at 25fps (0.48-0.52s) — a textbook caret toggle.
+  //
+  // caret-color is purely presentational: no layout, no hit-testing, no input
+  // behaviour, and it leaves ::selection alone so highlightText's native
+  // selection paint still works. Playwright's own screenshot caret:"hide" option
+  // does the same thing, so there is precedent for hiding it on camera.
+  //
+  // Both selectors are load-bearing. The :root rule is what reaches into shadow trees
+  // — caret-color is inherited, and inheritance crosses a shadow boundary, so a
+  // web component whose own CSS says nothing about the caret gets it from here.
+  // The universal rule is what beats a page that sets caret-color on its own inputs, since
+  // inheritance only supplies a value to an element that has no declaration of
+  // its own, and !important then wins over any non-important page rule whatever
+  // its specificity. A component that sets caret-color INSIDE its own shadow
+  // stylesheet still wins — accepted: rare, and the alternative is walking
+  // every shadow root on an interval.
+  function ensureCaretStyle() {
+    if (caretStyleEl && caretStyleEl.isConnected) {
+      return;
+    }
+    const host = document.head || document.documentElement;
+    if (!host) {
+      return;
+    }
+    const el = document.createElement('style');
+    el.setAttribute('data-dailies-caret', 'hidden');
+    el.textContent =
+      ':root{caret-color:transparent !important}' +
+      '*{caret-color:transparent !important}';
+    host.appendChild(el);
+    caretStyleEl = el;
   }
 
   function moveTo(x, y) {
@@ -792,6 +925,12 @@ export const SESSION_CURSOR_SCRIPT = `(() => {
   })();
 
   function arm() {
+    // Unconditional, unlike the cursor: only the top frame draws a cursor
+    // eagerly (one per ad/embed iframe would be several cursors), but a focused
+    // field inside ANY frame blinks a caret into the same recording, so the
+    // caret style goes everywhere the script runs. Re-checked on the same
+    // interval so it survives an SPA wiping the DOM and document.open().
+    ensureCaretStyle();
     if (isTopFrame) {
       ensureCursor();
       refreshGlyph();

@@ -76,7 +76,9 @@ The page records at a fixed 1440x900 desktop viewport — override with --viewpo
 Pick a size deliberately when a flow depends on a responsive breakpoint: an element
 hidden by a media query is in the DOM but never visible, and reads as a bad selector.
 A virtual cursor + click animation is drawn into the recording so interactions are visible
-in video and screenshots; disable it with --no-cursor.
+in video and screenshots, and the text caret is hidden (a blinking caret in a focused field
+is noise on camera, and it defeats the video's dead-air trimming). --no-cursor disables all
+of that, caret included.
 Pass --url <url> to open (and settle) a page at session start, so the recording begins on a
 loaded page instead of the initial blank one — the pre-load blank is trimmed off the video head
 at \`session end\`. Your first step then acts on the already-loaded page.

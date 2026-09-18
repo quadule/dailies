@@ -1505,6 +1505,61 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
       expect(fastCalls.length).toBeGreaterThanOrEqual(1);
     }, 15_000);
 
+    it("humanFill keeps a long value's typing inside the keystroke budget", async () => {
+      // The cadence is randomized on purpose, so this asserts a RANGE rather
+      // than a duration: a long value must finish in roughly its budget, and
+      // must still type every character.
+      //
+      // Why it needs a bound at all: the per-key cadence is ~45-80ms plus
+      // reach costs plus a hesitation at every word and clause boundary. Left
+      // unbounded, a 240-character value is 25s+ of a recording spent watching
+      // a form field fill in — which is exactly the dead footage the video
+      // pipeline then has to condense back out.
+      //
+      // budgetMs is passed explicitly (rather than leaning on the 4500ms
+      // default) so the assertion states the contract instead of restating a
+      // constant that may be tuned by eye later.
+      const text =
+        "The quick brown fox jumps over the lazy dog, and then the dog, " +
+        "unimpressed, files a formal complaint with the local authority. " +
+        "It is upheld on appeal; the fox pays a modest fine and moves away.";
+      const result = await harness.runJson<{
+        elapsedMs: number;
+        value: string;
+      }>(
+        withTestPage(
+          "human-fill-budget",
+          `
+          const text = ${JSON.stringify(text)};
+          const start = Date.now();
+          await page.humanFill("#bio", text, { budgetMs: 2000 });
+          const elapsedMs = Date.now() - start;
+          console.log(JSON.stringify({
+            elapsedMs,
+            value: await page.inputValue("#bio"),
+          }));
+        `
+        )
+      );
+
+      // Every character arrived — scaling the cadence must never truncate the
+      // value or drop a key.
+      expect(result.value).toBe(text);
+
+      // The keystrokes fit the budget. The floor is the reveal/glide settle
+      // plus the pre-type beat, which sit OUTSIDE budgetMs by design; the
+      // ceiling is the budget plus those beats plus per-key round-trip
+      // overhead (each keystroke is a sandbox->daemon->CDP hop, so ~160 keys
+      // carry real fixed cost that no budget can scale away).
+      expect(result.elapsedMs).toBeGreaterThan(1000);
+      expect(result.elapsedMs).toBeLessThan(12_000);
+
+      // And the scaled cadence is still SLOWER than a machine: if the budget
+      // had been applied by simply zeroing the delays, 160-odd keys would come
+      // in far under a second of actual typing.
+      expect(result.elapsedMs).toBeGreaterThan(1800);
+    }, 40_000);
+
     it("humanClick settles a DOM rebuild after acting, via Locator.click()'s own self-settle (not the daemon hostCall)", async () => {
       // Same delayed-DOM-mutation proof as the raw locator.click() test, but
       // through humanClick — proving clickCore's underlying

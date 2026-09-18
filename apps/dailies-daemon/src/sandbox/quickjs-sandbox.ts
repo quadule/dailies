@@ -705,10 +705,22 @@ export class QuickJSSandbox {
                   if (r.width === 0 && r.height === 0) {
                     return null;
                   }
-                  // glide returns the distance-scaled duration it picked.
+                  // Aim NEAR the centre, not exactly at it. Hitting the precise
+                  // geometric centre of every button and field is the other
+                  // mechanical tell (the first was the park below): a person
+                  // lands somewhere in the middle of a control, a different
+                  // somewhere each time. Kept to a fraction of the element and
+                  // capped in pixels, so the cursor is always well inside the
+                  // target — on a small control the jitter collapses to nothing.
+                  //
+                  // Only the CURSOR moves here. Playwright dispatches the real
+                  // click through its own actionability protocol (element centre),
+                  // so nothing about where input lands changes.
+                  const off = (extent) =>
+                    (Math.random() * 2 - 1) * Math.min(extent * 0.22, 18);
                   const ms = window.__dailiesCursor?.glide(
-                    r.left + r.width / 2,
-                    r.top + r.height / 2,
+                    r.left + r.width / 2 + off(r.width),
+                    r.top + r.height / 2 + off(r.height),
                     el,
                   );
                   return typeof ms === "number" ? ms : 0;
@@ -811,22 +823,64 @@ export class QuickJSSandbox {
                 const shouldClear = !(options && options.clear === false);
                 await revealAndGlide(page, locator);
                 if (shouldClick) await locator.click();
-                // Park the cursor just above the field so it doesn't sit on top
+                // Park the cursor just clear of the field so it doesn't sit on top
                 // of the text as it's typed. Visual only (no DOM interaction), so
                 // it's safe even when the click is skipped.
+                //
+                // The destination must NOT be a fixed offset from one corner. It
+                // used to be "left + 8..24", which put the cursor at the field's
+                // top-LEFT corner after every single click — a ±16px jitter on a
+                // 300px field reads as no variation at all, and on camera the
+                // mouse visibly snapped to the same spot on every field in the
+                // form. So drift from where the click actually LANDED, spread
+                // across the field's own width.
+                //
+                // Still always ABOVE the field: below is where a combobox opens
+                // its options (TomSelect, a datepicker), and parking there covers
+                // the very list the viewer needs to see.
                 await locator
                   .evaluate((el) => {
                     const r = el.getBoundingClientRect();
-                    window.__dailiesCursor?.park(
-                      r.left + 8 + Math.random() * 16,
-                      r.top - 12 + Math.random() * 14
+                    const cursor = window.__dailiesCursor;
+                    const from =
+                      typeof cursor?.x === "number"
+                        ? cursor.x
+                        : r.left + r.width / 2;
+                    // Bounded by the field so the cursor never parks off the
+                    // control it just used, and collapses to a nudge on a narrow one.
+                    const spread = Math.max(0, Math.min(r.width / 2 - 8, 70));
+                    const x = Math.min(
+                      r.right - 6,
+                      Math.max(r.left + 6, from + (Math.random() * 2 - 1) * spread)
                     );
+                    cursor?.park(x, r.top - (6 + Math.random() * 16));
                   })
                   .catch(() => undefined);
                 if (shouldClear) await locator.fill("");
                 // Type with variable per-character timing for a natural human rhythm.
                 const chars = Array.from(String(text));
                 const fixedDelay = options && 'delay' in options ? options.delay : null;
+                // Keystroke budget (the typing only — the pre-type beat and the
+                // post-type rest sit outside it). Typed at full human leisure a
+                // long value is film nobody watches. MEASURED, 193 characters
+                // into a textarea: 26.2s unbounded, 7.9s with this budget, same
+                // text arriving character for character. So the cadence is
+                // PLANNED up front, summed, and scaled to fit — which keeps the
+                // rhythm (the ratios between a fluent key and a hesitation)
+                // while capping the wall clock. Short fills (a name, an email —
+                // the overwhelming majority) come in under budget and are
+                // untouched. Raise it per call for the rare field where the
+                // typing itself is the thing being demonstrated.
+                //
+                // The budget cannot take a long fill below its round-trip floor:
+                // every keystroke is a sandbox->daemon->CDP hop (~15ms), so
+                // those same 193 characters carry ~2.9s of fixed cost that no
+                // scaling touches — which is most of the gap between the 4500ms
+                // budget and the 7.9s measured above.
+                const budgetMs =
+                  options && typeof options.budgetMs === 'number'
+                    ? options.budgetMs
+                    : 4500;
                 // Always pause between landing on the field and the first
                 // keystroke — a person never clicks and types in the same
                 // instant, and typing onto a field that hasn't visibly focused
@@ -839,6 +893,81 @@ export class QuickJSSandbox {
                       ? 250 + Math.random() * 250
                       : 120;
                 if (preType > 0) await page.waitForTimeout(preType);
+                // Plan the whole cadence before typing a single key, so the
+                // total is known and can be scaled to budgetMs. Deciding each
+                // delay as you go can't be bounded without either truncating
+                // the tail (the last word suddenly types at machine speed) or
+                // guessing a per-key cap up front (which flattens the rhythm
+                // the pauses exist to create).
+                //
+                // What makes the rhythm read as a person rather than a metronome:
+                //  - bursts. Real typing comes in fluent runs of a few
+                //    characters, then the hands re-settle. This is independent
+                //    of the text's grammar, which is why it isn't folded into
+                //    the punctuation rule below.
+                //  - reach cost. A capital is a shift chord and a digit or
+                //    symbol is a trip off the home row; both are measurably
+                //    slower than a lowercase letter.
+                //  - hesitation. A clause boundary is where a person stops to
+                //    think; a word break is a shorter version of the same.
+                const plan = [];
+                let burstLeft = 3 + Math.floor(Math.random() * 5);
+                for (let i = 0; i < chars.length; i++) {
+                  const ch = chars[i];
+                  if (fixedDelay !== null) {
+                    plan.push(fixedDelay);
+                    continue;
+                  }
+                  let d = 45 + Math.random() * 35;
+                  if (/[A-Z]/.test(ch)) {
+                    d += 25 + Math.random() * 35;
+                  } else if (/[^a-z\\s]/i.test(ch)) {
+                    d += 30 + Math.random() * 45;
+                  }
+                  if (/[.!?,;:]/.test(ch)) {
+                    d += 90 + Math.random() * 170;
+                  } else if (/\\s/.test(ch)) {
+                    d += 40 + Math.random() * 90;
+                  }
+                  burstLeft -= 1;
+                  if (burstLeft <= 0) {
+                    d += 70 + Math.random() * 180;
+                    burstLeft = 3 + Math.floor(Math.random() * 5);
+                  }
+                  plan.push(d);
+                }
+                // Scale, don't truncate: every delay shrinks by the same factor,
+                // so a long value types faster but still hesitates in the same
+                // places. A fixed-delay (deterministic) caller is never scaled —
+                // it asked for an exact cadence.
+                //
+                // MIN_KEY_MS is the floor that keeps this honest, and it was
+                // added after measuring the failure. 400 characters against the
+                // 4500ms budget scales the plan to a ~10ms median gap between
+                // keystrokes — at that point waitForTimeout is below the
+                // per-key round-trip cost, contributes nothing, and the field
+                // fills at machine speed. Measured: 294 of 399 gaps under 20ms,
+                // which on camera reads as a paste with jitter, not typing.
+                // So the budget is BEST-EFFORT: it scales the cadence down
+                // until the floor binds, and past that the floor wins and the
+                // total exceeds the budget. That is the right trade — a value
+                // too long to type believably in its budget should look slow,
+                // not look pasted. (Above roughly budgetMs / MIN_KEY_MS
+                // characters the floor governs; at the 4500ms default that is
+                // about 160. A value far past that is a paste in real life too,
+                // so consider whether the recording needs to show it typed.)
+                const MIN_KEY_MS = 28;
+                let planned = 0;
+                for (let i = 0; i < plan.length; i++) planned += plan[i];
+                const pace =
+                  fixedDelay === null && planned > budgetMs && planned > 0
+                    ? budgetMs / planned
+                    : 1;
+                if (pace < 1) {
+                  for (let i = 0; i < plan.length; i++) {
+                    plan[i] = Math.max(MIN_KEY_MS, plan[i] * pace);
+                  }
+                }
                 // QWERTY neighbours for the occasional fat-finger typo.
                 const NEIGHBORS = { a:'sq', s:'ad', d:'sf', f:'dg', g:'fh', h:'gj', j:'hk', k:'jl', l:'k', e:'rw', r:'et', t:'ry', i:'ou', o:'ip', u:'yi', n:'mb', m:'n' };
                 let didTypo = false;
@@ -848,8 +977,12 @@ export class QuickJSSandbox {
                   // then the right one. Only ADDS key/input events (the count
                   // assertion stays valid) and never changes the final value. Once
                   // per fill, never on the last char, and not in fixed-delay mode.
+                  // Skipped entirely on a scaled (over-budget) fill: that value is
+                  // already being hurried, so spending ~300ms on a flourish there
+                  // would defeat the budget it was scaled to meet.
                   if (
                     fixedDelay === null &&
+                    pace === 1 &&
                     !didTypo &&
                     i < chars.length - 1 &&
                     /[a-z]/i.test(ch) &&
@@ -868,20 +1001,17 @@ export class QuickJSSandbox {
                     }
                   }
                   await locator.pressSequentially(ch, { delay: 0 });
-                  let delay;
-                  if (fixedDelay !== null) {
-                    delay = fixedDelay;
-                  } else {
-                    // Bursts of fluent typing separated by short thinking pauses.
-                    delay = 45 + Math.random() * 35;
-                    if (ch === ' ' || /[.!?,;:]/.test(ch)) {
-                      delay += 80 + Math.random() * 160;
-                      // Small chance of a longer pause at a word break.
-                      if (Math.random() < 0.15) delay += 250 + Math.random() * 350;
-                    }
-                  }
+                  const delay = plan[i];
                   if (delay > 0) await page.waitForTimeout(delay);
                 }
+                // Rest on the finished field before anything else happens. Two
+                // reasons: the completed value needs a beat to be legible on
+                // camera, and whatever the field commit triggers (blur
+                // validation, a dependent rebuild, a submit button enabling)
+                // then reads as a CONSEQUENCE of the typing rather than
+                // something that happened during it.
+                const postType = fixedDelay === null ? 220 + Math.random() * 200 : 80;
+                await page.waitForTimeout(postType);
                 // Typing into a field routinely fires inline validation or a
                 // dependent-field rebuild; settle so the next interaction sees
                 // the committed DOM.
