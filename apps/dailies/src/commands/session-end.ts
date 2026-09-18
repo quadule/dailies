@@ -119,7 +119,7 @@ export const STEP_PAD_AFTER_SEC = 1.5;
 // results.json. Keeping its window would pad the condensed cut (and the cinematic
 // demo) with dead air from attempts that didn't work; dropping it trims those
 // stuck retries out. If every step failed we return no windows and condenseVideo
-// falls back to whole-video freezedetect, so a wholly-failed run still trims.
+// falls back to the whole-video motion pass, so a wholly-failed run still trims.
 export function stepKeepWindows(record: SessionRecord): Segment[] {
   const t0 = Date.parse(record.createdAt);
   if (!Number.isFinite(t0)) {
@@ -246,7 +246,7 @@ export function isDegradedEnd(args: {
 // refreshing each artifact's byte size so the manifest reflects the condensed
 // file. Interaction-aware when the session has timed steps: keep the step
 // windows, trim the idle gaps / leading load / trailing tail. Otherwise fall
-// back to freezedetect. Best-effort: without ffmpeg or on failure, originals
+// back to the motion pass alone. Best-effort: without ffmpeg or on failure, originals
 // are kept and the report renders unchanged.
 export interface CaptionCue {
   endSec: number;
@@ -453,7 +453,7 @@ async function condenseSessionVideos(
   const protectWindows = captionKeepWindows(record, captions);
   // A session start --url stamped when its page finished settling; trim the video
   // head to that (same clock basis as createdAt) so the pre-load about:blank is
-  // dropped even in the freezedetect / near-t0-first-step cases.
+  // dropped even in the no-windows / near-t0-first-step cases.
   const headTrimSec = contentStartFloorSec(record);
   // Re-encoding can take a few seconds per video; without feedback the command
   // looks hung. Progress goes to stderr (stdout stays machine-readable).

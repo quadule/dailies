@@ -233,7 +233,7 @@ describe("stepKeepWindows", () => {
     expect(windows).toEqual([windowFor(33, 1)]);
   });
 
-  it("returns no windows when every step failed (falls back to freezedetect)", () => {
+  it("returns no windows when every step failed (falls back to the motion pass)", () => {
     const windows = stepKeepWindows(
       recordWith([
         step({ startedAt: "2026-06-02T10:00:02.000Z", ok: false, exitCode: 1 }),
