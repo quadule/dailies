@@ -262,3 +262,65 @@ describe("ElevenLabs credits", () => {
     ]);
   });
 });
+
+describe("configured-but-unusable providers", () => {
+  it("prefers the gathered reason over the generic 'set X' hint", () => {
+    const s = selectMediaProviders({
+      candidates: {
+        ...nothing,
+        unavailable: {
+          elevenlabs:
+            "ELEVENLABS_API_KEY is set but ElevenLabs rejected it or could not be reached (see the notes)",
+        },
+      },
+      preferences: { narrator: "elevenlabs" },
+    });
+    expect(s.skip).toContain("rejected it");
+    expect(s.skip).not.toContain("set ELEVENLABS_API_KEY");
+  });
+
+  it("falls back to the generic hint when no reason was gathered", () => {
+    const s = selectMediaProviders({
+      candidates: nothing,
+      preferences: { music: "acestep" },
+    });
+    expect(s.notes.join("\n")).toContain("start the ACE-Step server");
+  });
+});
+
+describe("writer credit", () => {
+  it("names the text provider that actually wrote the words", () => {
+    expect(
+      buildModelCredits({
+        writer: "gpt-4o-mini (OpenAI-compatible)",
+        voiceLabel: "Samantha",
+        ttsId: undefined,
+        musicId: undefined,
+        titleArtId: undefined,
+      })[0]
+    ).toBe("Narration — gpt-4o-mini (OpenAI-compatible)");
+    expect(
+      buildModelCredits({
+        writer: "Apple Intelligence (on-device)",
+        voiceLabel: "",
+        ttsId: undefined,
+        musicId: undefined,
+        titleArtId: undefined,
+        song: true,
+      })[0]
+    ).toBe("Lyrics — Apple Intelligence (on-device)");
+  });
+
+  it("keeps the default provider's label when the writer is unknown", () => {
+    // A pinned song saved before the writer was recorded has no credit line.
+    expect(
+      buildModelCredits({
+        voiceLabel: "",
+        ttsId: undefined,
+        musicId: undefined,
+        titleArtId: undefined,
+        song: true,
+      })[0]
+    ).toBe("Lyrics — Claude (Anthropic)");
+  });
+});

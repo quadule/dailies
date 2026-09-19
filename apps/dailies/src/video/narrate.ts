@@ -46,7 +46,10 @@ import {
   type Contributor,
   type CreditSection,
 } from "./credits.js";
-import { resolveElevenLabsProviders } from "./elevenlabs.js";
+import {
+  readElevenLabsApiKey,
+  resolveElevenLabsProviders,
+} from "./elevenlabs.js";
 import {
   audioDurationSec,
   availableFilters,
@@ -556,6 +559,8 @@ async function planNarration(args: {
   | {
       direction: ReturnType<typeof resolveDirection>;
       narration: Narration;
+      // Credit line for the text provider that wrote it (see writerCredit).
+      writer: string;
       repoDir: string;
       base: string;
     }
@@ -586,7 +591,13 @@ async function planNarration(args: {
   if ("error" in result) {
     return { error: result.error };
   }
-  return { direction, narration: result.value, repoDir, base };
+  return {
+    direction,
+    narration: result.value,
+    writer: result.writer,
+    repoDir,
+    base,
+  };
 }
 
 // Song-mode counterpart of planNarration: resolve the creative direction (theme
@@ -603,6 +614,8 @@ async function planSong(args: {
   | {
       direction: ReturnType<typeof resolveDirection>;
       lyrics: Lyrics;
+      // Credit line for the text provider that wrote them (see writerCredit).
+      writer: string;
       repoDir: string;
       base: string;
     }
@@ -631,7 +644,13 @@ async function planSong(args: {
   if ("error" in result) {
     return { error: result.error };
   }
-  return { direction, lyrics: result.value, repoDir, base };
+  return {
+    direction,
+    lyrics: result.value,
+    writer: result.writer,
+    repoDir,
+    base,
+  };
 }
 
 // A friendly source name for the music provider, for the "Made with" block.
@@ -671,9 +690,10 @@ export function voiceCredit(
   return label ? `Voice — ${label}` : "Voice — system speech";
 }
 
-// The "Made with" tool credits actually used this run. The `claude` CLI always
-// writes the words (narration, or lyrics in song mode); voice/music/title-art
-// depend on what was resolved. In song mode there's no spoken voice, so the voice
+// The "Made with" tool credits actually used this run. The text provider that
+// wrote the words (narration, or lyrics in song mode) is credited by name —
+// it may be the `claude` CLI, an OpenAI-compatible model, or Apple
+// Intelligence; voice/music/title-art depend on what was resolved. In song mode there's no spoken voice, so the voice
 // line is dropped and the music (the sung song) is primary. Pure → unit-tested.
 //
 // `hasMusicCredit` is set when a dedicated "Music" credit section already names
@@ -682,6 +702,10 @@ export function voiceCredit(
 // here is redundant (it was crediting ACE-Step/Lyria a second time), so it's
 // dropped and the richer section stands alone.
 export function buildModelCredits(args: {
+  // Who wrote the words — the text provider's credit line (see writerCredit in
+  // ../llm). Falls back to the default provider when unknown (a pinned song
+  // saved before this was recorded).
+  writer?: string;
   voiceLabel: string;
   ttsId: string | undefined;
   musicId: string | undefined;
@@ -697,11 +721,8 @@ export function buildModelCredits(args: {
   song?: boolean;
   hasMusicCredit?: boolean;
 }): string[] {
-  const models = [
-    args.song
-      ? "Lyrics — Claude (Anthropic)"
-      : "Narration — Claude (Anthropic)",
-  ];
+  const writer = args.writer?.trim() || "Claude (Anthropic)";
+  const models = [args.song ? `Lyrics — ${writer}` : `Narration — ${writer}`];
   if (!args.song) {
     models.push(voiceCredit(args.ttsId, args.voiceLabel));
   }
@@ -957,6 +978,7 @@ async function assembleVideo(args: {
   directionText: string;
   providers: MediaProviders;
   voiceLabel: string;
+  writer: string;
   hasDrawtext: boolean;
   repoDir: string;
   base: string;
@@ -984,6 +1006,7 @@ async function assembleVideo(args: {
     directionText,
     providers,
     voiceLabel,
+    writer,
     hasDrawtext,
     repoDir,
     base,
@@ -1087,6 +1110,7 @@ async function assembleVideo(args: {
         contributors,
         music: musicCredit,
         models: buildModelCredits({
+          writer,
           voiceLabel,
           ttsId: providers.tts?.id,
           musicId: providers.music?.id,
@@ -1228,6 +1252,9 @@ async function assembleSongVideo(args: {
   category: ThemeCategory | undefined;
   directionText: string;
   providers: MediaProviders;
+  // Credit line for whoever wrote the lyrics; undefined for a pinned song saved
+  // before it was recorded.
+  writer?: string;
   hasDrawtext: boolean;
   repoDir: string;
   base: string;
@@ -1345,6 +1372,7 @@ async function assembleSongVideo(args: {
         contributors,
         music: musicCredit,
         models: buildModelCredits({
+          writer: args.writer,
           voiceLabel: "",
           ttsId: undefined,
           musicId: providers.music?.id,
@@ -2421,6 +2449,10 @@ export interface MediaCandidates {
     gemini?: TtsProvider;
     omlx?: TtsProvider;
   };
+  // Why a CONFIGURED provider still isn't a candidate (a rejected key, an
+  // unreachable server), by provider name — shown instead of the generic
+  // "set X" hint when that provider is pinned.
+  unavailable?: Partial<Record<string, string>>;
 }
 
 export interface MediaSelection {
@@ -2437,7 +2469,12 @@ export interface MediaSelection {
   skip?: string;
 }
 
-// The fix for a pinned provider that isn't available, by provider name.
+// The fix for a pinned provider that isn't configured at all, by provider name.
+// When a provider IS configured but still didn't resolve (a rejected key, an
+// unreachable server), the gathering step records the specific reason in
+// `MediaCandidates.unavailable` and that wins over this generic hint — telling
+// someone to "set ELEVENLABS_API_KEY" when it is set and rejected sends them the
+// wrong way.
 const UNAVAILABLE_HINT: Record<string, string> = {
   acestep:
     "start the ACE-Step server (DAILIES_ACESTEP_URL for a non-default port)",
@@ -2450,8 +2487,12 @@ const UNAVAILABLE_HINT: Record<string, string> = {
   wikimedia: "Wikimedia Commons needs network access",
 };
 
-function unavailable(name: string): string {
-  return `${name} is not available — ${UNAVAILABLE_HINT[name] ?? "not configured"}`;
+function unavailable(
+  name: string,
+  reasons: MediaCandidates["unavailable"]
+): string {
+  const why = reasons?.[name] ?? UNAVAILABLE_HINT[name] ?? "not configured";
+  return `${name} is not available — ${why}`;
 }
 
 // Pick ONE provider per slot from the candidates. Without a preference the
@@ -2515,7 +2556,7 @@ function selectNarrator(
     return tts
       ? { tts }
       : {
-          skip: `narrator pinned to ${p.narrator} but ${unavailable(p.narrator)}`,
+          skip: `narrator pinned to ${p.narrator} but ${unavailable(p.narrator, c.unavailable)}`,
         };
   }
   return { tts: c.tts.omlx ?? c.tts.elevenlabs ?? c.tts.gemini };
@@ -2534,7 +2575,7 @@ function selectMusic(
     return music
       ? { music }
       : {
-          note: `music pinned to ${p.music} but ${unavailable(p.music)}; no score`,
+          note: `music pinned to ${p.music} but ${unavailable(p.music, c.unavailable)}; no score`,
         };
   }
   return {
@@ -2567,7 +2608,7 @@ function selectSinger(
     return {
       skip: music
         ? `song mode needs a model that sings the lyrics — ${p.music} can't (pin elevenlabs, gemini or acestep instead)`
-        : `music pinned to ${p.music} but ${unavailable(p.music)}`,
+        : `music pinned to ${p.music} but ${unavailable(p.music, c.unavailable)}`,
     };
   }
   return {
@@ -2600,7 +2641,7 @@ function selectTitleArt(
       ? { titleBackground, noTitleBackground: false }
       : {
           noTitleBackground: false,
-          note: `title art pinned to ${p.image} but ${unavailable(p.image)}; using the local gradient`,
+          note: `title art pinned to ${p.image} but ${unavailable(p.image, c.unavailable)}; using the local gradient`,
         };
   }
   return {
@@ -2650,6 +2691,24 @@ async function resolveMedia(args: {
   ]);
   const gemini = resolveMediaProviders({ env, log });
   const localImage = resolveLocalImage({ env, log, echo });
+  // Configured-but-unusable providers, so a pin's failure names the real cause
+  // rather than telling the user to set a variable they already set.
+  const unavailable: Partial<Record<string, string>> = {};
+  if (readElevenLabsApiKey(env) && !(elevenlabs.tts || elevenlabs.music)) {
+    unavailable.elevenlabs =
+      "ELEVENLABS_API_KEY is set but ElevenLabs rejected it or could not be reached (see the notes)";
+  }
+  const acestepUrl = env.DAILIES_ACESTEP_URL?.trim();
+  if (acestepUrl && !acestep.music) {
+    unavailable.acestep = `the ACE-Step server at ${acestepUrl} is unreachable or has no model loaded`;
+  }
+  const omlxConfigured = Boolean(
+    env.DAILIES_OMLX_URL?.trim() || env.DAILIES_OMLX_API_KEY?.trim()
+  );
+  if (!song && omlxConfigured && !omlx.tts) {
+    unavailable.omlx =
+      "oMLX is configured but unreachable or has no TTS model loaded (see the notes)";
+  }
   // Stock/free fallbacks: archive.org music and Wikimedia images turn ON
   // automatically when no corresponding AI MODEL is configured (and no slot is
   // pinned elsewhere), so a plain `--cinematic` run still gets a score + real
@@ -2690,6 +2749,7 @@ async function resolveMedia(args: {
         gemini: gemini.music,
       },
       archiveExplicit: archive.explicit,
+      unavailable,
       image: {
         local: localImage.titleBackground,
         gemini: gemini.titleBackground,
@@ -2936,7 +2996,7 @@ async function runNarrationPass(
   if ("error" in planned) {
     return notApplied(`narration generation failed: ${planned.error}`);
   }
-  const { direction, narration, repoDir, base } = planned;
+  const { direction, narration, writer, repoDir, base } = planned;
 
   // Default the title-card background to a local themed gradient when no
   // generated-image provider is configured — network-free and always
@@ -2997,6 +3057,7 @@ async function runNarrationPass(
     directionText: direction.theme,
     providers,
     voiceLabel: speech.label,
+    writer,
     hasDrawtext: ctx.hasDrawtext,
     repoDir,
     base,
@@ -3212,8 +3273,11 @@ interface SongScript {
   pinnedSong: string;
   repoDir: string;
   reusing: boolean;
-  // The pinned song's sidecar holding {direction, lyrics, lrcText}.
+  // The pinned song's sidecar holding {direction, lyrics, lrcText, writer}.
   songCache: string;
+  // Credit line for the text provider that wrote the lyrics; absent when a
+  // pinned song was saved before this was recorded.
+  writer?: string;
 }
 
 // Lyrics + direction for the song pass: reuse a pinned song's saved lyrics when
@@ -3232,6 +3296,7 @@ async function resolveSongScript(
       direction: ReturnType<typeof resolveDirection>;
       lyrics: Lyrics;
       lrcText?: string;
+      writer?: string;
     };
     const repoDir = options.repoDir ?? process.cwd();
     notes.push(`reusing pinned song (${pinnedSong})`);
@@ -3244,6 +3309,7 @@ async function resolveSongScript(
       repoDir,
       reusing: true,
       songCache,
+      writer: typeof saved.writer === "string" ? saved.writer : undefined,
     };
   }
   // Size the lyric word-budget to the re-timed body length (one line per GROUP,
@@ -3268,6 +3334,7 @@ async function resolveSongScript(
     repoDir: planned.repoDir,
     reusing: false,
     songCache,
+    writer: planned.writer,
   };
 }
 
@@ -3311,6 +3378,7 @@ async function resolveSongAudio(args: {
       direction: script.direction,
       lyrics: script.lyrics,
       lrcText: generated.lrcText,
+      writer: script.writer,
     })
   );
   return { path: script.pinnedSong, lrcText: generated.lrcText };
@@ -3484,6 +3552,7 @@ async function runSongPass(ctx: CinematicContext): Promise<CinematicResult> {
       titleBackground: providers.titleBackground,
       notes: [],
     },
+    writer: script.writer,
     hasDrawtext: ctx.hasDrawtext,
     repoDir: script.repoDir,
     base: script.base,

@@ -5,7 +5,7 @@
 // what it needs from here.
 
 import type { Logger } from "dailies-logger";
-import { generateJson, LLM_TIMEOUT_MS } from "../llm/index.js";
+import { generateJson, LLM_TIMEOUT_MS, writerCredit } from "../llm/index.js";
 import { tryParseJson } from "../llm/json.js";
 import { type Echo, run, VERSION_PROBE_TIMEOUT_MS } from "./ffmpeg.js";
 import { stripOverrideTags } from "./srt.js";
@@ -827,7 +827,15 @@ export async function runLlmJson<T>(args: {
   parse: (raw: string) => T | null;
   prompt: string;
   schema: unknown;
-}): Promise<{ value: T } | { error: string }> {
+}): Promise<{ value: T; writer: string } | { error: string }> {
   const result = await generateJson<T>({ ...args, timeoutMs: LLM_TIMEOUT_MS });
-  return "value" in result ? { value: result.value } : { error: result.error };
+  if ("error" in result) {
+    return { error: result.error };
+  }
+  // Who actually wrote the words, for the end credits — the provider that
+  // produced the value, not an assumed default.
+  return {
+    value: result.value,
+    writer: writerCredit(result.provider, result.model),
+  };
 }

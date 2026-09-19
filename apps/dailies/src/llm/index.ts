@@ -74,6 +74,23 @@ export function noProviderReason(env: NodeJS.ProcessEnv = process.env): string {
     : "no text provider available — install the `claude` CLI, set $DAILIES_LLM_URL for an OpenAI-compatible endpoint, or enable Apple Intelligence";
 }
 
+// The credit line for whoever wrote the words, for the film's "Made with" roll:
+// the provider and, where the provider alone says nothing, the model. Pure.
+export function writerCredit(provider: ProviderId, model: string): string {
+  switch (provider) {
+    case "claude":
+      return "Claude (Anthropic)";
+    case "apple":
+      return "Apple Intelligence (on-device)";
+    default: {
+      const name = model.trim();
+      return name
+        ? `${name} (OpenAI-compatible)`
+        : "an OpenAI-compatible model";
+    }
+  }
+}
+
 export type GenerateResult<T> =
   | { model: string; provider: ProviderId; value: T }
   | { error: string };
