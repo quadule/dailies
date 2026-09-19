@@ -36,6 +36,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Logger } from "dailies-logger";
 import { noProviderReason, resolveProviders } from "../llm/index.js";
+import { type Echo, mapLimit, run } from "../util/process.js";
 import { resolveAceStepMusic } from "./acestep.js";
 import { songStepOnsets } from "./align.js";
 import { pickLoudestOffset, resolveArchiveMusic } from "./archive.js";
@@ -54,14 +55,11 @@ import {
   audioDurationSec,
   availableFilters,
   concatSegments,
-  type Echo,
   ENCODE_TIMEOUT_MS,
   encodeSlice,
   FFMPEG_BASE_ARGS,
-  mapLimit,
   type ProbedVideo,
   probeVideo,
-  run,
   trimAudio,
 } from "./ffmpeg.js";
 import { createLocalTitleBackground } from "./local-background.js";
@@ -983,51 +981,59 @@ async function resolveCreditInputs(args: {
   return { contributors, musicCredit };
 }
 
-// Turn the condensed body + narration clips into the final cinematic video:
-// re-time so each step holds for its line, render the title card (optionally over
-// a generated background) and the credits roll, join all three in one concat, and
-// generate any music. Returns the final body, where each step/clip lands, and the
-// music tracks — or null if the source duration can't be probed for re-timing.
-async function assembleVideo(args: {
-  ffmpeg: string;
-  videoPath: string;
-  narratableSteps: CinematicStep[];
-  clips: RenderedClip[];
-  title: string;
+// Inputs shared by narration and song assembly. Mode-specific timing and audio
+// stay in their respective passes; both render the same title/body/credits shell.
+interface AssemblyOptions {
+  base: string;
   category: ThemeCategory | undefined;
   directionText: string;
-  providers: MediaProviders;
-  voiceLabel: string;
-  writer: string;
+  ffmpeg: string;
   hasDrawtext: boolean;
-  repoDir: string;
-  base: string;
-  temps: string[];
-  pendingJobs: Promise<unknown>[];
-  notes: string[];
   log: Logger;
+  narratableSteps: CinematicStep[];
+  notes: string[];
+  pendingJobs: Promise<unknown>[];
   progress: (message: string) => void;
-}): Promise<{
+  providers: MediaProviders;
+  repoDir: string;
+  temps: string[];
+  title: string;
+  videoPath: string;
+}
+
+interface AssembledBody {
+  // Narration uses the measured credits length to place the score's swell.
+  creditsPath: string | undefined;
   finalBody: string;
-  // The probed source geometry, handed back so the caller can size its captions
-  // to the real frame width without probing the same file a second time.
+  // Reused for caption layout rather than probing the same source again.
   geometry: ProbedVideo | undefined;
   stepTimes: number[];
-  clipOffsetsSec: number[];
   titleOffsetSec: number;
-  music: MusicTrack[];
-} | null> {
+}
+
+// Own the common geometry/title/background/credits/concat lifecycle. The callers
+// supply explicit timing and voice credits, and mix their audio only afterward.
+async function assembleVideoBody(
+  args: AssemblyOptions & {
+    timing: Pick<
+      Parameters<typeof retimeSegments>[0],
+      "clipDurSec" | "gapSec" | "silentTargetSec" | "onsets" | "bodyEnd"
+    >;
+    retimeMessage: string;
+    credits: Pick<
+      Parameters<typeof buildModelCredits>[0],
+      "writer" | "voiceLabel" | "ttsId" | "song"
+    >;
+  }
+): Promise<AssembledBody | null> {
   const {
     ffmpeg,
     videoPath,
     narratableSteps,
-    clips,
     title,
     category,
     directionText,
     providers,
-    voiceLabel,
-    writer,
     hasDrawtext,
     repoDir,
     base,
@@ -1074,19 +1080,14 @@ async function assembleVideo(args: {
     : Promise.resolve({ contributors: [], musicCredit: undefined });
   args.pendingJobs.push(Promise.allSettled([backgroundJob, creditInputsJob]));
 
-  progress("re-timing the video to fit the narration…");
-  const clipDurSec = narratableSteps.map(
-    (step) => clips.find((c) => c.step === step)?.durationSec ?? 0
-  );
+  progress(args.retimeMessage);
   const retimed = await retimeSegments({
     ffmpeg,
     videoPath,
     steps: narratableSteps,
-    clipDurSec,
+    ...args.timing,
     frameRate,
     temps,
-    gapSec: narrationGapSec(process.env),
-    silentTargetSec: silentFootageTargetSec(process.env),
   });
   if (!retimed) {
     return null;
@@ -1111,10 +1112,6 @@ async function assembleVideo(args: {
   const { titleOffsetSec } = titleCard;
 
   const stepTimes = retimed.starts.map((s) => s + titleOffsetSec);
-  const clipOffsetsSec = clips.map((clip) => {
-    const idx = narratableSteps.indexOf(clip.step);
-    return (idx >= 0 ? (retimed.starts[idx] ?? 0) : 0) + titleOffsetSec;
-  });
 
   let creditsPath: string | undefined;
   if (extrasGeometry) {
@@ -1129,9 +1126,7 @@ async function assembleVideo(args: {
         contributors,
         music: musicCredit,
         models: buildModelCredits({
-          writer,
-          voiceLabel,
-          ttsId: providers.tts?.id,
+          ...args.credits,
           musicId: providers.music?.id,
           titleArtId: background ? providers.titleBackground?.id : undefined,
           titleArtCredit: background
@@ -1153,28 +1148,69 @@ async function assembleVideo(args: {
     temps,
   });
 
+  return { finalBody, geometry, stepTimes, titleOffsetSec, creditsPath };
+}
+
+// Narration keeps its own per-line holds, silent-run pacing, clip offsets and
+// score. Only the silent picture assembly is shared with song mode.
+async function assembleVideo(
+  args: AssemblyOptions & {
+    clips: RenderedClip[];
+    voiceLabel: string;
+    writer: string;
+  }
+): Promise<
+  (AssembledBody & { clipOffsetsSec: number[]; music: MusicTrack[] }) | null
+> {
+  const {
+    clips,
+    narratableSteps,
+    providers,
+    ffmpeg,
+    videoPath,
+    directionText,
+    temps,
+    notes,
+    log,
+    progress,
+  } = args;
+  const body = await assembleVideoBody({
+    ...args,
+    timing: {
+      clipDurSec: narratableSteps.map(
+        (step) => clips.find((clip) => clip.step === step)?.durationSec ?? 0
+      ),
+      gapSec: narrationGapSec(process.env),
+      silentTargetSec: silentFootageTargetSec(process.env),
+    },
+    retimeMessage: "re-timing the video to fit the narration…",
+    credits: {
+      writer: args.writer,
+      voiceLabel: args.voiceLabel,
+      ttsId: providers.tts?.id,
+    },
+  });
+  if (!body) {
+    return null;
+  }
+  const clipOffsetsSec = clips.map((clip) => {
+    const index = narratableSteps.indexOf(clip.step);
+    return body.stepTimes[index] ?? body.titleOffsetSec;
+  });
   const music = await generateMusic({
     ffmpeg,
     provider: providers.music,
     directionText,
-    creditsPath,
-    finalBodyPath: finalBody,
-    titleOffsetSec,
+    creditsPath: body.creditsPath,
+    finalBodyPath: body.finalBody,
+    titleOffsetSec: body.titleOffsetSec,
     videoPath,
     temps,
     notes,
     log,
     progress,
   });
-
-  return {
-    finalBody,
-    geometry,
-    stepTimes,
-    clipOffsetsSec,
-    titleOffsetSec,
-    music,
-  };
+  return { ...body, clipOffsetsSec, music };
 }
 
 // The minimum a generated song should run — 1:30. A short session still gets a
@@ -1251,174 +1287,32 @@ async function generateRawSong(args: {
   }
 }
 
-// Song-mode counterpart of assembleVideo. RE-TIMES the body like narration — each
-// step's frame holds for `holdDurSec[i]` — so the body is long enough for the
-// song's vocals to play across it and the captions get readable spacing. Then
-// prepend the title and append the credits. The SONG itself is generated, timed,
-// and mixed by the caller (it needs the song's transcript first); this just builds
-// the silent video. Returns the final body, each step's new position, and the
-// title offset — or null if the source can't be probed/re-timed.
-async function assembleSongVideo(args: {
-  ffmpeg: string;
-  videoPath: string;
-  narratableSteps: CinematicStep[];
-  holdDurSec: number[];
-  // Song step-sync: per-step onset (output start, = when each step's line is sung)
-  // and the body end — the body is onset-anchored so each step's footage is on screen
-  // while its lyric line is sung.
-  onsets?: number[];
-  bodyEnd?: number;
-  title: string;
-  category: ThemeCategory | undefined;
-  directionText: string;
-  providers: MediaProviders;
-  // Credit line for whoever wrote the lyrics; undefined for a pinned song saved
-  // before it was recorded.
-  writer?: string;
-  hasDrawtext: boolean;
-  repoDir: string;
-  base: string;
-  temps: string[];
-  pendingJobs: Promise<unknown>[];
-  notes: string[];
-  log: Logger;
-  progress: (message: string) => void;
-}): Promise<{
-  finalBody: string;
-  // The probed source geometry, handed back so the caller can size its captions
-  // to the real frame width without probing the same file a second time.
-  geometry: ProbedVideo | undefined;
-  stepTimes: number[];
-  titleOffsetSec: number;
-} | null> {
-  const {
-    ffmpeg,
-    videoPath,
-    narratableSteps,
-    holdDurSec,
-    onsets,
-    bodyEnd,
-    title,
-    category,
-    directionText,
-    providers,
-    hasDrawtext,
-    repoDir,
-    base,
-    temps,
-    notes,
-    log,
-    progress,
-  } = args;
-
-  const geometry = await probeVideo(ffmpeg, videoPath);
-  const frameRate = geometry?.frameRate ?? 30;
-  // The title card and the credits roll both need the exact source geometry, so
-  // a failed probe (no ffprobe) skips them rather than guessing — narrowing them
-  // behind one binding keeps that gate in a single place.
-  const extrasGeometry = hasDrawtext ? geometry : undefined;
-
-  // Same overlap as the narration path: the title-background provider and the
-  // credit lookups start before the re-time's encodes rather than behind them.
-  const backgroundJob = extrasGeometry
-    ? renderTitleBackground({
-        provider: providers.titleBackground,
-        directionText,
-        geometry: extrasGeometry,
-        videoPath,
-        temps,
-        notes,
-        log,
-        progress,
-      })
-    : Promise.resolve(undefined);
-  const creditInputsJob = extrasGeometry
-    ? resolveCreditInputs({
-        repoDir,
-        base,
-        provider: providers.music,
-        directionText,
-      })
-    : Promise.resolve({ contributors: [], musicCredit: undefined });
-  args.pendingJobs.push(Promise.allSettled([backgroundJob, creditInputsJob]));
-
-  // Re-time the body: each step plays at natural speed then freezes its last frame to
-  // fill its budget (preserving motion + quality). When `onsets` are given (the
-  // transcribed path) the body is ANCHORED to each line's sung moment (hard-cut) so
-  // the on-screen step tracks what's being sung — the song-mode analog of narration's
-  // per-step hold; otherwise it falls back to the even `holdDurSec` split.
-  progress("re-timing the video to the song…");
-  const retimed = await retimeSegments({
-    ffmpeg,
-    videoPath,
-    steps: narratableSteps,
-    clipDurSec: holdDurSec,
-    frameRate,
-    temps,
-    onsets,
-    bodyEnd,
-  });
-  if (!retimed) {
-    return null;
+// The song pass supplies vocal onsets and its body-end bound (or per-step holds
+// when alignment is unavailable). Song generation, caption timing and audio mixing
+// remain in runSongPass; this shares only the silent picture assembly.
+function assembleSongVideo(
+  args: AssemblyOptions & {
+    holdDurSec: number[];
+    onsets?: number[];
+    bodyEnd?: number;
+    writer?: string;
   }
-  const background = await backgroundJob;
-
-  progress("painting the title card…");
-  const titleCard = await renderTitleSegment({
-    ffmpeg,
-    videoPath,
-    title,
-    style: titleStyle(category),
-    background,
-    // The local gradient is already dark by design; only dim external photos.
-    dimBackground: providers.titleBackground?.id !== "local-gradient",
-    hasDrawtext,
-    geometry,
-    temps,
-    notes,
-    log,
+): Promise<AssembledBody | null> {
+  return assembleVideoBody({
+    ...args,
+    timing: {
+      clipDurSec: args.holdDurSec,
+      onsets: args.onsets,
+      bodyEnd: args.bodyEnd,
+    },
+    retimeMessage: "re-timing the video to the song…",
+    credits: {
+      writer: args.writer,
+      voiceLabel: "",
+      ttsId: undefined,
+      song: true,
+    },
   });
-  const { titleOffsetSec } = titleCard;
-  const stepTimes = retimed.starts.map((s) => s + titleOffsetSec);
-
-  let creditsPath: string | undefined;
-  if (extrasGeometry) {
-    progress("rolling the credits…");
-    const { contributors, musicCredit } = await creditInputsJob;
-    creditsPath = await renderCreditsSegment({
-      ffmpeg,
-      videoPath,
-      heading: title,
-      sections: buildCreditSections({
-        contributors,
-        music: musicCredit,
-        models: buildModelCredits({
-          writer: args.writer,
-          voiceLabel: "",
-          ttsId: undefined,
-          musicId: providers.music?.id,
-          titleArtId: background ? providers.titleBackground?.id : undefined,
-          titleArtCredit: background
-            ? providers.titleBackground?.credit?.()
-            : undefined,
-          song: true,
-          hasMusicCredit: Boolean(musicCredit),
-        }),
-      }),
-      geometry: extrasGeometry,
-      temps,
-      log,
-    });
-  }
-
-  const finalBody = await assembleBody({
-    ffmpeg,
-    videoPath,
-    pieces: [titleCard.path, ...retimed.segs, creditsPath],
-    temps,
-  });
-
-  return { finalBody, geometry, stepTimes, titleOffsetSec };
 }
 
 interface RenderedClip {

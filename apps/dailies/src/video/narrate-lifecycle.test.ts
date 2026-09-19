@@ -69,12 +69,15 @@ vi.mock("./credits.js", async (importOriginal) => ({
   branchContributors: async () => [],
 }));
 vi.mock("./transcribe.js", () => ({ transcribeSong: async () => null }));
+vi.mock("../util/process.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../util/process.js")>()),
+  run: async () => ({ stdout: "", stderr: "" }),
+}));
 vi.mock("./ffmpeg.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ffmpeg.js")>()),
   availableFilters: async () => new Set(["adelay", "amix", "drawtext"]),
   probeVideo: async () => ({ width: 1280, height: 720, frameRate: 30 }),
   audioDurationSec: async () => 3,
-  run: async () => ({ stdout: "", stderr: "" }),
   encodeSlice: mocks.encode,
 }));
 
