@@ -9,13 +9,12 @@
 // architecture matrices and notarization for a file the user can build in a
 // second.
 
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { dailiesDir } from "dailies-daemon-client";
-import { isOnPath, run } from "../../video/ffmpeg.js";
+import { isOnPath, ProcessError, run } from "../../util/process.js";
 import type { GenerateJsonArgs, TextProvider } from "../types.js";
 import { AFM_SWIFT_SOURCE } from "./apple-source.js";
 
@@ -68,52 +67,30 @@ export async function ensureHelper(): Promise<string> {
 
 // Run the helper with a JSON request on stdin. Rejects with the helper's stderr,
 // which distinguishes "Apple Intelligence unavailable" from a generation error.
-function runHelper(
+async function runHelper(
   bin: string,
   request: string,
   timeoutMs: number
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(bin, [], { stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const finish = (fn: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      fn();
-    };
-    const timer = setTimeout(() => {
-      finish(() => {
-        child.kill("SIGKILL");
-        reject(
-          new Error(
-            `the Apple Intelligence helper timed out after ${timeoutMs}ms`
-          )
-        );
+  try {
+    const { stdout } = await run(bin, [], timeoutMs, { input: request });
+    return stdout;
+  } catch (err) {
+    // Keep the provider's established diagnostics while retaining the shared
+    // runner's output, exit status and underlying system error as the cause.
+    if (err instanceof ProcessError && err.reason === "timeout") {
+      throw new Error(
+        `the Apple Intelligence helper timed out after ${timeoutMs}ms`,
+        { cause: err }
+      );
+    }
+    if (err instanceof ProcessError && err.reason === "exit") {
+      throw new Error(err.stderr.trim() || `helper exited ${err.exitCode}`, {
+        cause: err,
       });
-    }, timeoutMs);
-    child.stdout.on("data", (d) => {
-      stdout += d;
-    });
-    child.stderr.on("data", (d) => {
-      stderr += d;
-    });
-    child.on("error", (err) => finish(() => reject(err)));
-    child.on("close", (code) =>
-      finish(() => {
-        if (code === 0) {
-          resolve(stdout);
-        } else {
-          reject(new Error(stderr.trim() || `helper exited ${code}`));
-        }
-      })
-    );
-    child.stdin.end(request);
-  });
+    }
+    throw err;
+  }
 }
 
 export function createAppleProvider(): TextProvider {

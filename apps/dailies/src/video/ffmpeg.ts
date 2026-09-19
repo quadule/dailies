@@ -1,101 +1,20 @@
-// Subprocess helpers (generalized from condense's runFfmpeg) plus the ffmpeg /
-// ffprobe primitives used across the cinematic pipeline: probing geometry and
-// duration, discovering available filters, and the low-level encode/concat/trim
-// building blocks. `run` is also used by the speech and LLM/git helpers, so it
-// (and the shared consts/types) are exported.
+// ffmpeg/ffprobe primitives for probing media, filters, encoding and trimming.
 
-import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { formatCommand } from "./shell.js";
+import { type Echo, run, VERSION_PROBE_TIMEOUT_MS } from "../util/process.js";
 
-// `execFile`/`promisify(execFile)` always leaves the child's stdin open as an
-// unconnected pipe — there's no option to close it. That's harmless for ffmpeg,
-// but `claude -p` probes stdin for piped input, stalls for 3s waiting on that
-// dangling pipe, emits a "no stdin data received" warning, and then fails the
-// whole invocation. Spawning directly lets us set stdin to "ignore" so the
-// child sees EOF immediately, matching how these commands are meant to be run
-// (never fed via stdin here).
-function execFileWithClosedStdin(
-  cmd: string,
-  args: string[],
-  opts: { timeout: number; maxBuffer: number }
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let settled = false;
-
-    const finish = (fn: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      fn();
-    };
-
-    const timer = setTimeout(() => {
-      finish(() => {
-        child.kill("SIGKILL");
-        reject(
-          Object.assign(new Error(`${cmd} timed out after ${opts.timeout}ms`), {
-            stderr,
-          })
-        );
-      });
-    }, opts.timeout);
-
-    const onOverflow = () =>
-      finish(() => {
-        child.kill("SIGKILL");
-        reject(
-          Object.assign(new Error(`${cmd} output exceeded maxBuffer`), {
-            stderr,
-          })
-        );
-      });
-
-    child.stdout.on("data", (d: Buffer) => {
-      stdoutBytes += d.length;
-      if (stdoutBytes > opts.maxBuffer) {
-        return onOverflow();
-      }
-      stdout += d;
-    });
-    child.stderr.on("data", (d: Buffer) => {
-      stderrBytes += d.length;
-      if (stderrBytes > opts.maxBuffer) {
-        return onOverflow();
-      }
-      stderr += d;
-    });
-    child.on("error", (err) => {
-      finish(() => reject(Object.assign(err, { stderr, stdout })));
-    });
-    child.on("close", (code) => {
-      finish(() => {
-        if (code === 0) {
-          resolve({ stdout, stderr });
-        } else {
-          reject(
-            Object.assign(new Error(`Command failed: ${cmd}`), {
-              stderr,
-              stdout,
-            })
-          );
-        }
-      });
-    });
-  });
-}
+// Compatibility exports while callers migrate to the general utility module.
+// biome-ignore lint/performance/noBarrelFile: temporary compatibility for callers migrating to util/process.
+export {
+  type Echo,
+  isOnPath,
+  mapLimit,
+  run,
+  VERSION_PROBE_TIMEOUT_MS,
+} from "../util/process.js";
 
 // Timeouts (ms). The version/filter probes are quick; file probes get a little
 // longer; encodes/muxes are bounded like condense's encode pass.
-export const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const PROBE_TIMEOUT_MS = 30_000;
 export const ENCODE_TIMEOUT_MS = 300_000;
 
@@ -107,100 +26,6 @@ export interface ProbedVideo {
   frameRate: number;
   height: number;
   width: number;
-}
-
-// A user-facing line emitter (routed to onProgress → stderr). Optional so probes
-// stay silent; generation sites pass one so the exact command is shown.
-export type Echo = (line: string) => void;
-
-// Run a command and return its stdout/stderr. Bumped maxBuffer and a hard
-// timeout, like condense's runFfmpeg. Throws on non-zero exit / timeout — every
-// caller is inside cinematicProcess's try/catch. When `echo` is supplied the
-// exact command is printed first (copy-paste reproduction); probes omit it so
-// version checks (`say -v ?`, `ffmpeg -version`, `git …`) don't spam the output.
-export async function run(
-  cmd: string,
-  args: string[],
-  timeoutMs: number,
-  echo?: Echo
-): Promise<{ stdout: string; stderr: string }> {
-  echo?.(`$ ${formatCommand(cmd, args)}`);
-  try {
-    const { stdout, stderr } = await execFileWithClosedStdin(cmd, args, {
-      timeout: timeoutMs,
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    return { stdout, stderr };
-  } catch (err) {
-    // execFile's error message is just "Command failed: <cmd>"; append the tail of
-    // the tool's own stderr so failures (esp. ffmpeg filtergraph errors) are
-    // diagnosable instead of opaque. `claude -p` reports its errors as JSON on
-    // stdout even on non-zero exit (e.g. "Not logged in"), leaving stderr
-    // empty — fall back to stdout's tail in that case rather than the bare
-    // "Command failed" message.
-    const e = err as { stderr?: string; stdout?: string; message?: string };
-    const source = (e.stderr ?? "").trim() || (e.stdout ?? "").trim();
-    const tail = source.split("\n").slice(-4).join("\n");
-    throw Object.assign(
-      new Error(
-        `${cmd} failed${tail ? `:\n${tail}` : `: ${e.message ?? String(err)}`}`
-      ),
-      // Some probes deliberately exit non-zero after printing useful output
-      // (ffmpeg -i reports Duration on stderr). Keep it for those callers.
-      { stderr: e.stderr, stdout: e.stdout }
-    );
-  }
-}
-
-// Run `task` over every item with at most `limit` of them in flight, returning
-// the results in INPUT order (not completion order) so a caller can keep its
-// arrays in lockstep. Used to overlap independent subprocess work — the spawns
-// are the slow part and they don't depend on each other.
-//
-// On a rejection: no further items are started, the in-flight ones are allowed to
-// settle (so nothing rejects after this resolves), and the LOWEST-index failure is
-// rethrown — deterministic regardless of which one landed first, so a caller that
-// lets errors through fails the same way a serial loop would.
-// Pure control flow → unit-tested.
-export async function mapLimit<T, R>(
-  items: readonly T[],
-  limit: number,
-  task: (item: T, index: number) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = [];
-  const errors = new Map<number, unknown>();
-  const width = Math.max(1, Math.min(Math.trunc(limit) || 1, items.length));
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < items.length && errors.size === 0) {
-      const index = next;
-      next++;
-      const item = items[index];
-      if (item === undefined) {
-        continue;
-      }
-      try {
-        results[index] = await task(item, index);
-      } catch (err) {
-        errors.set(index, err);
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: width }, () => worker()));
-  if (errors.size > 0) {
-    throw errors.get(Math.min(...errors.keys()));
-  }
-  return results;
-}
-
-// Is a binary callable on PATH? Best-effort probe used for preconditions.
-export async function isOnPath(cmd: string, args: string[]): Promise<boolean> {
-  try {
-    await run(cmd, args, VERSION_PROBE_TIMEOUT_MS);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // Parse a "Duration: HH:MM:SS.ms" line out of ffmpeg's `-i` stderr.
@@ -254,12 +79,12 @@ export async function audioDurationSec(
 
 // ffprobe normally sits beside ffmpeg with the same name suffix.
 export function ffprobeFor(ffmpeg: string): string {
-  const dir = path.dirname(ffmpeg);
-  const base = path.basename(ffmpeg);
-  if (base.startsWith("ffmpeg")) {
-    return path.join(dir, base.replace("ffmpeg", "ffprobe"));
-  }
-  return "ffprobe";
+  const slash = Math.max(ffmpeg.lastIndexOf("/"), ffmpeg.lastIndexOf("\\"));
+  const dir = slash >= 0 ? ffmpeg.slice(0, slash + 1) : "";
+  const base = slash >= 0 ? ffmpeg.slice(slash + 1) : ffmpeg;
+  return base.startsWith("ffmpeg")
+    ? dir + base.replace("ffmpeg", "ffprobe")
+    : "ffprobe";
 }
 
 // Probe the source video's geometry so the title card can be encoded to match
@@ -305,7 +130,8 @@ export async function probeVideo(
 // which page to finish when a run recorded more than one.
 export async function probeDurationSec(
   ffmpeg: string,
-  videoPath: string
+  videoPath: string,
+  options: { timeoutMs?: number } = {}
 ): Promise<number | undefined> {
   const ffprobe = ffprobeFor(ffmpeg);
   try {
@@ -320,7 +146,7 @@ export async function probeDurationSec(
         "default=noprint_wrappers=1:nokey=1",
         videoPath,
       ],
-      PROBE_TIMEOUT_MS
+      options.timeoutMs ?? PROBE_TIMEOUT_MS
     );
     const seconds = Number(stdout.trim());
     return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;

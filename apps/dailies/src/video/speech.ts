@@ -5,9 +5,9 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { type Echo, run, VERSION_PROBE_TIMEOUT_MS } from "./ffmpeg.js";
+import { type Echo, run, VERSION_PROBE_TIMEOUT_MS } from "../util/process.js";
+import { shellQuote } from "../util/shell.js";
 import type { MediaProviders } from "./providers.js";
-import { shellQuote } from "./shell.js";
 
 const execFileAsync = promisify(execFile);
 

@@ -7,7 +7,7 @@
 import type { Logger } from "dailies-logger";
 import { generateJson, LLM_TIMEOUT_MS, writerCredit } from "../llm/index.js";
 import { tryParseJson } from "../llm/json.js";
-import { type Echo, run, VERSION_PROBE_TIMEOUT_MS } from "./ffmpeg.js";
+import { type Echo, run, VERSION_PROBE_TIMEOUT_MS } from "../util/process.js";
 import { stripOverrideTags } from "./srt.js";
 import {
   type StyleId,

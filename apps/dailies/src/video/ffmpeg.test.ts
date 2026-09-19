@@ -1,9 +1,11 @@
-import { spawn } from "node:child_process";
-import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { audioDurationSec, run } from "./ffmpeg.js";
+import { run } from "../util/process.js";
+import { audioDurationSec, ffprobeFor, probeDurationSec } from "./ffmpeg.js";
 
-vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
+vi.mock("../util/process.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../util/process.js")>()),
+  run: vi.fn(),
+}));
 
 function respondsWith({
   stdout = "",
@@ -14,38 +16,44 @@ function respondsWith({
   stderr?: string;
   code?: number;
 }): void {
-  vi.mocked(spawn).mockImplementationOnce(() => {
-    const child = Object.assign(new EventEmitter(), {
-      stdout: new EventEmitter(),
-      stderr: new EventEmitter(),
-      kill: vi.fn(),
-    });
-    queueMicrotask(() => {
-      child.stdout.emit("data", Buffer.from(stdout));
-      child.stderr.emit("data", Buffer.from(stderr));
-      child.emit("close", code);
-    });
-    return child as unknown as ReturnType<typeof spawn>;
-  });
+  if (code === 0) {
+    vi.mocked(run).mockResolvedValueOnce({ stdout, stderr });
+  } else {
+    vi.mocked(run).mockRejectedValueOnce(
+      Object.assign(new Error("Command failed"), { stdout, stderr })
+    );
+  }
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("run", () => {
-  it("keeps subprocess output available when adding failure diagnostics", async () => {
-    respondsWith({
-      stdout: "partial output",
-      stderr: "tool diagnostic",
-      code: 1,
-    });
+describe("ffprobeFor", () => {
+  it.each([
+    ["ffmpeg", "ffprobe"],
+    ["/usr/local/bin/ffmpeg-7", "/usr/local/bin/ffprobe-7"],
+    ["C:\\tools\\ffmpeg.exe", "C:\\tools\\ffprobe.exe"],
+    ["./ffmpeg", "./ffprobe"],
+    ["custom-encoder", "ffprobe"],
+  ])("finds the matching probe for %s", (ffmpeg, expected) => {
+    expect(ffprobeFor(ffmpeg)).toBe(expected);
+  });
+});
 
-    await expect(run("tool", [], 1000)).rejects.toMatchObject({
-      message: "tool failed:\ntool diagnostic",
-      stdout: "partial output",
-      stderr: "tool diagnostic",
-    });
+describe("probeDurationSec", () => {
+  it("allows long file probes to retain their timeout budget", async () => {
+    respondsWith({ stdout: "12.5\n" });
+    await expect(
+      probeDurationSec("ffmpeg", "audio.wav", { timeoutMs: 120_000 })
+    ).resolves.toBe(12.5);
+    expect(run).toHaveBeenCalledWith("ffprobe", expect.any(Array), 120_000);
+  });
+
+  it("keeps the normal file-probe timeout by default", async () => {
+    respondsWith({ stdout: "12.5\n" });
+    await probeDurationSec("ffmpeg", "audio.wav");
+    expect(run).toHaveBeenCalledWith("ffprobe", expect.any(Array), 30_000);
   });
 });
 
@@ -54,8 +62,8 @@ describe("audioDurationSec", () => {
     respondsWith({ stdout: "12.5\n" });
 
     await expect(audioDurationSec("ffmpeg", "audio.wav")).resolves.toBe(12.5);
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(spawn).mock.calls[0]?.[0]).toBe("ffprobe");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(run).mock.calls[0]?.[0]).toBe("ffprobe");
   });
 
   it.each([
@@ -70,8 +78,8 @@ describe("audioDurationSec", () => {
     });
 
     await expect(audioDurationSec("ffmpeg", "audio.wav")).resolves.toBe(62.5);
-    expect(spawn).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(spawn).mock.calls[1]?.slice(0, 2)).toEqual([
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(run).mock.calls[1]?.slice(0, 2)).toEqual([
       "ffmpeg",
       ["-hide_banner", "-i", "audio.wav"],
     ]);

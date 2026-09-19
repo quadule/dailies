@@ -2,7 +2,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { mapLimit, parseFilterNames } from "./ffmpeg.js";
+import { parseFilterNames } from "./ffmpeg.js";
 import {
   buildAudioMix,
   buildModelCredits,
@@ -1795,94 +1795,6 @@ describe("planSongTiming — vocal region", () => {
       stepCount: 1,
     });
     expect(timing.holdDurSec).toEqual([6]); // Math.max(6, 1 - 0)
-  });
-});
-
-describe("mapLimit", () => {
-  const tick = () => new Promise((resolve) => setTimeout(resolve, 1));
-
-  it("returns results in INPUT order, not completion order", async () => {
-    const out = await mapLimit([30, 20, 10, 0], 4, async (ms, i) => {
-      await new Promise((resolve) => setTimeout(resolve, ms));
-      return `${i}:${ms}`;
-    });
-    expect(out).toEqual(["0:30", "1:20", "2:10", "3:0"]);
-  });
-
-  it("never exceeds the concurrency limit", async () => {
-    let inFlight = 0;
-    let peak = 0;
-    const out = await mapLimit(
-      Array.from({ length: 12 }, (_, i) => i),
-      3,
-      async (n) => {
-        inFlight++;
-        peak = Math.max(peak, inFlight);
-        await tick();
-        inFlight--;
-        return n * 2;
-      }
-    );
-    expect(peak).toBe(3);
-    expect(out).toEqual([0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]);
-  });
-
-  it("runs everything serially at a limit of 1", async () => {
-    const order: number[] = [];
-    await mapLimit([0, 1, 2], 1, async (n) => {
-      order.push(n);
-      await tick();
-      order.push(n);
-      return n;
-    });
-    // A serial pass never interleaves: each item's start/finish are adjacent.
-    expect(order).toEqual([0, 0, 1, 1, 2, 2]);
-  });
-
-  it("treats a zero or negative limit as one", async () => {
-    await expect(mapLimit([1, 2], 0, async (n) => n)).resolves.toEqual([1, 2]);
-    await expect(mapLimit([1, 2], -5, async (n) => n)).resolves.toEqual([1, 2]);
-  });
-
-  it("handles an empty list without running anything", async () => {
-    let calls = 0;
-    const out = await mapLimit([], 4, async () => {
-      calls++;
-      return 1;
-    });
-    expect(out).toEqual([]);
-    expect(calls).toBe(0);
-  });
-
-  it("rethrows the LOWEST-index failure and starts nothing more", async () => {
-    const started: number[] = [];
-    await expect(
-      mapLimit([0, 1, 2, 3, 4, 5, 6, 7], 2, async (n) => {
-        started.push(n);
-        await tick();
-        if (n === 1 || n === 0) {
-          throw new Error(`boom ${n}`);
-        }
-        return n;
-      })
-    ).rejects.toThrow("boom 0");
-    // Both in-flight items ran; nothing past them was scheduled.
-    expect(started).toEqual([0, 1]);
-  });
-
-  it("lets in-flight work settle before rejecting (no late rejections)", async () => {
-    let settled = 0;
-    await expect(
-      mapLimit([0, 1, 2, 3], 4, async (n) => {
-        await new Promise((resolve) => setTimeout(resolve, n * 4));
-        settled++;
-        if (n === 0) {
-          throw new Error("first failed");
-        }
-        return n;
-      })
-    ).rejects.toThrow("first failed");
-    expect(settled).toBe(4);
   });
 });
 

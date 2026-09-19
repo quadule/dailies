@@ -31,6 +31,7 @@
 // The signed `content_url` an image job returns lives on third-party storage
 // and is fetched WITHOUT the key.
 import type { Logger } from "dailies-logger";
+import { singleQuote } from "../util/shell.js";
 import { writeFileAtomic } from "./media-files.js";
 import {
   aspectRatioFor,
@@ -41,7 +42,6 @@ import {
   type TitleBackgroundProvider,
   type TtsProvider,
 } from "./providers.js";
-import { singleQuote } from "./shell.js";
 
 const DEFAULT_URL = "https://api.elevenlabs.io";
 

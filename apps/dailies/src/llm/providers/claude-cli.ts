@@ -5,7 +5,7 @@
 // can't emit prose, fences, or a truncated blob; the CLI hands back a validated
 // object inside its own JSON envelope, which `readEnvelope` unwraps.
 
-import { isOnPath, run } from "../../video/ffmpeg.js";
+import { isOnPath, run } from "../../util/process.js";
 import { tryParseJson } from "../json.js";
 import type { GenerateJsonArgs, TextProvider } from "../types.js";
 

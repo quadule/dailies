@@ -12,9 +12,9 @@
 // key is read from env and never logged (the curl preview shows a placeholder).
 import { writeFile } from "node:fs/promises";
 import type { Logger } from "dailies-logger";
+import { singleQuote } from "../util/shell.js";
 import type { MediaProviders, TitleBackgroundProvider } from "./providers.js";
 import { buildImagePrompt } from "./providers.js";
-import { singleQuote } from "./shell.js";
 
 const GENERATE_TIMEOUT_MS = 180_000;
 

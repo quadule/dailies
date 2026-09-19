@@ -15,7 +15,7 @@
 // reader handles a fenced or prose-wrapped reply — so this degrades rather than
 // failing outright on a server with weaker support.
 
-import { shellQuote } from "../../video/shell.js";
+import { shellQuote } from "../../util/shell.js";
 import type { GenerateJsonArgs, TextProvider } from "../types.js";
 
 export interface OpenAiCompatConfig {
