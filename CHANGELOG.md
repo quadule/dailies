@@ -4,6 +4,13 @@
 
 ### Changed
 
+- **Current browser and build dependencies.** Playwright/Chromium move to **1.63.0**,
+  with the sandbox bridge adapted to the new protocol. The CLI now requires **Node 22.12.0+**;
+  development uses **Node 24 LTS** (minimum **22.22.1**) and **pnpm 12.4.2**. Updated
+  TypeScript, Vitest, Zod, Commander, logging, build tools, and CI actions to their current stable
+  releases. After upgrading the CLI, run `dailies install` to refresh its embedded runtime;
+  an incompatible installed runtime is detected before daemon startup.
+
 - **Renamed: Canary is now Dailies.** The project forked from
   [Canary](https://github.com/wizenheimer/canary) as a QA harness, but its center of gravity moved
   to turning a recorded browser run into something you can *watch* — narration, an original score,

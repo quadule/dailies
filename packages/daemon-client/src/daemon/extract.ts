@@ -3,6 +3,7 @@ import {
   DAEMON_RUNTIME_DEPENDENCIES,
   EMBEDDED_PACKAGE_JSON,
 } from "dailies-protocol";
+import { satisfies } from "semver";
 import { DAEMON_BUNDLE, SANDBOX_CLIENT } from "../assets/embedded.generated.js";
 import {
   daemonBundlePath,
@@ -38,27 +39,33 @@ export async function ensureDaemonExtracted(): Promise<string> {
   return daemonPath;
 }
 
-// Returns true if the npm-managed runtime has been installed (i.e.
-// `dailies install` has been run). The set checked is derived from the single
-// source of truth (DAEMON_RUNTIME_DEPENDENCIES), so a new runtime dependency is
-// gated automatically without editing this allowlist.
+// An older CLI may have installed these packages already. Their versions must
+// also satisfy the current bundle: Playwright's private protocol changes across
+// releases, so mere presence would let an incompatible runtime crash at startup.
 export async function embeddedRuntimeInstalled(
   baseDir: string
 ): Promise<boolean> {
-  const deps = Object.keys(DAEMON_RUNTIME_DEPENDENCIES);
   const installed = await Promise.all(
-    deps.map((pkg) => dependencyInstalled(baseDir, pkg))
+    Object.entries(DAEMON_RUNTIME_DEPENDENCIES).map(([pkg, range]) =>
+      dependencyInstalled(baseDir, pkg, range)
+    )
   );
   return installed.every(Boolean);
 }
 
 async function dependencyInstalled(
   baseDir: string,
-  pkg: string
+  pkg: string,
+  range: string
 ): Promise<boolean> {
   try {
-    await readFile(`${baseDir}/node_modules/${pkg}/package.json`);
-    return true;
+    const manifest = JSON.parse(
+      await readFile(`${baseDir}/node_modules/${pkg}/package.json`, "utf8")
+    ) as { version?: unknown } | null;
+    return (
+      typeof manifest?.version === "string" &&
+      satisfies(manifest.version, range)
+    );
   } catch {
     return false;
   }

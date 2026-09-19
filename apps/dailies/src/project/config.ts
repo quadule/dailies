@@ -164,6 +164,7 @@ function parseTargetComment(value: unknown): TargetCommentConfig | null {
     return null;
   }
   try {
+    // biome-ignore lint/correctness/noUnusedInstantiation: construction validates the configured pattern.
     new RegExp(pattern);
   } catch {
     return null;

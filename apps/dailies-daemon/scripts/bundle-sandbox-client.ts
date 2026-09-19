@@ -4,10 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
 
-// Deliberately not `import.meta.dirname`: it landed in Node 20.11, which is
-// exactly the engines floor, so it is the first thing to break if that floor
-// ever moves back. This form runs on any Node 20 and matches its sibling,
-// apps/dailies/scripts/build.mjs.
+// Resolve from this script, matching apps/dailies/scripts/build.mjs.
 const daemonDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const entryPoint = resolve(
   daemonDir,

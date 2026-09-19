@@ -2,34 +2,36 @@
   "name": "dailies-daemon-client",
   "version": "0.6.0",
   "private": true,
-  "type": "module",
-  "license": "MIT",
   "description": "Dailies daemon client — IPC transport, endpoint/paths resolution, and daemon lifecycle/extract. Embeds the daemon bundle for the dailies CLI.",
+  "license": "MIT",
+  "type": "module",
   "exports": {
     ".": {
-      "source": "./src/index.ts",
       "types": "./src/index.ts",
+      "source": "./src/index.ts",
       "default": "./src/index.ts"
     }
   },
   "scripts": {
     "prebuild": "node scripts/embed-daemon.mjs",
     "build": "pnpm prebuild",
+    "clean": "rm -rf coverage .turbo src/assets/embedded.generated.ts",
     "compile": "pnpm prebuild && tsc --noEmit",
     "test": "pnpm prebuild && vitest run",
-    "test:watch": "pnpm prebuild && vitest",
-    "clean": "rm -rf coverage .turbo src/assets/embedded.generated.ts"
+    "test:watch": "pnpm prebuild && vitest"
   },
   "dependencies": {
     "dailies-logger": "workspace:*",
     "dailies-protocol": "workspace:*",
-    "dailies-runtime": "workspace:*"
+    "dailies-runtime": "workspace:*",
+    "semver": "^7.8.5"
   },
   "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@types/semver": "^7.8.0",
     "dailies-config": "workspace:*",
     "dailies-daemon": "workspace:*",
-    "@types/node": "^20.17.10",
-    "typescript": "^5.8.0",
-    "vitest": "^4.1.0"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
   }
 }

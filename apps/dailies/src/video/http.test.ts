@@ -142,27 +142,25 @@ describe("model availability probes", () => {
     expect(timeout).toHaveBeenCalledWith(4000);
   });
 
-  it.each([
-    {},
-    { data: null },
-    { data: [] },
-  ])("distinguishes a reachable empty server %j", async (body) => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(body)));
-    await expect(
-      listModelIds("http://local", { headers: {}, timeoutMs: 4000 })
-    ).resolves.toEqual([]);
-  });
+  it.each([{}, { data: null }, { data: [] }])(
+    "distinguishes a reachable empty server %j",
+    async (body) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(body)));
+      await expect(
+        listModelIds("http://local", { headers: {}, timeoutMs: 4000 })
+      ).resolves.toEqual([]);
+    }
+  );
 
-  it.each([
-    null,
-    { data: {} },
-    { data: [null] },
-  ])("declines malformed model lists %j", async (body) => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(body)));
-    await expect(
-      listModelIds("http://local", { headers: {}, timeoutMs: 4000 })
-    ).resolves.toBeNull();
-  });
+  it.each([null, { data: {} }, { data: [null] }])(
+    "declines malformed model lists %j",
+    async (body) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(body)));
+      await expect(
+        listModelIds("http://local", { headers: {}, timeoutMs: 4000 })
+      ).resolves.toBeNull();
+    }
+  );
 
   it("declines HTTP, parse and connection failures", async () => {
     vi.stubGlobal(

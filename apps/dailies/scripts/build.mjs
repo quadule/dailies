@@ -24,7 +24,7 @@ const common = {
   entryPoints: [resolve(root, "src/cli.ts")],
   bundle: true,
   platform: "node",
-  target: "node20",
+  target: "node22.12",
   legalComments: "none",
   loader: {},
   external: [],

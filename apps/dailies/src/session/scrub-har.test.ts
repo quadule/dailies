@@ -162,7 +162,7 @@ describe("scrubHarLog request bodies", () => {
     });
 
     expect(scrubHarLog(har)).toBeGreaterThan(0);
-    const post = har.log.entries[0]?.request.postData as {
+    const post = har.log.entries[0]!.request.postData as {
       params: { name: string; value: string }[];
       text: string;
     };
@@ -181,7 +181,7 @@ describe("scrubHarLog request bodies", () => {
 
     expect(scrubHarLog(har)).toBe(1);
     expect(
-      (har.log.entries[0]?.request.postData as { text: string }).text
+      (har.log.entries[0]!.request.postData as { text: string }).text
     ).toBe(SCRUB_PLACEHOLDER);
   });
 
@@ -192,7 +192,7 @@ describe("scrubHarLog request bodies", () => {
 
     expect(scrubHarLog(har)).toBe(0);
     expect(
-      (har.log.entries[0]?.request.postData as { text: string }).text
+      (har.log.entries[0]!.request.postData as { text: string }).text
     ).toBe(body);
   });
 

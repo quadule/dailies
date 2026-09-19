@@ -1,16 +1,5 @@
-import type { Command as CommandType } from "commander";
-import * as commander from "commander";
+import { Command, InvalidArgumentError, Option } from "commander";
 import { isMainModule } from "dailies-cli-kit";
-import {
-  collectInjectScriptPaths,
-  INJECT_SCRIPT_ENV_VAR,
-} from "./inject-scripts.js";
-
-const { Command, InvalidArgumentError } = commander as unknown as {
-  Command: typeof commander.Command;
-  InvalidArgumentError: typeof commander.InvalidArgumentError;
-};
-
 import { ciDecide, ciMetrics, ciPreviousMetrics } from "./commands/ci.js";
 import { daemonStop } from "./commands/daemon-stop.js";
 import { execScript } from "./commands/exec.js";
@@ -38,6 +27,10 @@ import { sessionStart } from "./commands/session-start.js";
 import { sessionTakeover } from "./commands/session-takeover.js";
 import { sessionUrl } from "./commands/session-url.js";
 import { statusCommand } from "./commands/status.js";
+import {
+  collectInjectScriptPaths,
+  INJECT_SCRIPT_ENV_VAR,
+} from "./inject-scripts.js";
 import { logger } from "./logger.js";
 import {
   IMAGE_CHOICES,
@@ -58,18 +51,14 @@ class ExitCodeError extends Error {
   }
 }
 
-function isJson(program: CommandType): boolean {
+function isJson(program: Command): boolean {
   return program.opts<{ json?: boolean }>().json === true;
 }
 
 // "session end", not "end" — the agent has to retype the whole path.
-function commandPath(cmd: CommandType): string {
+function commandPath(cmd: Command): string {
   const parts: string[] = [];
-  for (
-    let c: CommandType | null = cmd;
-    c?.parent;
-    c = c.parent as CommandType | null
-  ) {
+  for (let c: Command | null = cmd; c?.parent; c = c.parent as Command | null) {
     parts.unshift(c.name());
   }
   return parts.join(" ");
@@ -79,10 +68,7 @@ function commandPath(cmd: CommandType): string {
 // the user actually invoked. Stops at the first token that isn't a subcommand,
 // so a positional argument (`session end <id>`) ends the walk rather than
 // derailing it.
-function resolveCommand(
-  program: CommandType,
-  args: readonly string[]
-): CommandType {
+function resolveCommand(program: Command, args: readonly string[]): Command {
   let cmd = program;
   for (const token of args) {
     if (token.startsWith("-")) {
@@ -95,7 +81,7 @@ function resolveCommand(
       }
       break;
     }
-    const sub = (cmd.commands as CommandType[]).find(
+    const sub = (cmd.commands as Command[]).find(
       (c) => c.name() === token || c.aliases().includes(token)
     );
     if (!sub) {
@@ -110,7 +96,7 @@ function resolveCommand(
 // flag, the agent runs `--help` to find the right one, and that help runs to
 // ~150 lines on `session end`. Fold the answer into the error so it corrects in
 // one turn. Flag names only — the full help is still there for the prose.
-function unknownFlagHelp(program: CommandType, cmd: CommandType): string {
+function unknownFlagHelp(program: Command, cmd: Command): string {
   const own = cmd.options.map((o) => o.flags.split(/[ ,]/)[0]);
   // Root options parse in any position, so they're valid on every command —
   // read them off the program rather than hardcoding a list that goes stale.
@@ -164,7 +150,7 @@ function parseTimeout(value: string): number {
 
 async function scriptFromStdin(
   file: string | undefined,
-  program: CommandType
+  program: Command
 ): Promise<string | undefined> {
   if (file) {
     return;
@@ -252,7 +238,7 @@ interface TakeoverOpts {
   stop?: boolean;
 }
 
-export function buildProgram(): CommandType {
+export function buildProgram(): Command {
   const program = new Command();
   program
     .name("dailies")
@@ -514,7 +500,7 @@ export function buildProgram(): CommandType {
       "default"
     )
     .addOption(
-      new commander.Option(
+      new Option(
         "--connect [URL]",
         "Connect to a running Chrome instance — bare, it discovers one; or pass its CDP URL"
       )
@@ -688,7 +674,7 @@ export function buildProgram(): CommandType {
 // to stderr by the time it throws; this only adds what that message lacks.
 function exitCodeForCommanderError(
   err: unknown,
-  program: CommandType,
+  program: Command,
   argv: readonly string[]
 ): number | undefined {
   if (!(err && typeof err === "object" && "code" in err)) {

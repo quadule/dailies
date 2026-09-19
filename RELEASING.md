@@ -96,14 +96,12 @@ republished. (From the Actions tab: run **Release**, pick the tag in the ref dro
 version.) It then runs `pnpm build` (topo-ordered) and `npm stage publish` from `apps/dailies`. That
 does **not** make the release public — see *Promoting a staged release* below.
 
-Publishing uses **npm**, not `pnpm -r publish`, because OIDC landed natively in pnpm 10 and this
-repo is pinned to pnpm 9.15 (pnpm 10 stopped running dependency build scripts by default, which
-esbuild/sharp/Playwright need). With a single public package that has zero runtime deps — the only
-`workspace:*` specs are devDependencies, which npm leaves as-is and consumers never install —
-pnpm's rewriting has nothing to do, so the two are equivalent here. The workflow upgrades npm to the
-11.x line first: trusted publishing needs npm >= 11.5.1, staged publishing >= 11.15.0, and Node 22
-ships npm 10.x. That npm needs Node >= 22.14, which is a constraint on the **release runner** only
-(it pins `node-version: 22`) — the published CLI's own floor is the `engines` range, Node 20.11.
+The workspace uses **pnpm 12** for installation and builds, and **npm** for the staged release.
+The single public package has zero runtime dependencies; its `workspace:*` specs are development
+dependencies, which consumers never install, so publication needs no workspace dependency rewriting.
+The workflow uses **Node 24 LTS** from `.nvmrc` and pins **npm 12.0.2**, which includes trusted
+and staged publishing. npm 12 requires Node 24.15 or newer on that LTS line. The published CLI's
+separate `engines` floor is **Node 22.12.0**; development tools require **Node 22.22.1** or newer.
 
 ## Promoting a staged release
 

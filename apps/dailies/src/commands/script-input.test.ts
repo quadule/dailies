@@ -29,17 +29,16 @@ describe("execution script input", () => {
     ).toBe("return 1;");
   });
 
-  it.each([
-    undefined,
-    "",
-    " \n\t",
-  ])("rejects blank input (%j) with the same diagnostic", async (script) => {
-    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    expect(await readScript({ script })).toBeUndefined();
-    expect(stderr).toHaveBeenCalledWith(
-      "No script provided (pass a FILE or pipe stdin)\n"
-    );
-  });
+  it.each([undefined, "", " \n\t"])(
+    "rejects blank input (%j) with the same diagnostic",
+    async (script) => {
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      expect(await readScript({ script })).toBeUndefined();
+      expect(stderr).toHaveBeenCalledWith(
+        "No script provided (pass a FILE or pipe stdin)\n"
+      );
+    }
+  );
 
   it("does not fall back to a file when supplied text is blank", async () => {
     vi.spyOn(process.stderr, "write").mockReturnValue(true);

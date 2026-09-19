@@ -2,49 +2,40 @@
   "name": "dailies",
   "version": "0.6.0",
   "private": true,
-  "type": "module",
   "description": "Watchable proof your change works: an agent drives a real browser and hands back a narrated demo video, the full evidence (trace, video, HAR, console), and a replayable Playwright script.",
   "license": "MIT",
-  "packageManager": "pnpm@9.15.0",
-  "engines": {
-    "node": ">=20.11"
-  },
+  "type": "module",
   "scripts": {
     "build": "turbo run build",
-    "dev": "turbo run dev",
-    "lint": "ultracite check",
-    "lint:fix": "ultracite fix",
-    "test": "turbo run test",
-    "compile": "turbo run compile",
-    "typecheck": "turbo run compile",
-    "format": "ultracite fix",
-    "docs": "node scripts/stitch-docs.mjs --write",
-    "docs:check": "node scripts/stitch-docs.mjs --check",
     "check": "node scripts/stitch-docs.mjs --check && ultracite check && turbo run compile test",
     "clean": "turbo run clean && rm -rf node_modules/.cache .turbo",
-    "prepare": "husky"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.4.16",
-    "@commitlint/cli": "^19.6.0",
-    "@commitlint/config-conventional": "^19.6.0",
-    "husky": "^9.1.7",
-    "lint-staged": "^15.2.10",
-    "turbo": "^2.3.0",
-    "ultracite": "^7.8.1"
+    "compile": "turbo run compile",
+    "dev": "turbo run dev",
+    "docs": "node scripts/stitch-docs.mjs --write",
+    "docs:check": "node scripts/stitch-docs.mjs --check",
+    "format": "ultracite fix",
+    "lint": "ultracite check",
+    "lint:fix": "ultracite fix",
+    "prepare": "husky",
+    "test": "turbo run test",
+    "typecheck": "turbo run compile"
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx,json,jsonc,css}": [
       "ultracite fix"
     ]
   },
-  "pnpm": {
-    "packageExtensions": {
-      "@inkjs/ui": {
-        "peerDependencies": {
-          "react": "*"
-        }
-      }
-    }
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "@commitlint/cli": "^21.2.3",
+    "@commitlint/config-conventional": "^21.2.3",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.5.1",
+    "turbo": "^2.11.2",
+    "ultracite": "^7.12.0"
+  },
+  "packageManager": "pnpm@12.4.2",
+  "engines": {
+    "node": ">=22.22.1"
   }
 }

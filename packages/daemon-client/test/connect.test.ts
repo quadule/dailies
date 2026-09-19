@@ -84,14 +84,17 @@ describe("daemon response streaming", () => {
       DaemonConnectionClosed,
     ],
     [["not json"], /malformed response from daemon/],
-  ])("rejects incomplete or malformed streams and closes the connection", async (lines, expected) => {
-    const conn = connection(lines);
-    await expect(
-      streamResponses(conn, {
-        stdout: capture().stream,
-        stderr: capture().stream,
-      })
-    ).rejects.toThrow(expected);
-    expect(conn.socket.destroyed).toBe(true);
-  });
+  ])(
+    "rejects incomplete or malformed streams and closes the connection",
+    async (lines, expected) => {
+      const conn = connection(lines);
+      await expect(
+        streamResponses(conn, {
+          stdout: capture().stream,
+          stderr: capture().stream,
+        })
+      ).rejects.toThrow(expected);
+      expect(conn.socket.destroyed).toBe(true);
+    }
+  );
 });

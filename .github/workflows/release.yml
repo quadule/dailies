@@ -30,11 +30,10 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.0
+      # package.json's packageManager is the single pnpm version pin.
+      - uses: pnpm/action-setup@v6.1.0
 
       # NB: deliberately NO `registry-url:` here. setup-node would write an
       # .npmrc containing `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`,
@@ -42,9 +41,10 @@ jobs:
       # an EMPTY token and the registry rejects the write with E401 instead of
       # npm falling back to OIDC. (Provenance still signs fine, which makes the
       # failure look unrelated to auth.) npm defaults to registry.npmjs.org.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.0.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
+          check-latest: true
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -84,23 +84,19 @@ jobs:
       # `id-token: write` above), npm verifies it against the trusted publisher
       # configured on the package, and provenance is attested automatically.
       #
-      # Why npm and not `pnpm -r publish`: OIDC landed natively in pnpm 10, and
-      # this repo is on pnpm 9.15 because pnpm 10 stopped running dependency
-      # build scripts by default (esbuild/sharp/Playwright need them). Since the
-      # consolidation there is exactly ONE public package with zero runtime deps
-      # (the only `workspace:*` specs are devDependencies, which npm leaves as-is
-      # and consumers never install), so pnpm's rewriting has nothing to do and
-      # plain `npm publish` from the package dir is equivalent.
+      # pnpm 12 installs and builds the workspace; npm handles the staged
+      # release. There is exactly ONE public package with zero runtime deps.
+      # Its `workspace:*` specs are devDependencies, which consumers never
+      # install, so publishing needs no pnpm workspace dependency rewriting.
       #
-      # npm's bundled version on Node 22 is 10.x. Trusted publishing needs
-      # >= 11.5.1 and STAGED publishing >= 11.15.0, so the higher floor wins.
-      # Pinned to the 11.x line rather than `@latest` so a new npm major cannot
-      # silently change release behavior.
+      # Pin the reviewed npm release rather than inheriting Node's bundled
+      # version. npm 12 includes trusted and staged publishing, and requires
+      # Node >= 24.15 on the Node 24 release line selected by .nvmrc.
       #
       # apps/dailies/LICENSE is materialized by `pnpm build` above (npm, unlike
       # pnpm, will not copy the workspace-root LICENSE into the tarball).
-      - name: Upgrade npm for trusted publishing
-        run: npm install -g npm@^11.15.0
+      - name: Install npm for trusted publishing
+        run: npm install -g npm@12.0.2
 
       # STAGED, not live: the trusted publisher is configured to allow
       # `npm stage publish` only, so this uploads the tarball to npm in a

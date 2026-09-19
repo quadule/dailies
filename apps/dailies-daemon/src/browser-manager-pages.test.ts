@@ -27,7 +27,7 @@ function spyOnSettle(page: Page, label: string, seen: string[]): void {
   }) as Page["waitForLoadState"];
 }
 
-describe.sequential("BrowserManager page discovery", () => {
+describe("BrowserManager page discovery", { concurrent: false }, () => {
   let browserRootDir = "";
   let manager: BrowserManager;
 

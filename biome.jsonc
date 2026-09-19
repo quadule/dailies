@@ -1,11 +1,14 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
   // Ultracite's framework-agnostic Biome preset. It sets the formatter
   // (2-space, 80-col, double quotes, semicolons, es5 trailing commas), import
   // sorting, and a strict rule set, and already ignores dist/build/coverage/
   // *.min.js/*.generated.* and relaxes tests + scripts. See node_modules/
   // ultracite/config/biome/core/biome.jsonc.
   "extends": ["ultracite/biome/core"],
+  // Keep the project's established source order. Sorting object keys can change
+  // iteration/serialization order and is unrelated to a dependency upgrade.
+  "assist": { "actions": { "source": { "useSortedKeys": "off" } } },
   "files": {
     // Never format or lint the vendored Playwright fork — it is checked in
     // as-is (82 files carry @ts-nocheck) and must stay diffable against
@@ -30,17 +33,32 @@
         // Enforce structured logging: diagnostics go through dailies-logger and
         // user-facing CLI output through process.stdout. (Core leaves this off;
         // tests + scripts/*.mjs are already exempt by the preset.)
-        "noConsole": "error"
+        "noConsole": "error",
+        // Untrusted parsed JSON and optional third-party runtime fields still
+        // need checks even when their declared TypeScript types look narrower.
+        "noUnnecessaryConditions": "off",
+        "noShadow": "off",
+        "noEqualsToNull": "off"
       },
       "complexity": {
         // `void promise` is this project's idiom for intentional fire-and-forget
         // (explicitly discarding a floating promise) — keep it.
-        "noVoid": "off"
+        "noVoid": "off",
+        "noUselessReturn": "off"
+      },
+      // Preserve existing source conventions when updating the shared preset.
+      "style": {
+        "noIncrementDecrement": "off",
+        "useDestructuring": "off",
+        "useConsistentMethodSignatures": "off",
+        "useErrorCause": "off"
       },
       "performance": {
         // The flagged regexes live in cold paths (CLI/arg/path parsing); hoisting
         // them to module scope adds clutter without measurable benefit.
-        "useTopLevelRegex": "off"
+        "useTopLevelRegex": "off",
+        // Browser actions, provider retries and ordered file writes are serial.
+        "noAwaitInLoops": "off"
       }
     }
   },
@@ -57,16 +75,6 @@
             "useAwait": "off",
             "noEmptyBlockStatements": "off"
           }
-        }
-      }
-    },
-    {
-      // commander is CJS; a namespace import (+ cast) is required for its
-      // ESM/CJS interop under esbuild.
-      "includes": ["apps/dailies/src/cli.ts"],
-      "linter": {
-        "rules": {
-          "performance": { "noNamespaceImport": "off" }
         }
       }
     },

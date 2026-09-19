@@ -35,12 +35,11 @@ describe("run", () => {
     expect(result).toEqual({ stdout: "EOF", stderr: "" });
   });
 
-  it.each([
-    "",
-    'a JSON request: {"caption":"café 🌍"}\n',
-  ])("writes supplied input and closes it, including an empty payload: %j", async (input) => {
-    const result = await runNode(
-      `
+  it.each(["", 'a JSON request: {"caption":"café 🌍"}\n'])(
+    "writes supplied input and closes it, including an empty payload: %j",
+    async (input) => {
+      const result = await runNode(
+        `
         let input = '';
         process.stdin.setEncoding('utf8');
         process.stdin.on('data', chunk => input += chunk);
@@ -49,10 +48,11 @@ describe("run", () => {
           require("node:fs").writeSync(2, 'closed');
         });
       `,
-      { input }
-    );
-    expect(result).toEqual({ stdout: input, stderr: "closed" });
-  });
+        { input }
+      );
+      expect(result).toEqual({ stdout: input, stderr: "closed" });
+    }
+  );
 
   it("preserves UTF-8 characters split across output chunks", async () => {
     const result = await runNode(String.raw`
@@ -116,27 +116,27 @@ describe("run", () => {
     expect(result).toEqual({ stdout: "abcd", stderr: "efgh" });
   });
 
-  it.each([
-    "stdout",
-    "stderr",
-  ] as const)("bounds oversized %s output and waits for the child to exit", async (stream) => {
-    const error = await failureOf(
-      runNode(
-        `
+  it.each(["stdout", "stderr"] as const)(
+    "bounds oversized %s output and waits for the child to exit",
+    async (stream) => {
+      const error = await failureOf(
+        runNode(
+          `
       require('node:fs').writeSync(${stream === "stdout" ? 2 : 1}, String(process.pid));
       require('node:fs').writeSync(${stream === "stdout" ? 1 : 2}, 'x'.repeat(10000));
       setInterval(() => {}, 1000);
     `,
-        { maxBuffer: 512 }
-      )
-    );
-    expect(error.reason).toBe("maxBuffer");
-    expect(error.message).toContain("output exceeded maxBuffer");
-    expect(Buffer.byteLength(error[stream])).toBe(512);
-    const pid = Number(error[stream === "stdout" ? "stderr" : "stdout"]);
-    expect(pid).toBeGreaterThan(0);
-    expect(() => process.kill(pid, 0)).toThrow();
-  });
+          { maxBuffer: 512 }
+        )
+      );
+      expect(error.reason).toBe("maxBuffer");
+      expect(error.message).toContain("output exceeded maxBuffer");
+      expect(Buffer.byteLength(error[stream])).toBe(512);
+      const pid = Number(error[stream === "stdout" ? "stderr" : "stdout"]);
+      expect(pid).toBeGreaterThan(0);
+      expect(() => process.kill(pid, 0)).toThrow();
+    }
+  );
 
   it("reports timeout despite earlier diagnostics and kills the child", async () => {
     const error = await failureOf(
@@ -161,24 +161,25 @@ describe("run", () => {
     expect(() => process.kill(pid, 0)).toThrow();
   });
 
-  it.each([
-    0, 9,
-  ])("handles a child exiting %d before consuming piped input", async (code) => {
-    const promise = runNode(
-      `
+  it.each([0, 9])(
+    "handles a child exiting %d before consuming piped input",
+    async (code) => {
+      const promise = runNode(
+        `
       require("node:fs").writeSync(2, 'finished early');
       process.exit(${code});
     `,
-      { input: "x".repeat(8 * 1024 * 1024) }
-    );
-    if (code === 0) {
-      expect((await promise).stderr).toBe("finished early");
-    } else {
-      const error = await failureOf(promise);
-      expect(error).toMatchObject({ exitCode: code, reason: "exit" });
-      expect(error.message).toContain("finished early");
+        { input: "x".repeat(8 * 1024 * 1024) }
+      );
+      if (code === 0) {
+        expect((await promise).stderr).toBe("finished early");
+      } else {
+        const error = await failureOf(promise);
+        expect(error).toMatchObject({ exitCode: code, reason: "exit" });
+        expect(error.message).toContain("finished early");
+      }
     }
-  });
+  );
 
   it("retains the spawn error when the executable is missing", async () => {
     const missing = path.join(tmpdir(), `dailies-missing-${randomUUID()}`);

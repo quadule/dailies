@@ -96,18 +96,17 @@ describe("runtime installation", () => {
       signal: "SIGTERM",
       message: "`npm install` terminated by signal",
     },
-  ])("stops the CLI install after failure: $message", async ({
-    code,
-    signal,
-    message,
-  }) => {
-    const child = mockChild();
-    const install = installRuntimeDependencies("/runtime");
-    const rejected = expect(install).rejects.toThrow(message);
-    child.emit("close", code, signal);
-    await rejected;
-    expect(spawn).toHaveBeenCalledTimes(1);
-  });
+  ])(
+    "stops the CLI install after failure: $message",
+    async ({ code, signal, message }) => {
+      const child = mockChild();
+      const install = installRuntimeDependencies("/runtime");
+      const rejected = expect(install).rejects.toThrow(message);
+      child.emit("close", code, signal);
+      await rejected;
+      expect(spawn).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it.each([
     {
@@ -120,27 +119,26 @@ describe("runtime installation", () => {
       signal: "SIGTERM",
       message: "Playwright install terminated by signal SIGTERM",
     },
-  ])("keeps RPC failure labels and flushes output: $message", async ({
-    code,
-    signal,
-    message,
-  }) => {
-    const first = mockChild();
-    const second = mockChild();
-    const output = {
-      write: vi.fn(),
-      drain: vi.fn().mockResolvedValue(undefined),
-    };
-    const install = installRuntimeDependencies("/runtime", output);
-    const rejected = expect(install).rejects.toThrow(message);
-    first.emit("close", 0, null);
-    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
-    second.stderr.write("install failed");
-    second.emit("close", code, signal);
-    await rejected;
-    expect(output.write).toHaveBeenCalledWith("stderr", "install failed");
-    expect(output.drain).toHaveBeenCalledTimes(2);
-  });
+  ])(
+    "keeps RPC failure labels and flushes output: $message",
+    async ({ code, signal, message }) => {
+      const first = mockChild();
+      const second = mockChild();
+      const output = {
+        write: vi.fn(),
+        drain: vi.fn().mockResolvedValue(undefined),
+      };
+      const install = installRuntimeDependencies("/runtime", output);
+      const rejected = expect(install).rejects.toThrow(message);
+      first.emit("close", 0, null);
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+      second.stderr.write("install failed");
+      second.emit("close", code, signal);
+      await rejected;
+      expect(output.write).toHaveBeenCalledWith("stderr", "install failed");
+      expect(output.drain).toHaveBeenCalledTimes(2);
+    }
+  );
 
   it("gives the CLI's missing-npm remedy and preserves raw RPC spawn errors", async () => {
     const cliChild = mockChild();
@@ -186,22 +184,22 @@ describe("runtime installation", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    "win32",
-    "linux",
-  ])("uses a shell only for Windows launchers (%s)", async (platform) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue(
-      platform as NodeJS.Platform
-    );
-    const child = mockChild();
-    const install = installRuntimeDependencies("/runtime");
-    const rejected = expect(install).rejects.toThrow();
-    expect(spawn).toHaveBeenCalledWith(
-      "npm",
-      ["install"],
-      expect.objectContaining({ shell: platform === "win32" })
-    );
-    child.emit("close", 1, null);
-    await rejected;
-  });
+  it.each(["win32", "linux"])(
+    "uses a shell only for Windows launchers (%s)",
+    async (platform) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(
+        platform as NodeJS.Platform
+      );
+      const child = mockChild();
+      const install = installRuntimeDependencies("/runtime");
+      const rejected = expect(install).rejects.toThrow();
+      expect(spawn).toHaveBeenCalledWith(
+        "npm",
+        ["install"],
+        expect.objectContaining({ shell: platform === "win32" })
+      );
+      child.emit("close", 1, null);
+      await rejected;
+    }
+  );
 });

@@ -134,7 +134,7 @@ printf '  %s → %s%s%s   (tag %s%s%s, branch %s)\n\n' \
 printf '  1. sync-version → write %s across every package.json + plugin manifests\n' "$NEW"
 printf '  2. pnpm install (refresh lockfile)\n'
 if [ -z "$NO_VERIFY" ]; then
-  printf '  3. pnpm build + publish dry-run (validate packaging)\n'
+  printf '  3. pnpm build + npm pack dry-run (validate packaging)\n'
 fi
 printf '  4. commit  "chore(release): %s"\n' "$TAG"
 printf '  5. tag     %s (annotated)\n' "$TAG"
@@ -155,7 +155,7 @@ if [ -z "$NO_VERIFY" ]; then
   info "Building (topological)…"
   pnpm build
   info "Validating npm packaging (dry-run)…"
-  pnpm -r publish --access public --no-git-checks --dry-run >/dev/null
+  (cd "${ROOT}/apps/dailies" && npm pack --dry-run >/dev/null)
   ok "Build + packaging validated."
 fi
 

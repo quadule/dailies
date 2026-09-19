@@ -160,7 +160,21 @@ export class Connection extends EventEmitter {
     const guid = object._guid;
     const type = object._type;
     const id = ++this._lastId;
-    const message = { id, guid, method, params };
+    // Keep the QuickJS client's timeout API while speaking Playwright 1.63's
+    // wire protocol: timeouts now belong to metadata, not method parameters.
+    const { timeout, ...wireParams } = params ?? {};
+    const isWaitInfo = method === "waitForEventInfo";
+    const isBeforeUnload = type === "Page" && method === "close" && wireParams.runBeforeUnload;
+    // 1.63 accepts a list of origins/credentials. Preserve the existing public
+    // single-credential API used by context creation and setHTTPCredentials.
+    if (wireParams.httpCredentials)
+      wireParams.httpCredentials = [wireParams.httpCredentials];
+    const message = {
+      id,
+      guid,
+      method: isWaitInfo ? "__waitInfo__" : isBeforeUnload ? "runBeforeUnload" : method,
+      params: isWaitInfo ? wireParams.info : isBeforeUnload ? {} : wireParams,
+    };
     if (this._platform.isLogEnabled("channel")) {
       // Do not include metadata in debug logs to avoid noise.
       this._platform.log("channel", "SEND> " + JSON.stringify(message));
@@ -177,6 +191,7 @@ export class Connection extends EventEmitter {
       location,
       internal: options.internal,
       stepId: options.stepId,
+      timeout,
     };
     if (this._tracingCount && options.frames && type !== "LocalUtils")
       this._localUtils
@@ -185,6 +200,9 @@ export class Connection extends EventEmitter {
     // We need to exit zones before calling into the server, otherwise
     // when we receive events from the server, we would be in an API zone.
     this._platform.zones.empty.run(() => this.onmessage({ ...message, metadata }));
+    // Wait instrumentation is fire-and-forget in 1.63. Registering a callback
+    // would retain it forever because the host deliberately sends no reply.
+    if (isWaitInfo) return;
     return await new Promise((resolve, reject) =>
       this._callbacks.set(id, { resolve, reject, title: options.title, type, method })
     );

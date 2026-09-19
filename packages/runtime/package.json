@@ -2,23 +2,23 @@
   "name": "dailies-runtime",
   "version": "0.6.0",
   "private": true,
-  "type": "module",
-  "license": "MIT",
   "description": "Shared runtime layout, installation and artifact discovery for the Dailies CLI and daemon.",
+  "license": "MIT",
+  "type": "module",
   "exports": {
     "./artifacts": {
-      "source": "./src/artifacts.ts",
       "types": "./src/artifacts.ts",
+      "source": "./src/artifacts.ts",
       "default": "./src/artifacts.ts"
     },
     "./paths": {
-      "source": "./src/paths.ts",
       "types": "./src/paths.ts",
+      "source": "./src/paths.ts",
       "default": "./src/paths.ts"
     },
     "./install": {
-      "source": "./src/install.ts",
       "types": "./src/install.ts",
+      "source": "./src/install.ts",
       "default": "./src/install.ts"
     }
   },
@@ -31,9 +31,9 @@
     "dailies-protocol": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^26.6.2",
     "dailies-config": "workspace:*",
-    "@types/node": "^20.17.10",
-    "typescript": "^5.8.0",
-    "vitest": "^4.1.0"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
   }
 }

@@ -2,35 +2,35 @@
   "name": "dailies-daemon",
   "version": "0.6.0",
   "private": true,
-  "type": "module",
-  "description": "Dailies daemon — long-running Playwright host with QuickJS sandbox. Embedded into the dailies CLI at build time.",
+  "description": "Dailies daemon \u2014 long-running Playwright host with QuickJS sandbox. Embedded into the dailies CLI at build time.",
   "license": "MIT",
+  "type": "module",
   "scripts": {
     "build": "pnpm bundle && pnpm bundle:sandbox-client",
     "bundle": "esbuild src/daemon.ts --bundle --platform=node --format=esm --outfile=dist/daemon.bundle.mjs --external:playwright --external:quickjs-emscripten --external:@jitl/* --external:pino",
     "bundle:sandbox-client": "tsx scripts/bundle-sandbox-client.ts",
-    "dev": "tsx src/daemon.ts",
+    "clean": "rm -rf dist coverage .turbo",
     "compile": "tsc --noEmit",
+    "dev": "tsx src/daemon.ts",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "clean": "rm -rf dist coverage .turbo"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "dailies-logger": "workspace:*",
     "dailies-protocol": "workspace:*",
     "dailies-runtime": "workspace:*",
-    "pino": "^9.5.0",
-    "playwright": "1.61.1",
-    "playwright-core": "1.61.1",
+    "pino": "^10.3.1",
+    "playwright": "1.63.0",
+    "playwright-core": "1.63.0",
     "quickjs-emscripten": "^0.32.0",
-    "zod": "3.25.76"
+    "zod": "4.6.5"
   },
   "devDependencies": {
+    "@types/node": "^26.6.2",
     "dailies-config": "workspace:*",
-    "@types/node": "^24.0.0",
-    "esbuild": "^0.27.4",
-    "tsx": "^4.20.0",
-    "typescript": "^5.8.0",
-    "vitest": "^4.1.0"
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
   }
 }

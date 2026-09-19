@@ -1016,13 +1016,15 @@ scheme.BrowserContextInitializer = tObject({
     permissions: tOptional(tArray(tString)),
     extraHTTPHeaders: tOptional(tArray(tType("NameValue"))),
     offline: tOptional(tBoolean),
+    // Host initializers use the 1.63 credential list. Outbound validators keep
+    // the sandbox's single-credential API; Connection adapts it on the wire.
     httpCredentials: tOptional(
-      tObject({
+      tArray(tObject({
         username: tString,
         password: tString,
         origin: tOptional(tString),
         send: tOptional(tEnum(["always", "unauthorized"])),
-      })
+      }))
     ),
     deviceScaleFactor: tOptional(tFloat),
     isMobile: tOptional(tBoolean),

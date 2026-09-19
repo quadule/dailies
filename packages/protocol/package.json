@@ -2,13 +2,13 @@
   "name": "dailies-protocol",
   "version": "0.6.0",
   "private": true,
-  "type": "module",
+  "description": "Dailies daemon IPC protocol \u2014 Zod schemas and inferred types (single source of truth).",
   "license": "MIT",
-  "description": "Dailies daemon IPC protocol — Zod schemas and inferred types (single source of truth).",
+  "type": "module",
   "exports": {
     ".": {
-      "source": "./src/index.ts",
       "types": "./src/index.ts",
+      "source": "./src/index.ts",
       "default": "./src/index.ts"
     }
   },
@@ -17,10 +17,10 @@
     "test": "echo \"(no tests for dailies-protocol)\""
   },
   "dependencies": {
-    "zod": "3.25.76"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "dailies-config": "workspace:*",
-    "typescript": "^5.7.2"
+    "typescript": "^7.0.2"
   }
 }

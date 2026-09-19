@@ -35,15 +35,12 @@ describe("optional CI input files", () => {
     expect(await readComments(file)).toEqual(["first", "", "last"]);
   });
 
-  it.each([
-    "",
-    "{broken",
-    "null",
-    "{}",
-    '"a comment"',
-  ])("ignores malformed comment input (%j)", async (raw) => {
-    const file = join(dir, "comments.json");
-    await writeFile(file, raw);
-    expect(await readComments(file)).toEqual([]);
-  });
+  it.each(["", "{broken", "null", "{}", '"a comment"'])(
+    "ignores malformed comment input (%j)",
+    async (raw) => {
+      const file = join(dir, "comments.json");
+      await writeFile(file, raw);
+      expect(await readComments(file)).toEqual([]);
+    }
+  );
 });

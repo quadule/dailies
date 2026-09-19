@@ -1,4 +1,5 @@
 import {
+  type AriaSnapshotNode,
   createPlaywright,
   DispatcherConnection,
   type DispatcherConnectionLike,
@@ -6,7 +7,9 @@ import {
   type PlaywrightDispatcherLike,
   RootDispatcher,
   type RootDispatcherLike,
+  type WireMessage,
 } from "./playwright-internals.js";
+import { SnapshotTracker } from "./snapshot-tracking.js";
 
 // A capture-enabled session context emits a `video` event (on BrowserContext /
 // Page) that the vendored sandbox client has no event validator for. We withhold
@@ -14,6 +17,7 @@ import {
 // `download` event — is forwarded verbatim so downloads keep working; the daemon
 // records video on its own real context regardless of what the sandbox sees.
 const WITHHELD_EVENTS = new Set(["video"]);
+const snapshotTracker = new SnapshotTracker();
 
 interface BridgeMessage {
   method?: string;
@@ -36,6 +40,10 @@ export class HostBridge {
 
   private playwrightDispatcher?: PlaywrightDispatcherLike;
   private disposed = false;
+  private readonly trackedSnapshots = new Map<
+    number,
+    { document: object; key: string }
+  >();
 
   constructor(options: HostBridgeOptions) {
     this.sendToSandbox = options.sendToSandbox;
@@ -53,7 +61,7 @@ export class HostBridge {
       if (this.shouldWithhold(message as BridgeMessage)) {
         return;
       }
-      this.sendToSandbox(JSON.stringify(message));
+      this.sendToSandbox(JSON.stringify(this.finishTrackedSnapshot(message)));
     };
     this.rootDispatcher = new RootDispatcher(
       this.dispatcherConnection,
@@ -80,9 +88,67 @@ export class HostBridge {
   }
 
   async receiveFromSandbox(json: string): Promise<void> {
+    const message = JSON.parse(json) as WireMessage;
     await this.dispatcherConnection.dispatch(
-      JSON.parse(json) as Record<string, unknown>
+      this.prepareTrackedSnapshot(message)
     );
+  }
+
+  private prepareTrackedSnapshot(message: WireMessage): WireMessage {
+    if (
+      message.method !== "ariaSnapshot" ||
+      typeof message.id !== "number" ||
+      typeof message.guid !== "string"
+    ) {
+      return message;
+    }
+    const params = message.params as Record<string, unknown> | undefined;
+    if (
+      params?.mode !== "ai" ||
+      typeof params.track !== "string" ||
+      !params.track
+    ) {
+      return message;
+    }
+    const dispatcher = this.dispatcherConnection._dispatcherByGuid.get(
+      message.guid
+    );
+    if (dispatcher?._type !== "Frame") {
+      return message;
+    }
+    const document = Reflect.get(
+      dispatcher._object,
+      "_currentDocument"
+    ) as object;
+    this.trackedSnapshots.set(message.id, { document, key: params.track });
+    const { track: _track, ...snapshotParams } = params;
+    return { ...message, method: "ariaSnapshotJSON", params: snapshotParams };
+  }
+
+  private finishTrackedSnapshot(message: WireMessage): WireMessage {
+    if (typeof message.id !== "number") {
+      return message;
+    }
+    const tracked = this.trackedSnapshots.get(message.id);
+    if (!tracked) {
+      return message;
+    }
+    this.trackedSnapshots.delete(message.id);
+    const result = message.result as { snapshot?: unknown } | undefined;
+    if (!Array.isArray(result?.snapshot)) {
+      return message;
+    }
+    return {
+      ...message,
+      result: {
+        ...result,
+        snapshot: snapshotTracker.render(
+          tracked.document,
+          tracked.key,
+          result.snapshot as AriaSnapshotNode[]
+        ),
+      },
+    };
   }
 
   async dispose(): Promise<void> {
@@ -91,6 +157,7 @@ export class HostBridge {
     }
 
     this.disposed = true;
+    this.trackedSnapshots.clear();
     this.dispatcherConnection.onmessage = () => {};
 
     try {

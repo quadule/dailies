@@ -48,27 +48,23 @@ The fork lets dailies keep the Playwright object model and protocol semantics wh
 
 ## Source version and provenance
 
-The provenance markers for this fork do not fully agree, so treat this directory as the source of truth.
+- The client baseline is upstream commit [`3912da738b01ff4d9bd39a4a4ca50a21b5fccc88`](https://github.com/microsoft/playwright/commit/3912da738b01ff4d9bd39a4a4ca50a21b5fccc88), a `1.59.0-next` snapshot from March 18, 2026, with the local adaptations below.
+- The supported host is **Playwright 1.63.0**, pinned exactly in `../../../package.json` and `packages/protocol/src/index.ts` at the repository root. The sandbox client is maintained separately; it is not a verbatim 1.63.0 client copy.
+- The 1.61.1 update migrated AI snapshots to `Frame.ariaSnapshot` and adjusted affected protocol validators.
+- The 1.63.0 update adapts operation timeouts to metadata, wait instrumentation to fire-and-forget `__waitInfo__`, credential objects to the host's credential lists, and `page.close({ runBeforeUnload: true })` to its separate host method. `../host-bridge.ts` preserves tracked AI snapshots, which upstream removed.
+- Playwright 1.63 also removed handle bindings. `page.exposeBinding` and `context.exposeBinding` reject `{ handle: true }` before registration with guidance to pass serializable data instead. Ordinary bindings continue to exchange serialized arguments and results.
 
-- `../../../package.json` declares:
+Binding transport limitation: returning a binding's promise from the same `page.evaluate()` call that invokes it can stall while the sandbox waits for the evaluation to complete. Start the binding call without returning its promise, then collect its result in a later evaluation. The compatibility test exercises that supported sequence.
 
-```json
-"playwright": "1.61.1",
-"playwright-core": "1.61.1"
-```
-
-- The recorded upstream baseline is Playwright commit `3912da7`.
-- In practice, the checked-in fork aligns most closely with that `3912da7` snapshot, with local edits layered on top.
-
-When updating, diff against the exact upstream tag or commit you choose. Do not trust the semver range in `../../../package.json` by itself.
+Upstream 1.63 removed the client `Platform` seam. Copying that client wholesale would remove the QuickJS portability boundary. Compare each host protocol change and preserve the sandbox adaptations instead of treating a host dependency upgrade as a full client rebase.
 
 Upstream path mapping for this fork:
 
 ```text
 src/client/*               <- packages/playwright-core/src/client/*
-src/protocol/channels.d.ts <- packages/protocol/src/channels.d.ts
-src/protocol/*             <- packages/playwright-core/src/protocol/*
-src/utils/isomorphic/*     <- packages/playwright-core/src/utils/isomorphic/*
+src/protocol/channels.d.ts <- local type stubs (upstream: packages/playwright-core/src/client/channels.d.ts)
+src/protocol/validator*    <- packages/protocol/src/validator*
+src/utils/isomorphic/*     <- historical packages/playwright-core/src/utils/isomorphic/* (now packages/isomorphic/*)
 types/*                    <- packages/playwright-core/types/*
 ```
 
@@ -132,8 +128,8 @@ These files have intentional behavior changes or important local wiring:
   - replaces upstream `@recorder/actions` imports with local `types/recorder-actions.d.ts`
 
 - `src/protocol/channels.d.ts`
-  - vendored locally from Playwright's protocol package
-  - kept here so the fork bundles without depending on the upstream monorepo layout
+  - local type stubs for the client channel names
+  - runtime wire validation comes from `validator.ts`, not these declarations
 
 - `src/protocol/validator.ts`
   - local validator snapshot matching the vendored protocol/types in this directory
@@ -268,7 +264,7 @@ target: es2022
 Rebuild command:
 
 ```bash
-cd daemon && pnpm run bundle:sandbox-client
+pnpm --filter dailies-daemon bundle:sandbox-client
 ```
 
 The build uses `platform: "neutral"` on purpose. This code is not a normal Node bundle and not a normal browser bundle. It is a self-contained client bundle that QuickJS can evaluate safely.
@@ -305,7 +301,7 @@ That is why `browserType.connect()` is stubbed even though the sandbox still has
 
 1. Clone Playwright at the exact target tag or commit you want to adopt.
 
-   Do not rely only on the `^1.52.0` range in `../../../package.json`. Pick one concrete upstream revision first.
+   Keep the exact host pins in `apps/dailies-daemon/package.json`, the embedded runtime dependencies in `packages/protocol/src/index.ts`, and the lockfile aligned. Pick one concrete upstream revision for comparison.
 
 2. Diff the upstream files against this directory.
 
@@ -313,10 +309,11 @@ That is why `browserType.connect()` is stubbed even though the sandbox still has
 
    ```text
    packages/playwright-core/src/client/*
-   packages/playwright-core/src/protocol/*
-   packages/playwright-core/src/utils/isomorphic/*
+   packages/protocol/src/validator*
+   packages/playwright-core/src/client/channels.d.ts
+   packages/playwright-core/src/server/dispatchers/*
+   packages/isomorphic/*
    packages/playwright-core/types/*
-   packages/protocol/src/channels.d.ts
    ```
 
 3. Reapply the local fork changes while keeping upstream behavior where possible.
@@ -354,22 +351,22 @@ That is why `browserType.connect()` is stubbed even though the sandbox still has
 4. Rebuild the sandbox client bundle.
 
    ```bash
-   cd daemon && pnpm run bundle:sandbox-client
+   pnpm --filter dailies-daemon bundle:sandbox-client
    ```
 
 5. Run the daemon test suite.
 
    ```bash
-   cd daemon && pnpm vitest run
+   pnpm --filter dailies-daemon test
    ```
 
 6. Update the version/provenance section in this README.
 
-   Record the new upstream tag or commit and keep any package-version mismatch explicit.
+   Record the client baseline and supported host separately. The generated-bundle and Playwright compatibility tests cover wire timeouts, wait notifications, credentials, and before-unload handling; the API and security suites cover the browser surface and sandbox boundary. Run the session tests too, because recording introduces additional host events.
 
 ## Practical rules
 
-- Prefer copying upstream code first, then reapplying the sandbox edits.
+- For a full client rebase, copy the selected upstream revision and reapply the sandbox edits. For a host upgrade, adapt protocol changes without removing the QuickJS runtime boundary.
 - Keep new unsupported features stubbed explicitly instead of silently half-working.
 - If an upstream change touches screenshot path handling, `Platform`, or protocol type generation, expect manual merge work.
 - If you add a new stubbed surface, keep the runtime error message explicit so sandbox users fail fast.

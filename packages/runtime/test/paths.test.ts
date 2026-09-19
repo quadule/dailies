@@ -57,16 +57,16 @@ describe("shared runtime paths", () => {
     );
   });
 
-  it.each([
-    "linux",
-    "darwin",
-  ] as const)("uses a filesystem socket on %s", (platform) => {
-    const directory = join(homedir(), "isolated-home");
-    expect(daemonEndpoint({ homedir: directory, platform })).toBe(
-      daemonSocketPath(directory)
-    );
-    expect(requiresDaemonEndpointCleanup(platform)).toBe(true);
-  });
+  it.each(["linux", "darwin"] as const)(
+    "uses a filesystem socket on %s",
+    (platform) => {
+      const directory = join(homedir(), "isolated-home");
+      expect(daemonEndpoint({ homedir: directory, platform })).toBe(
+        daemonSocketPath(directory)
+      );
+      expect(requiresDaemonEndpointCleanup(platform)).toBe(true);
+    }
+  );
 
   it("uses an explicit user-scoped Windows pipe without a filesystem socket", () => {
     expect(daemonEndpoint({ platform: "win32", username: "Tester Name" })).toBe(
@@ -81,15 +81,18 @@ describe("shared runtime paths", () => {
     [undefined, "Bob", "Bob"],
     ["", undefined, "home-user"],
     [undefined, undefined, "home-user"],
-  ])("resolves USERNAME=%j and USER=%j identically for both pipe callers", (username, user, expected) => {
-    vi.stubEnv("USERNAME", username);
-    vi.stubEnv("USER", user);
-    const directory = join(homedir(), "home-user");
-    expect(currentUserSegment(directory)).toBe(expected);
-    expect(daemonEndpoint({ platform: "win32", homedir: directory })).toBe(
-      `\\\\.\\pipe\\${daemonPipeName(expected)}`
-    );
-  });
+  ])(
+    "resolves USERNAME=%j and USER=%j identically for both pipe callers",
+    (username, user, expected) => {
+      vi.stubEnv("USERNAME", username);
+      vi.stubEnv("USER", user);
+      const directory = join(homedir(), "home-user");
+      expect(currentUserSegment(directory)).toBe(expected);
+      expect(daemonEndpoint({ platform: "win32", homedir: directory })).toBe(
+        `\\\\.\\pipe\\${daemonPipeName(expected)}`
+      );
+    }
+  );
 
   it("uses a stable fallback when no user or home basename is available", () => {
     vi.stubEnv("USERNAME", undefined);

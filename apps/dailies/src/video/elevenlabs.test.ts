@@ -247,7 +247,7 @@ describe("resolveElevenLabsProviders", () => {
       expect(url).toBe(
         "https://api.elevenlabs.io/v2/voices?voice_type=default&page_size=100"
       );
-      expect((init?.headers as Record<string, string>)["xi-api-key"]).toBe(
+      expect((init!.headers as Record<string, string>)["xi-api-key"]).toBe(
         "sk-test"
       );
       return new Response(

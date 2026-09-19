@@ -6,7 +6,7 @@ import {
   type ProtocolBridge,
 } from "../protocol-bridge.js";
 
-describe.sequential("protocol bridge", () => {
+describe("protocol bridge", { concurrent: false }, () => {
   let bridge: ProtocolBridge;
   let playwright: PlaywrightClientLike;
   let browser: Browser | undefined;

@@ -5,6 +5,10 @@ import { execute, resolveConnect } from "./cli.js";
 // what these tests are about.
 const execScriptMock = vi.hoisted(() => vi.fn());
 vi.mock("./commands/exec.js", () => ({ execScript: execScriptMock }));
+const sessionStartMock = vi.hoisted(() => vi.fn());
+vi.mock("./commands/session-start.js", () => ({
+  sessionStart: sessionStartMock,
+}));
 
 // Drive the real entry point so these cover commander's own error path rather
 // than a reimplementation of it. `execute` takes a process.argv-shaped array.
@@ -111,6 +115,39 @@ describe("exec --connect", () => {
 
     expect(execScriptMock).toHaveBeenCalledWith(
       expect.objectContaining({ connect: "auto" })
+    );
+  });
+});
+
+describe("session capture flags", () => {
+  it("enables every capture and the cursor when no negative flags are given", async () => {
+    sessionStartMock.mockResolvedValue(0);
+
+    expect((await run(["session", "start"])).code).toBe(0);
+    expect(sessionStartMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        capture: { trace: true, video: true, har: true, console: true },
+        cursor: true,
+      })
+    );
+  });
+
+  it("disables only the captures and cursor explicitly requested", async () => {
+    sessionStartMock.mockResolvedValue(0);
+
+    const result = await run([
+      "session",
+      "start",
+      "--no-video",
+      "--no-console",
+      "--no-cursor",
+    ]);
+    expect(result.code).toBe(0);
+    expect(sessionStartMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        capture: { trace: true, video: false, har: true, console: false },
+        cursor: false,
+      })
     );
   });
 });

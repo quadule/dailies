@@ -8,16 +8,19 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22.22.1", "24"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.0
+      # package.json's packageManager is the single pnpm version pin.
+      - uses: pnpm/action-setup@v6.1.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.0.0
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -30,7 +33,7 @@ jobs:
       # also runs shellcheck over every `run:` block; it caught unquoted
       # expansions in dailies-demo.yml that had shipped unnoticed.
       - name: Lint the workflows (actionlint + shellcheck)
-        uses: docker://rhysd/actionlint:latest
+        uses: docker://rhysd/actionlint:1.7.12
         with:
           args: -color
 

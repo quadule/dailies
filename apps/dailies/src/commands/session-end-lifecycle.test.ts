@@ -54,71 +54,71 @@ function record(status: SessionRecord["status"]): SessionRecord {
 }
 
 describe("sessionEnd lifecycle", () => {
-  it.each([
-    "ended",
-    "aborted",
-  ] as const)("re-finalizes an %s session from current artifacts without contacting the daemon", async (status) => {
-    await createSessionRecord(record(status));
-    await mkdir(path.join(fixture.dir, "video"));
-    const video = path.join(fixture.dir, "video", "page.webm");
-    const attachment = path.join(fixture.dir, "new-attachment.txt");
-    await Promise.all([
-      writeFile(video, "recording"),
-      writeFile(attachment, "new evidence"),
-      writeFile(
-        path.join(fixture.dir, "manifest.json"),
-        JSON.stringify({
-          artifacts: [{ kind: "video", path: video, pageName: "main" }],
-          stepPages: [{ step: "open", page: "main" }],
-        })
-      ),
-      writeFile(
-        path.join(fixture.dir, "network.har"),
-        JSON.stringify({
-          log: {
-            entries: [
-              {
-                request: {
-                  headers: [{ name: "Authorization", value: "secret" }],
+  it.each(["ended", "aborted"] as const)(
+    "re-finalizes an %s session from current artifacts without contacting the daemon",
+    async (status) => {
+      await createSessionRecord(record(status));
+      await mkdir(path.join(fixture.dir, "video"));
+      const video = path.join(fixture.dir, "video", "page.webm");
+      const attachment = path.join(fixture.dir, "new-attachment.txt");
+      await Promise.all([
+        writeFile(video, "recording"),
+        writeFile(attachment, "new evidence"),
+        writeFile(
+          path.join(fixture.dir, "manifest.json"),
+          JSON.stringify({
+            artifacts: [{ kind: "video", path: video, pageName: "main" }],
+            stepPages: [{ step: "open", page: "main" }],
+          })
+        ),
+        writeFile(
+          path.join(fixture.dir, "network.har"),
+          JSON.stringify({
+            log: {
+              entries: [
+                {
+                  request: {
+                    headers: [{ name: "Authorization", value: "secret" }],
+                  },
                 },
-              },
-            ],
-          },
+              ],
+            },
+          })
+        ),
+      ]);
+
+      expect(
+        await sessionEnd("s", true, {
+          attach: [attachment],
+          condense: false,
         })
-      ),
-    ]);
+      ).toBe(0);
 
-    expect(
-      await sessionEnd("s", true, {
-        attach: [attachment],
-        condense: false,
-      })
-    ).toBe(0);
-
-    expect(fixture.sendRequest).not.toHaveBeenCalled();
-    const result = JSON.parse(output) as {
-      artifacts: SessionEndResult["artifacts"];
-      status: string;
-    };
-    expect(result.status).toBe(status === "ended" ? "passed" : "aborted");
-    expect(result.artifacts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "video",
-          pageName: "main",
-          path: video,
-        }),
-        expect.objectContaining({ kind: "attachment", bytes: 12 }),
-      ])
-    );
-    const har = await readFile(path.join(fixture.dir, "network.har"), "utf8");
-    expect(har).toContain("[scrubbed]");
-    expect(har).not.toContain("secret");
-    expect(
-      await readFile(path.join(fixture.dir, "report.html"), "utf8")
-    ).toContain("new-attachment.txt");
-    expect((await readSessionRecord("s")).status).toBe(status);
-  });
+      expect(fixture.sendRequest).not.toHaveBeenCalled();
+      const result = JSON.parse(output) as {
+        artifacts: SessionEndResult["artifacts"];
+        status: string;
+      };
+      expect(result.status).toBe(status === "ended" ? "passed" : "aborted");
+      expect(result.artifacts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "video",
+            pageName: "main",
+            path: video,
+          }),
+          expect.objectContaining({ kind: "attachment", bytes: 12 }),
+        ])
+      );
+      const har = await readFile(path.join(fixture.dir, "network.har"), "utf8");
+      expect(har).toContain("[scrubbed]");
+      expect(har).not.toContain("secret");
+      expect(
+        await readFile(path.join(fixture.dir, "report.html"), "utf8")
+      ).toContain("new-attachment.txt");
+      expect((await readSessionRecord("s")).status).toBe(status);
+    }
+  );
 
   it("still asks the daemon to finish an active session", async () => {
     await createSessionRecord(record("active"));

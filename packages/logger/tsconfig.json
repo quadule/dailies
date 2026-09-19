@@ -1,7 +1,6 @@
 {
   "extends": "dailies-config/base.json",
   "compilerOptions": {
-    "baseUrl": ".",
     "rootDir": "./src",
     "noEmit": true
   },

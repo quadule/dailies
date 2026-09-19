@@ -76,6 +76,8 @@ to watch, the evidence behind it, and the exact Playwright script that produced 
 
 ## Get started
 
+Requires Node 22.12.0 or newer; Node 24 LTS is recommended.
+
 ```bash
 npm i -g dailies-cli                     # puts `dailies` on your PATH
 dailies install                          # one-time: Chromium + the runtime into ~/.dailies (~150 MB)
@@ -653,7 +655,7 @@ Run `make` with no args to see all targets.
 - **Conventional Commits** enforced via `commitlint` + a husky `commit-msg` hook.
 - **Linting & formatting** via [Ultracite](https://docs.ultracite.ai/) (Biome) — `pnpm lint` checks, `pnpm format` autofixes; pre-commit runs `lint-staged` → `ultracite fix` on staged files.
 - **Logging** via `dailies-logger` (pino, structured). Set `DAILIES_LOG_LEVEL` (trace|debug|info|warn|error|silent); the CLI also accepts `--verbose`/`-v`.
-- **Node 20.11+** and **pnpm 9.15.0** (see `engines`, `.nvmrc` and `packageManager`). CI runs on Node 22.
+- **Node 24 LTS** is recommended for development (`.nvmrc`); the development tools require **Node 22.22.1+**. Use **pnpm 12.4.2**, pinned by `packageManager`. CI checks Node 22.22.1 and 24; the published CLI requires Node 22.12.0+.
 - **Turbo** orchestrates builds (`turbo run build`, `dev`, `test`, `compile`); lint/format run via Ultracite at the root.
 
 </details>

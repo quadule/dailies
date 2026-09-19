@@ -71,12 +71,18 @@ describe("endResultFromDisk", () => {
     "null",
     JSON.stringify({ artifacts: {}, stepPages: "invalid" }),
     JSON.stringify({ artifacts: [null, 1], stepPages: [null, { step: 1 }] }),
-  ])("retains surviving evidence with malformed manifest metadata: %s", async (raw) => {
-    await writeFile(path.join(fixture.dir, "network.har"), "{}");
-    await writeFile(path.join(fixture.dir, "manifest.json"), raw);
-    const result = await endResultFromDisk({ ...record(), status: "aborted" });
-    expect(result.artifacts).toHaveLength(1);
-    expect(result.artifacts[0]?.kind).toBe("har");
-    expect(result.session.phase).toBe("aborted");
-  });
+  ])(
+    "retains surviving evidence with malformed manifest metadata: %s",
+    async (raw) => {
+      await writeFile(path.join(fixture.dir, "network.har"), "{}");
+      await writeFile(path.join(fixture.dir, "manifest.json"), raw);
+      const result = await endResultFromDisk({
+        ...record(),
+        status: "aborted",
+      });
+      expect(result.artifacts).toHaveLength(1);
+      expect(result.artifacts[0]?.kind).toBe("har");
+      expect(result.session.phase).toBe("aborted");
+    }
+  );
 });

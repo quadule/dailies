@@ -353,7 +353,7 @@ async function createNavigationServer(): Promise<NavigationServer> {
   };
 }
 
-describe.sequential("QuickJS Playwright Page API coverage", () => {
+describe("QuickJS Playwright Page API coverage", { concurrent: false }, () => {
   let browserRootDir = "";
   let manager: BrowserManager;
 
@@ -371,7 +371,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     await removeDirectoryWithRetries(browserRootDir);
   }, 180_000);
 
-  describe.sequential("navigation", () => {
+  describe("navigation", { concurrent: false }, () => {
     const browserName = "playwright-navigation";
     let harness: JsonSandboxHarness;
     let navigationServer: NavigationServer;
@@ -692,7 +692,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     }, 15_000);
   });
 
-  describe.sequential("content and evaluation", () => {
+  describe("content and evaluation", { concurrent: false }, () => {
     const browserName = "playwright-content-evaluation";
     let harness: JsonSandboxHarness;
 
@@ -782,7 +782,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   });
 
-  describe.sequential("form interaction and waiting", () => {
+  describe("form interaction and waiting", { concurrent: false }, () => {
     const browserName = "playwright-form-waiting";
     let harness: JsonSandboxHarness;
 
@@ -971,7 +971,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   });
 
-  describe.sequential("locators and multiple elements", () => {
+  describe("locators and multiple elements", { concurrent: false }, () => {
     const browserName = "playwright-locators";
     let harness: JsonSandboxHarness;
 
@@ -1068,7 +1068,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   });
 
-  describe.sequential("AI snapshots", () => {
+  describe("AI snapshots", { concurrent: false }, () => {
     const browserName = "playwright-snapshots";
     let harness: JsonSandboxHarness;
 
@@ -1213,6 +1213,51 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
       expect(result.changedIncremental).toBe(result.changedFull);
     });
 
+    it("isolates tracking keys and pages", async () => {
+      const result = await harness.runJson<{
+        baseline: string;
+        unchanged: string;
+        anotherKey: string;
+        anotherPage: string;
+      }>(`
+        const first = await browser.getPage("snapshot-isolation-first");
+        const second = await browser.getPage("snapshot-isolation-second");
+        const html = "<main><h1>IsolatedHeading</h1></main>";
+        await first.setContent(html);
+        await second.setContent(html);
+        const baseline = (await first.snapshotForAI({ track: "shared" })).full;
+        const unchanged = (await first.snapshotForAI({ track: "shared" })).full;
+        const anotherKey = (await first.snapshotForAI({ track: "other" })).full;
+        const anotherPage = (await second.snapshotForAI({ track: "shared" })).full;
+        console.log(JSON.stringify({ baseline, unchanged, anotherKey, anotherPage }));
+      `);
+
+      expect(result.unchanged).toBe("");
+      expect(result.anotherKey).toBe(result.baseline);
+      expect(result.anotherPage).toContain('heading "IsolatedHeading"');
+      expect(result.anotherPage).not.toContain("<changed>");
+    });
+
+    it("starts a new tracking baseline after document navigation", async () => {
+      const result = await harness.runJson<{
+        unchanged: string;
+        navigated: string;
+      }>(`
+        const page = await browser.getPage("snapshot-navigation");
+        const html = "<main><h1>NavigationHeading</h1></main>";
+        await page.goto("data:text/html," + encodeURIComponent(html));
+        await page.snapshotForAI({ track: "main" });
+        const unchanged = (await page.snapshotForAI({ track: "main" })).full;
+        await page.goto("data:text/html," + encodeURIComponent(html + "<!-- next document -->"));
+        const navigated = (await page.snapshotForAI({ track: "main" })).full;
+        console.log(JSON.stringify({ unchanged, navigated }));
+      `);
+
+      expect(result.unchanged).toBe("");
+      expect(result.navigated).toContain('heading "NavigationHeading"');
+      expect(result.navigated).not.toContain("<changed>");
+    });
+
     it("tracks snapshot diffs across separate sandbox executions (steps)", async () => {
       // Each session step runs in a FRESH sandbox/connection, but the page —
       // and the server-side track baseline — persists in the daemon. Two
@@ -1270,7 +1315,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     }, 30_000);
   });
 
-  describe.sequential("screenshots and input devices", () => {
+  describe("screenshots and input devices", { concurrent: false }, () => {
     const browserName = "playwright-media-input";
     let harness: JsonSandboxHarness;
 
@@ -1334,7 +1379,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   });
 
-  describe.sequential("events", () => {
+  describe("events", { concurrent: false }, () => {
     const browserName = "playwright-events";
     let harness: JsonSandboxHarness;
 
@@ -1379,7 +1424,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   });
 
-  describe.sequential("human interaction helpers", () => {
+  describe("human interaction helpers", { concurrent: false }, () => {
     const browserName = "playwright-human-helpers";
     let harness: JsonSandboxHarness;
 
@@ -1815,7 +1860,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     }, 20_000);
   });
 
-  describe.sequential("dialogs", () => {
+  describe("dialogs", { concurrent: false }, () => {
     const browserName = "playwright-dialogs";
 
     beforeAll(async () => {

@@ -17,7 +17,9 @@ function createDataUrl(title: string, body: string): string {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.resolve(__dirname, "../test-fixtures/rrweb");
 
-describe.sequential("BrowserManager init-script integration (real Chromium)", () => {
+describe("BrowserManager init-script integration (real Chromium)", {
+  concurrent: false,
+}, () => {
   let browserRootDir = "";
   let manager: BrowserManager;
 

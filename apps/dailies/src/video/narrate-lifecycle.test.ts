@@ -99,66 +99,66 @@ afterEach(async () => {
 });
 
 describe("cinematic cleanup", () => {
-  it.each([
-    false,
-    true,
-  ])("waits for title art after an encoder failure (song=%s)", async (song) => {
-    const dir = await mkdtemp(
-      path.join(tmpdir(), "dailies-cinematic-lifecycle-")
-    );
-    dirs.push(dir);
-    const videoPath = path.join(dir, "video.webm");
-    await writeFile(videoPath, "original recording");
-    const finishBackground = deferred();
-    const encodeFailed = deferred();
-    mocks.background.mockImplementation(
-      async (_direction, _width, _height, outPath: string) => {
-        await finishBackground.promise;
-        await writeFile(outPath, "late title art");
-      }
-    );
-    mocks.encode.mockImplementation(async () => {
-      encodeFailed.resolve();
-      throw new Error("encoder failed");
-    });
-    const log = {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-    } as unknown as CinematicOptions["log"];
-    const pending = cinematicProcess(
-      videoPath,
-      [{ name: "Show result", durationMs: 3000, videoTime: 0 }],
-      {
-        captions: false,
-        ffmpegPath: "fake-ffmpeg",
-        log,
-        prompt: "A calm documentary",
-        media: { narrator: "gemini", music: "gemini", image: "local" },
-        song,
-      }
-    );
-    try {
-      await encodeFailed.promise;
-      // Let the rejected encode reach the outer finally while title art remains
-      // blocked. Cleanup must not race the provider that still owns this path.
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(mocks.background).toHaveBeenCalledOnce();
-      expect(rm).not.toHaveBeenCalledWith(`${videoPath}.titlebg.png`, {
-        force: true,
+  it.each([false, true])(
+    "waits for title art after an encoder failure (song=%s)",
+    async (song) => {
+      const dir = await mkdtemp(
+        path.join(tmpdir(), "dailies-cinematic-lifecycle-")
+      );
+      dirs.push(dir);
+      const videoPath = path.join(dir, "video.webm");
+      await writeFile(videoPath, "original recording");
+      const finishBackground = deferred();
+      const encodeFailed = deferred();
+      mocks.background.mockImplementation(
+        async (_direction, _width, _height, outPath: string) => {
+          await finishBackground.promise;
+          await writeFile(outPath, "late title art");
+        }
+      );
+      mocks.encode.mockImplementation(async () => {
+        encodeFailed.resolve();
+        throw new Error("encoder failed");
       });
-    } finally {
-      finishBackground.resolve();
-    }
+      const log = {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+      } as unknown as CinematicOptions["log"];
+      const pending = cinematicProcess(
+        videoPath,
+        [{ name: "Show result", durationMs: 3000, videoTime: 0 }],
+        {
+          captions: false,
+          ffmpegPath: "fake-ffmpeg",
+          log,
+          prompt: "A calm documentary",
+          media: { narrator: "gemini", music: "gemini", image: "local" },
+          song,
+        }
+      );
+      try {
+        await encodeFailed.promise;
+        // Let the rejected encode reach the outer finally while title art remains
+        // blocked. Cleanup must not race the provider that still owns this path.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(mocks.background).toHaveBeenCalledOnce();
+        expect(rm).not.toHaveBeenCalledWith(`${videoPath}.titlebg.png`, {
+          force: true,
+        });
+      } finally {
+        finishBackground.resolve();
+      }
 
-    await expect(pending).resolves.toMatchObject({
-      applied: false,
-      reason: "encoder failed",
-    });
-    expect(await readFile(videoPath, "utf8")).toBe("original recording");
-    expect((await readdir(dir)).sort()).toEqual([
-      "video.precinematic.webm",
-      "video.webm",
-    ]);
-  });
+      await expect(pending).resolves.toMatchObject({
+        applied: false,
+        reason: "encoder failed",
+      });
+      expect(await readFile(videoPath, "utf8")).toBe("original recording");
+      expect((await readdir(dir)).sort()).toEqual([
+        "video.precinematic.webm",
+        "video.webm",
+      ]);
+    }
+  );
 });

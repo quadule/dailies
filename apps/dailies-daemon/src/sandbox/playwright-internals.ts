@@ -23,8 +23,16 @@ export interface ClientConnectionLike {
 }
 
 export interface DispatcherConnectionLike {
+  readonly _dispatcherByGuid: Map<string, { _object: object; _type: string }>;
   dispatch(message: WireMessage): Promise<void>;
   onmessage: (message: WireMessage) => void;
+}
+
+export interface AriaSnapshotNode {
+  children?: (AriaSnapshotNode | string)[];
+  ref?: string;
+  role: string;
+  [key: string]: unknown;
 }
 
 export interface RootDispatcherLike {
@@ -71,9 +79,12 @@ interface CoreBundle {
   inprocess: {
     createInProcessPlaywright: () => {
       _connection: {
-        constructor: new (platform: unknown) => ClientConnectionLike;
+        constructor: new () => ClientConnectionLike;
       };
     };
+  };
+  iso: {
+    renderAriaSnapshotAsYaml: (snapshot: AriaSnapshotNode[]) => string;
   };
   server: {
     createPlaywright: (options: { sdkLanguage: string }) => unknown;
@@ -91,11 +102,12 @@ interface CoreBundle {
       options?: HostBridgeDispatcherOptions
     ) => PlaywrightDispatcherLike;
   };
-  utils: { nodePlatform: (coreDir: string) => unknown };
 }
 
 const bundlePath = resolveCoreBundlePath();
 const bundle = require(bundlePath) as CoreBundle;
+
+export const { renderAriaSnapshotAsYaml } = bundle.iso;
 
 export const {
   createPlaywright,
@@ -104,26 +116,21 @@ export const {
   PlaywrightDispatcher,
 } = bundle.server;
 
-// nodePlatform is a factory in 1.60+: call it with coreDir to get an instance.
-export const nodePlatform: unknown = bundle.utils.nodePlatform(
-  path.dirname(bundlePath)
-);
-
-// Connection is no longer a named export in 1.60+; extract it from a throwaway in-process instance.
-export const Connection: new (platform: unknown) => ClientConnectionLike =
-  (() => {
-    const tmp = bundle.inprocess.createInProcessPlaywright();
-    const ctor = (
-      tmp as {
-        _connection?: {
-          constructor: new (platform: unknown) => ClientConnectionLike;
-        };
-      }
-    )._connection?.constructor;
-    if (!ctor) {
-      throw new Error(
-        "Could not extract Connection constructor from playwright-core inprocess bundle"
-      );
+// Connection is not a named export. Playwright 1.63's Node client no longer
+// takes a Platform; the separate QuickJS client still uses its sandbox platform.
+export const Connection: new () => ClientConnectionLike = (() => {
+  const tmp = bundle.inprocess.createInProcessPlaywright();
+  const ctor = (
+    tmp as {
+      _connection?: {
+        constructor: new () => ClientConnectionLike;
+      };
     }
-    return ctor;
-  })();
+  )._connection?.constructor;
+  if (!ctor) {
+    throw new Error(
+      "Could not extract Connection constructor from playwright-core inprocess bundle"
+    );
+  }
+  return ctor;
+})();

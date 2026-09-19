@@ -424,7 +424,12 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     callback: (source: structs.BindingSource, ...args: any[]) => any,
     options: { handle?: boolean } = {}
   ) {
-    const result = await this._channel.exposeBinding({ name, needsHandle: options.handle });
+    if (options.handle) {
+      throw new Error(
+        "exposeBinding({ handle: true }) is no longer supported. Pass serializable data to the binding instead of a DOM node or JSHandle."
+      );
+    }
+    const result = await this._channel.exposeBinding({ name });
     this._bindings.set(name, callback);
     return DisposableObject.from(result.disposable);
   }

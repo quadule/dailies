@@ -293,146 +293,159 @@ describe.skipIf(!hasMediaTools)(
       }
     });
 
-    it.each([
-      false,
-      true,
-    ])("preserves picture, sound, titles, credits and captions (song=%s)", async (song) => {
-      media.credits.length = 0;
-      const runDir = path.join(dir, song ? "song" : "narration");
-      await mkdir(runDir);
-      const videoPath = path.join(runDir, "video.webm");
-      await copyFile(source, videoPath);
-      const log = {
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-      } as unknown as CinematicOptions["log"];
-      const result = await cinematicProcess(
-        videoPath,
-        [
-          { name: "Green screen", durationMs: 7000, videoTime: 0 },
-          { name: "Blue screen", durationMs: 7000, videoTime: 7 },
-        ],
-        {
-          captions: true,
-          ffmpegPath: ffmpeg,
-          log,
-          prompt: "A calm documentary",
-          media: { narrator: "gemini", music: "gemini", image: "local" },
-          song,
-        }
-      );
-      expect(
-        result,
-        JSON.stringify(vi.mocked(log.debug).mock.calls)
-      ).toMatchObject({
-        applied: true,
-        titleOffsetSec: 2.5,
-      });
-      const steps = result.stepTimes!;
-      expect(steps).toEqual(song ? [3.5, 6.5] : [2.5, 9.5]);
+    it.each([false, true])(
+      "preserves picture, sound, titles, credits and captions (song=%s)",
+      async (song) => {
+        media.credits.length = 0;
+        const runDir = path.join(dir, song ? "song" : "narration");
+        await mkdir(runDir);
+        const videoPath = path.join(runDir, "video.webm");
+        await copyFile(source, videoPath);
+        const log = {
+          debug: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+        } as unknown as CinematicOptions["log"];
+        const result = await cinematicProcess(
+          videoPath,
+          [
+            { name: "Green screen", durationMs: 7000, videoTime: 0 },
+            { name: "Blue screen", durationMs: 7000, videoTime: 7 },
+          ],
+          {
+            captions: true,
+            ffmpegPath: ffmpeg,
+            log,
+            prompt: "A calm documentary",
+            media: { narrator: "gemini", music: "gemini", image: "local" },
+            song,
+          }
+        );
+        expect(
+          result,
+          JSON.stringify(vi.mocked(log.debug).mock.calls)
+        ).toMatchObject({
+          applied: true,
+          titleOffsetSec: 2.5,
+        });
+        const steps = result.stepTimes!;
+        expect(steps).toEqual(song ? [3.5, 6.5] : [2.5, 9.5]);
 
-      const { stdout } = await exec(ffprobeFor(ffmpeg), [
-        "-v",
-        "error",
-        "-show_streams",
-        "-show_format",
-        "-of",
-        "json",
-        videoPath,
-      ]);
-      const probe = JSON.parse(stdout) as {
-        streams: {
-          codec_type: string;
-          codec_name: string;
-          width?: number;
-          height?: number;
-          r_frame_rate?: string;
-        }[];
-        format: { duration: string };
-      };
-      expect(probe.streams).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            codec_type: "video",
-            codec_name: "vp8",
-            width,
-            height: 276,
-            r_frame_rate: "10/1",
-          }),
-          expect.objectContaining({ codec_type: "audio", codec_name: "opus" }),
-        ])
-      );
-      expect(probe.streams).toHaveLength(2);
-      expect(media.credits).toHaveLength(1);
-      const credit = media.credits.at(-1)!;
-      const creditLines = credit.sections.flatMap((s) => s.entries);
-      expect(creditLines).toEqual(
-        expect.arrayContaining([
-          "Fixture author",
-          "Fixture score — sine orchestra",
-          "Title art — fixture painter",
-          song ? "Lyrics — fixture writer" : "Narration — fixture writer",
-        ])
-      );
-      expect(
-        creditLines.filter((line) => line.startsWith("Voice —"))
-      ).toHaveLength(song ? 0 : 1);
-      const duration = Number(probe.format.duration);
-      expect(duration).toBeCloseTo(2.5 + (song ? 7 : 14) + credit.duration, 0);
-      const cues = parseWhisperSrt(
-        await readFile(path.join(runDir, "video.srt"), "utf8")
-      );
-      expect(cues.map((cue) => ({ start: cue.start, text: cue.text }))).toEqual(
-        [
+        const { stdout } = await exec(ffprobeFor(ffmpeg), [
+          "-v",
+          "error",
+          "-show_streams",
+          "-show_format",
+          "-of",
+          "json",
+          videoPath,
+        ]);
+        const probe = JSON.parse(stdout) as {
+          streams: {
+            codec_type: string;
+            codec_name: string;
+            width?: number;
+            height?: number;
+            r_frame_rate?: string;
+          }[];
+          format: { duration: string };
+        };
+        expect(probe.streams).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              codec_type: "video",
+              codec_name: "vp8",
+              width,
+              height: 276,
+              r_frame_rate: "10/1",
+            }),
+            expect.objectContaining({
+              codec_type: "audio",
+              codec_name: "opus",
+            }),
+          ])
+        );
+        expect(probe.streams).toHaveLength(2);
+        expect(media.credits).toHaveLength(1);
+        const credit = media.credits.at(-1)!;
+        const creditLines = credit.sections.flatMap((s) => s.entries);
+        expect(creditLines).toEqual(
+          expect.arrayContaining([
+            "Fixture author",
+            "Fixture score — sine orchestra",
+            "Title art — fixture painter",
+            song ? "Lyrics — fixture writer" : "Narration — fixture writer",
+          ])
+        );
+        expect(
+          creditLines.filter((line) => line.startsWith("Voice —"))
+        ).toHaveLength(song ? 0 : 1);
+        const duration = Number(probe.format.duration);
+        expect(duration).toBeCloseTo(
+          2.5 + (song ? 7 : 14) + credit.duration,
+          0
+        );
+        const cues = parseWhisperSrt(
+          await readFile(path.join(runDir, "video.srt"), "utf8")
+        );
+        expect(
+          cues.map((cue) => ({ start: cue.start, text: cue.text }))
+        ).toEqual([
           { start: steps[0], text: "Green screen rises" },
           { start: steps[1], text: "Blue screen shines" },
-        ]
-      );
-      const green = await frame(videoPath, steps[0]! + 0.3, "16:16:8:8");
-      const blue = await frame(videoPath, steps[1]! + 0.3, "16:16:8:8");
-      expect(green[1]).toBeGreaterThan(240);
-      expect(green[0]).toBeLessThan(10);
-      expect(blue[2]).toBeGreaterThan(240);
-      expect(blue[1]).toBeLessThan(10);
-      const title = await frame(videoPath, 1, "16:16:8:8");
-      expect(title[0]).toBeGreaterThan(title[1]!);
-      expect(title[2]).toBeGreaterThan(title[0]!);
-      expect(
-        whitePixels(await frame(videoPath, 1, "320:180:0:0"))
-      ).toBeGreaterThan(20);
-      expect(
-        whitePixels(await frame(videoPath, steps[0]! + 0.3, "320:96:0:180"))
-      ).toBeGreaterThan(20);
-      expect(
-        whitePixels(await frame(videoPath, steps[0]! + 2, "320:96:0:180"))
-      ).toBe(0);
-      expect(
-        whitePixels(
-          await frame(videoPath, duration - credit.duration / 2, "320:180:0:0")
-        )
-      ).toBeGreaterThan(20);
-      expect(await audioLevel(videoPath, 0.2)).toBeLessThan(1);
-      expect(await audioLevel(videoPath, steps[0]! + 0.2)).toBeGreaterThan(100);
-      if (!song) {
-        // The narration must be audible above the bed, not merely an audio stream.
+        ]);
+        const green = await frame(videoPath, steps[0]! + 0.3, "16:16:8:8");
+        const blue = await frame(videoPath, steps[1]! + 0.3, "16:16:8:8");
+        expect(green[1]).toBeGreaterThan(240);
+        expect(green[0]).toBeLessThan(10);
+        expect(blue[2]).toBeGreaterThan(240);
+        expect(blue[1]).toBeLessThan(10);
+        const title = await frame(videoPath, 1, "16:16:8:8");
+        expect(title[0]).toBeGreaterThan(title[1]!);
+        expect(title[2]).toBeGreaterThan(title[0]!);
+        expect(
+          whitePixels(await frame(videoPath, 1, "320:180:0:0"))
+        ).toBeGreaterThan(20);
+        expect(
+          whitePixels(await frame(videoPath, steps[0]! + 0.3, "320:96:0:180"))
+        ).toBeGreaterThan(20);
+        expect(
+          whitePixels(await frame(videoPath, steps[0]! + 2, "320:96:0:180"))
+        ).toBe(0);
+        expect(
+          whitePixels(
+            await frame(
+              videoPath,
+              duration - credit.duration / 2,
+              "320:180:0:0"
+            )
+          )
+        ).toBeGreaterThan(20);
+        expect(await audioLevel(videoPath, 0.2)).toBeLessThan(1);
         expect(await audioLevel(videoPath, steps[0]! + 0.2)).toBeGreaterThan(
-          4 * (await audioLevel(videoPath, steps[0]! + 2))
+          100
         );
-      }
-      expect(
-        await readFile(path.join(runDir, "video.precinematic.webm"))
-      ).toEqual(await readFile(source));
-      expect((await readdir(runDir)).sort()).toEqual(
-        song
-          ? [
-              "video.lyrics.txt",
-              "video.precinematic.webm",
-              "video.srt",
-              "video.webm",
-            ]
-          : ["video.precinematic.webm", "video.srt", "video.webm"]
-      );
-    }, 60_000);
+        if (!song) {
+          // The narration must be audible above the bed, not merely an audio stream.
+          expect(await audioLevel(videoPath, steps[0]! + 0.2)).toBeGreaterThan(
+            4 * (await audioLevel(videoPath, steps[0]! + 2))
+          );
+        }
+        expect(
+          await readFile(path.join(runDir, "video.precinematic.webm"))
+        ).toEqual(await readFile(source));
+        expect((await readdir(runDir)).sort()).toEqual(
+          song
+            ? [
+                "video.lyrics.txt",
+                "video.precinematic.webm",
+                "video.srt",
+                "video.webm",
+              ]
+            : ["video.precinematic.webm", "video.srt", "video.webm"]
+        );
+      },
+      60_000
+    );
   }
 );

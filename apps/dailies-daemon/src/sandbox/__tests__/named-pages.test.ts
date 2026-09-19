@@ -51,7 +51,7 @@ function outputLines(output: CapturedOutput): string[] {
     .filter((line) => line.length > 0);
 }
 
-describe.sequential("QuickJS named page management", () => {
+describe("QuickJS named page management", { concurrent: false }, () => {
   let browserRootDir = "";
   let manager: BrowserManager;
 

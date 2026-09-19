@@ -97,7 +97,8 @@ export const SessionStartRequestSchema = RequestBaseSchema.extend({
   name: z.string().min(1).max(200).optional(),
   headless: z.boolean().optional(),
   ignoreHTTPSErrors: z.boolean().optional(),
-  capture: CaptureOptionsSchema.default({}),
+  // Parse the empty input so each capture flag receives its own default.
+  capture: CaptureOptionsSchema.prefault({}),
   viewport: ViewportSchema.optional(),
   // Render a virtual mouse cursor + click animation into the recording (the
   // OS cursor is never captured for CDP-driven input). On unless disabled.
@@ -215,7 +216,7 @@ export const ErrorMessageSchema = ResponseBaseSchema.extend({
 
 export const ResultMessageSchema = ResponseBaseSchema.extend({
   type: z.literal("result"),
-  data: z.unknown(),
+  data: z.unknown().optional(),
 });
 
 export const ResponseSchema = z.discriminatedUnion("type", [
@@ -393,9 +394,9 @@ export const SESSION_ATTACHMENTS_DIR = "attachments";
 // a known key — e.g. `.playwright` for the report manifest — get a defined
 // `string`, not `string | undefined` under noUncheckedIndexedAccess.
 export const DAEMON_RUNTIME_DEPENDENCIES = {
-  pino: "^9.5.0",
-  playwright: "1.61.1",
-  "playwright-core": "1.61.1",
+  pino: "^10.3.1",
+  playwright: "1.63.0",
+  "playwright-core": "1.63.0",
   "quickjs-emscripten": "^0.32.0",
 } satisfies Record<string, string>;
 

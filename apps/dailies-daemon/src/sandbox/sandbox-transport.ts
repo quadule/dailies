@@ -1,7 +1,6 @@
 import {
   type ClientConnectionLike,
   Connection,
-  nodePlatform,
   type PlaywrightClientLike,
   type WireMessage,
 } from "./playwright-internals.js";
@@ -17,7 +16,7 @@ export class SandboxTransport {
   private readonly sendToHost: (json: string) => void;
 
   constructor(options: SandboxTransportOptions) {
-    this.connection = options.connection ?? new Connection(nodePlatform);
+    this.connection = options.connection ?? new Connection();
     this.sendToHost = options.sendToHost;
     this.connection.onmessage = (message) => {
       this.send(message);

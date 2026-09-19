@@ -111,10 +111,11 @@ jobs:
       # which `dailies ci decide` reads from the working directory. An app repo
       # copying this file has its own. What is NOT needed any more is a pnpm
       # workspace install: the decision logic is behind the published CLI.
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
-          node-version: 22
+          node-version: 24
+          package-manager-cache: false
 
       # Deliberately UNPINNED here: this repo demos its own pull requests, so
       # tracking the newest published version is the point — it also catches a
@@ -267,7 +268,7 @@ jobs:
       group: dailies-demo-pr-${{ matrix.pr }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       # The PR head, so a static demo target committed in the PR resolves and the
       # agent sees the change it is demoing. Same-repo only (forks are filtered).
       - name: Check out the PR head
@@ -278,9 +279,10 @@ jobs:
       # Node only — no pnpm, no workspace install. Everything this job runs comes
       # from npm (the dailies CLI and Claude Code), which is what makes the file
       # copyable into an app repo that has no pnpm lockfile at all.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.0.0
         with:
-          node-version: 22
+          node-version: 24
+          package-manager-cache: false
       - name: Install ffmpeg and a font (title card / credits need drawtext + a font)
         run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
 
@@ -325,7 +327,7 @@ jobs:
       # dev-dep rather than the runtime pin. So the apt step above installs only
       # the system libs Chromium links against; `dailies install` is the single
       # source of the browser, and the ms-playwright cache holds the binary.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-dailies-${{ steps.cli.outputs.version }}
@@ -334,7 +336,7 @@ jobs:
       # `session list | .[0]` fallback. `dailies install` still runs and
       # reconciles, so a partial/stale cache is safe; this just skips the
       # npm install on a hit.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6.1.0
         with:
           path: ~/.dailies/node_modules
           key: dailies-runtime-${{ runner.os }}-${{ steps.cli.outputs.version }}
@@ -557,14 +559,14 @@ jobs:
           cp "$VIDEO" "$GITHUB_WORKSPACE/dailies-demo.webm" || true
 
       - name: Upload the report (report.html + results.json only)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: dailies-report-pr${{ matrix.pr }}
           path: dailies-report/
           if-no-files-found: error
 
       - name: Upload the cinematic video
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: dailies-demo-video-pr${{ matrix.pr }}
           path: dailies-demo.webm

@@ -54,7 +54,7 @@ export async function ensureDaemonRunning(): Promise<void> {
     !(await embeddedRuntimeInstalled(command.workdir))
   ) {
     throw new Error(
-      "Embedded daemon dependencies are missing. Run `dailies install` first."
+      "Embedded daemon dependencies are missing or outdated. Run `dailies install` first."
     );
   }
 

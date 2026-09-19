@@ -36,6 +36,8 @@ the happy path — it pairs with the `/dailies:session-interactive` flow in the 
 
 ## Install
 
+Requires Node 22.12.0 or newer; Node 24 LTS is recommended.
+
 ```bash
 npm i -g dailies-cli     # adds the `dailies` command
 dailies install              # one-time: download Chromium + runtime (~150 MB) into ~/.dailies
