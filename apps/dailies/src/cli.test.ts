@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { execute } from "./cli.js";
+import { execute, resolveConnect } from "./cli.js";
+
+// `exec` would otherwise start a daemon and drive a browser; the flag mapping is
+// what these tests are about.
+const execScriptMock = vi.hoisted(() => vi.fn());
+vi.mock("./commands/exec.js", () => ({ execScript: execScriptMock }));
 
 // Drive the real entry point so these cover commander's own error path rather
 // than a reimplementation of it. `execute` takes a process.argv-shaped array.
@@ -60,6 +65,20 @@ describe("unknown flag errors", () => {
     expect(err).toContain("--attach");
   });
 
+  it("resolves the command past a leading global flag", async () => {
+    // A root option parses in any position, so it must not end the walk —
+    // breaking on it named `dailies`'s flags for a `session end` mistake.
+    const { err } = await run([
+      "--json",
+      "session",
+      "end",
+      "some-session-id",
+      "--bogus",
+    ]);
+
+    expect(err).toContain("help: valid flags for `session end`");
+  });
+
   it("stays quiet on errors that already name the flag they mean", async () => {
     // Missing-required-option errors share the exit code but not the problem —
     // the flag list would be noise there.
@@ -68,6 +87,31 @@ describe("unknown flag errors", () => {
     expect(code).toBe(2);
     expect(err).toContain("--session");
     expect(err).not.toContain("help: valid flags");
+  });
+});
+
+describe("exec --connect", () => {
+  it("maps a bare --connect to the auto-discovery sentinel", () => {
+    // commander gives an optional-valued flag as `true`; the protocol wants a
+    // string and the daemon only auto-discovers on the literal "auto".
+    expect(resolveConnect(true)).toBe("auto");
+  });
+
+  it("passes an explicit CDP URL straight through, and absence as absence", () => {
+    expect(resolveConnect("ws://127.0.0.1:9222/devtools/browser/x")).toBe(
+      "ws://127.0.0.1:9222/devtools/browser/x"
+    );
+    expect(resolveConnect(undefined)).toBeUndefined();
+  });
+
+  it('reaches execScript as "auto" from the command line', async () => {
+    execScriptMock.mockResolvedValue(0);
+    // A FILE argument, so the action doesn't sit waiting on stdin.
+    await run(["exec", "step.js", "--connect"]);
+
+    expect(execScriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({ connect: "auto" })
+    );
   });
 });
 

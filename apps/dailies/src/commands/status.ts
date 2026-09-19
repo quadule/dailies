@@ -1,5 +1,5 @@
 import { requestId } from "dailies-cli-kit";
-import { ensureDaemonRunning, sendRequest } from "dailies-daemon-client";
+import { isDaemonRunning, sendRequest } from "dailies-daemon-client";
 import { reconcileStaleActiveSessions } from "../session/reconcile.js";
 import { readSessionRecord } from "../session/registry.js";
 import { renderSessionRecord, renderStatusResult } from "./render.js";
@@ -29,10 +29,25 @@ export async function statusCommand(args: StatusArgs): Promise<number> {
     return 0;
   }
 
-  // No --session: report the daemon's own status.
-  await ensureDaemonRunning();
+  // No --session: report the daemon's own status. Deliberately does NOT start
+  // one — asking whether anything is running must not be what starts it (and on
+  // a fresh install it failed outright on the missing embedded runtime). Mirrors
+  // `daemon stop`, which answers the same way when there is nothing there.
+  if (!(await isDaemonRunning())) {
+    process.stdout.write(
+      args.json
+        ? `${JSON.stringify({ running: false })}\n`
+        : "Daemon is not running.\n"
+    );
+    return 0;
+  }
   return sendRequest(
     { id: requestId("status"), type: "status" },
-    renderStatusResult
+    args.json
+      ? (data, stdout) =>
+          stdout.write(
+            `${JSON.stringify({ running: true, ...(data as object) })}\n`
+          )
+      : renderStatusResult
   );
 }

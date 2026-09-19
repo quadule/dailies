@@ -29,14 +29,17 @@
 // pixel-identical frames. On the same session that took 51.1s to 28.0s with
 // every one of its 224 frames of real motion intact.
 //
-// ffmpeg is an OPTIONAL dependency: resolved from $DAILIES_FFMPEG, then PATH,
-// then Playwright's browser cache (Playwright installs its own ffmpeg build
-// alongside Chromium for screencasts). When unavailable — or when either pass
-// fails — the original video is kept untouched and the report still renders.
+// ffmpeg is an OPTIONAL dependency: resolved from $DAILIES_FFMPEG, then PATH.
+// It must be a FULL build — Playwright ships its own ffmpeg alongside Chromium
+// and we deliberately don't fall back to it: that binary is compiled with
+// --disable-everything plus pad/crop/scale, so it has none of the filters this
+// pipeline needs (tblend/lutyuv/signalstats/metadata/select here; adelay/amix/
+// drawtext/subtitles in the cinematic pass). Using it only turned a clear
+// "ffmpeg not found" into an opaque "Command failed" several stages later.
+// When ffmpeg is unavailable — or when either pass fails — the original video is
+// kept untouched and the report still renders.
 import { execFile } from "node:child_process";
-import { access, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { access, rename, rm, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { Logger } from "dailies-logger";
 
@@ -476,50 +479,8 @@ async function isExecutableFile(candidate: string): Promise<boolean> {
   }
 }
 
-async function listDir(dir: string): Promise<string[]> {
-  try {
-    return await readdir(dir);
-  } catch {
-    return [];
-  }
-}
-
-async function findFfmpegInCacheRoot(
-  root: string
-): Promise<string | undefined> {
-  const entries = (await listDir(root))
-    .filter((entry) => entry.startsWith("ffmpeg-"))
-    .sort()
-    .reverse();
-  for (const entry of entries) {
-    for (const binary of await listDir(path.join(root, entry))) {
-      const candidate = path.join(root, entry, binary);
-      if (binary.startsWith("ffmpeg") && (await isExecutableFile(candidate))) {
-        return candidate;
-      }
-    }
-  }
-  return;
-}
-
-// Playwright keeps its ffmpeg build in the browsers cache as
-// <cache>/ffmpeg-<rev>/ffmpeg-<platform>[.exe].
-async function findPlaywrightFfmpeg(): Promise<string | undefined> {
-  const roots = [
-    process.env.PLAYWRIGHT_BROWSERS_PATH,
-    path.join(os.homedir(), "Library", "Caches", "ms-playwright"),
-    path.join(os.homedir(), ".cache", "ms-playwright"),
-    path.join(os.homedir(), "AppData", "Local", "ms-playwright"),
-  ].filter((root): root is string => Boolean(root));
-  for (const root of roots) {
-    const found = await findFfmpegInCacheRoot(root);
-    if (found) {
-      return found;
-    }
-  }
-  return;
-}
-
+// $DAILIES_FFMPEG, then PATH — and nothing else. See the note at the top of the
+// file for why Playwright's bundled build is not a fallback.
 export async function findFfmpeg(): Promise<string | undefined> {
   const override = process.env.DAILIES_FFMPEG;
   if (override) {
@@ -535,7 +496,7 @@ export async function findFfmpeg(): Promise<string | undefined> {
   } catch {
     // not on PATH
   }
-  return findPlaywrightFfmpeg();
+  return;
 }
 
 async function runFfmpeg(

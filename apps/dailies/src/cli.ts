@@ -86,6 +86,13 @@ function resolveCommand(
   let cmd = program;
   for (const token of args) {
     if (token.startsWith("-")) {
+      // A ROOT option parses in any position, so `dailies --json session end …`
+      // is the same command as `dailies session end … --json`. Breaking on it
+      // resolved to `dailies` and named the wrong command's flags in the error.
+      // They are all boolean, so there is no value token to skip past.
+      if (program.options.some((o) => o.short === token || o.long === token)) {
+        continue;
+      }
       break;
     }
     const sub = (cmd.commands as CommandType[]).find(
@@ -133,6 +140,16 @@ function resolveVerdict(
     };
   }
   return;
+}
+
+// `--connect` with no URL means "find the running Chrome yourself". The daemon
+// auto-discovers on the literal "auto" and the protocol wants a string, so
+// translate commander's bare-flag `true` here, at the boundary — sent verbatim
+// it failed schema validation instead of connecting.
+export function resolveConnect(
+  value: string | true | undefined
+): string | undefined {
+  return value === true ? "auto" : value;
 }
 
 function parseTimeout(value: string): number {
@@ -214,7 +231,9 @@ interface CiMetricsOpts {
 
 interface ExecOpts {
   browser: string;
-  connect?: string;
+  // `--connect [URL]` is optional-valued, so a BARE `--connect` arrives as
+  // `true`, not a string. See resolveConnect.
+  connect?: string | true;
   headless?: boolean;
   ignoreHttpsErrors?: boolean;
   injectScript?: string[];
@@ -498,7 +517,7 @@ export function buildProgram(): CommandType {
     .addOption(
       new commander.Option(
         "--connect [URL]",
-        "Connect to a running Chrome instance"
+        "Connect to a running Chrome instance — bare, it discovers one; or pass its CDP URL"
       )
     )
     .option(
@@ -532,7 +551,7 @@ export function buildProgram(): CommandType {
       }
       const code = await execScript({
         browser: opts.browser,
-        connect: opts.connect,
+        connect: resolveConnect(opts.connect),
         file,
         headless: opts.headless === true,
         ignoreHttpsErrors: opts.ignoreHttpsErrors === true,
@@ -616,7 +635,9 @@ export function buildProgram(): CommandType {
 
   program
     .command("status")
-    .description("Show session status (or daemon status without --session)")
+    .description(
+      "Show session status (or daemon status without --session; never starts the daemon)"
+    )
     .option("--session <id>", "Session id")
     .action(async (opts: { session?: string }) => {
       const code = await statusCommand({

@@ -166,6 +166,31 @@ describe("loadProject", () => {
     expect(loaded.config.demo.mode).toBeNull();
   });
 
+  it("says a malformed config.json was ignored, rather than defaulting silently", async () => {
+    // Fail open, but never quietly: the defaults just replaced whatever the repo
+    // configured, and the next thing the user sees would otherwise be "no demo
+    // target — set `url`" for a url they did set.
+    const dir = await project({ "config.json": '{"url": "http://x",}' });
+    const loaded = await loadProject(dir);
+
+    expect(loaded.configError).toContain(".dailies/config.json");
+    expect(loaded.configError).toContain("not valid JSON");
+    expect(loaded.configError).toContain("using defaults");
+  });
+
+  it("reports no config error for a valid or absent config.json", async () => {
+    expect(
+      (
+        await loadProject(
+          await project({ "config.json": '{"url":"http://x"}' })
+        )
+      ).configError
+    ).toBeUndefined();
+    expect(
+      (await loadProject(await project({ "flows.md": "# hi" }))).configError
+    ).toBeUndefined();
+  });
+
   it("reports a config with no flows file, and vice versa", async () => {
     const onlyConfig = await loadProject(
       await project({ "config.json": '{"url":"http://x"}' })

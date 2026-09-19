@@ -126,6 +126,13 @@ export async function sessionStart(args: SessionStartArgs): Promise<number> {
   // the visible signal that it's there.
   const projectUrl = args.projectUrl ?? process.env.DAILIES_PROJECT_URL ?? null;
   const project = await loadProject(process.cwd(), { url: projectUrl });
+  if (project.configError) {
+    // Loud on stderr as well as in the log: defaults just replaced whatever the
+    // repo configured (its `url`, its demo.paths), and every later complaint
+    // about missing configuration would otherwise point at the wrong thing.
+    logger.warn({ root: project.root }, project.configError);
+    process.stderr.write(`⚠ ${project.configError}\n`);
+  }
   if (project.flowsPath) {
     const from =
       project.source === "remote"

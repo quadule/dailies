@@ -75,6 +75,48 @@ describe("parseTraceActions", () => {
     expect(byStep.submit?.[0]?.durationMs).toBe(20);
   });
 
+  it("redacts a value typed into a credential field, but not other typing", () => {
+    // These summaries are rendered into report.html, the artifact documented as
+    // shareable — a sign-in step must not carry the password into it.
+    const zip = makeTraceZip([
+      {
+        callId: "c1",
+        class: "Frame",
+        method: "fill",
+        params: { selector: "#user_password", value: "hunter2" },
+        startTime: 100,
+        type: "before",
+      },
+      {
+        callId: "c2",
+        class: "Frame",
+        method: "fill",
+        params: { selector: "#search", value: "invoices" },
+        startTime: 110,
+        type: "before",
+      },
+      {
+        callId: "c3",
+        class: "Frame",
+        method: "type",
+        params: { selector: 'internal:label="OTP"i', text: "123456" },
+        startTime: 120,
+        type: "before",
+      },
+    ]);
+
+    const actions = parseTraceActions(zip).byStep["(setup)"];
+
+    expect(actions?.[0]?.params).not.toContain("hunter2");
+    expect(actions?.[0]?.params).toContain("[redacted]");
+    // The selector stays — it is what makes the redacted line legible.
+    expect(actions?.[0]?.params).toContain("#user_password");
+    // An ordinary field keeps its value: the trace is evidence.
+    expect(actions?.[1]?.params).toContain("invoices");
+    expect(actions?.[2]?.params).not.toContain("123456");
+    expect(actions?.[2]?.params).toContain("[redacted]");
+  });
+
   it("returns empty for non-zip / garbage input", () => {
     expect(parseTraceActions(new Uint8Array([1, 2, 3, 4]))).toEqual({
       byStep: {},

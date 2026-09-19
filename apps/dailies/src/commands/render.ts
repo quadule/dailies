@@ -1,8 +1,23 @@
-import { formatDurationMs, pad } from "dailies-cli-kit";
+import { formatDurationMs, pad, renderJsonResult } from "dailies-cli-kit";
 import type { StatusSummary } from "dailies-protocol";
 import type { SessionRecord } from "../session/registry.js";
 
-export { renderJsonResult } from "dailies-cli-kit";
+// Emit the script's return value as strict JSON under --json (so `| jq` works,
+// including string results which renderJsonResult prints unquoted), otherwise
+// fall back to the friendly renderer. Shared by `run` and `exec`: the two
+// commands run the same sandbox, so `--json` has to mean the same thing in both.
+export function resultRenderer(
+  json: boolean
+): (data: unknown, stdout: NodeJS.WritableStream) => void {
+  if (!json) {
+    return renderJsonResult;
+  }
+  return (data, stdout) => {
+    if (data !== null && data !== undefined) {
+      stdout.write(`${JSON.stringify(data)}\n`);
+    }
+  };
+}
 
 export function renderStatusResult(
   raw: unknown,

@@ -21,7 +21,14 @@ export async function initCommand(): Promise<number> {
       "  Browse recorded sessions:        open ~/.dailies/sessions/<id>/report.html",
       "  Claude Code plugin:              /plugin marketplace add quadule/dailies",
       "                                   /plugin install dailies@dailies-marketplace",
-      "  Try a demo:                      see examples/ in the repo",
+      "",
+      // Not "see examples/ in the repo": someone who installed from npm has no
+      // repo to look in. Three commands they can paste instead.
+      "  Record your first session:",
+      "    id=$(dailies session start --name demo)",
+      '    echo \'const p = await browser.getPage("demo"); await p.goto("https://example.com")\' \\',
+      '      | dailies run --session "$id" --step open',
+      '    dailies session end "$id" --open',
       "",
     ].join("\n")
   );

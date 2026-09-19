@@ -508,8 +508,11 @@ export async function decideDemoWithAgent(args: {
   };
 }
 
-// CLI: `tsx demo-request.ts --head-sha <sha> [--body-file <p>]
+// Legacy direct entry: `tsx demo-request.ts --head-sha <sha> [--body-file <p>]
 // [--changed-file <p>] [--comments-file <p>] [--cwd <dir>]` → JSON on stdout.
+// The SUPPORTED entry is `dailies ci decide`, which takes the same flags through
+// commander and works from the published binary with no source checkout; this
+// one survives for running the decision straight out of a checkout.
 //
 // The bulky, arbitrary inputs come from FILES, not argv or env. PR bodies and
 // comments can contain anything — newlines, quotes, NUL bytes — and a shell
@@ -518,12 +521,23 @@ export async function decideDemoWithAgent(args: {
 // is a JSON array of comment bodies, exactly what `gh pr view --json comments`
 // produces; `--changed-file` is one path per line, as `gh pr diff --name-only`
 // produces.
-function parseArgs(argv: string[]): Record<string, string> {
+//
+// Exported for the unit test. Pure.
+export function parseArgs(argv: string[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
-    if (flag?.startsWith("--")) {
-      out[flag.slice(2)] = argv[i + 1] ?? "";
+    if (!flag?.startsWith("--")) {
+      continue;
+    }
+    // A boolean flag must not swallow the next one as its value: `--force
+    // --head-sha abc` set force="--head-sha" and dropped the sha entirely, so
+    // the run re-demoed a commit it had already demoed.
+    const next = argv[i + 1];
+    if (next === undefined || next.startsWith("--")) {
+      out[flag.slice(2)] = "";
+    } else {
+      out[flag.slice(2)] = next;
       i += 1;
     }
   }
@@ -575,7 +589,7 @@ export async function runDecide(args: {
     readOrEmpty(args.changedFile),
     readOrEmpty(args.commentsFile),
   ]);
-  const { config } = await loadProject(args.cwd ?? process.cwd());
+  const { config, configError } = await loadProject(args.cwd ?? process.cwd());
   const decision = await decideDemoWithAgent({
     body,
     changedPaths: changed.split(/\r?\n/),
@@ -584,6 +598,16 @@ export async function runDecide(args: {
     force: args.force ?? false,
     headSha: args.headSha ?? "",
   });
+  // A scheduled run has nobody watching stderr, and the decision's `reason` is
+  // what reaches the workflow log and the PR comment. Say there that the repo's
+  // config was ignored — otherwise "no demo target" reads as "you forgot to set
+  // a url" for a repo that set one in a file with a stray comma in it.
+  if (configError) {
+    return JSON.stringify({
+      ...decision,
+      reason: `${configError}. ${decision.reason}`,
+    });
+  }
   return JSON.stringify(decision);
 }
 
@@ -593,7 +617,7 @@ async function main(): Promise<void> {
     bodyFile: args["body-file"],
     changedFile: args["changed-file"],
     commentsFile: args["comments-file"],
-    cwd: args.cwd,
+    cwd: args.cwd || undefined,
     force: args.force !== undefined,
     headSha: args["head-sha"],
   });

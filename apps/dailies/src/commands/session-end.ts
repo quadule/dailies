@@ -28,7 +28,7 @@ import {
   updateSessionRecord,
   writeSessionRecord,
 } from "../session/registry.js";
-import { scrubHarFile } from "../session/scrub-har.js";
+import { scrubSessionHar } from "../session/scrub-har.js";
 import {
   condenseVideo,
   findFfmpeg,
@@ -449,6 +449,9 @@ async function condenseSessionVideos(
   }
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) {
+    process.stderr.write(
+      "  ⚠ video not condensed: ffmpeg not found — install ffmpeg (brew install ffmpeg / apt install ffmpeg) or set $DAILIES_FFMPEG\n"
+    );
     logger.info("ffmpeg not found; keeping raw session videos");
     return [];
   }
@@ -664,12 +667,23 @@ async function cinematizeSessionVideo(
   record: SessionRecord,
   opts: CinematicOpts
 ): Promise<void> {
+  // The two commonest first-run outcomes are a silent skip otherwise: the root
+  // logger sits at warn, so an info line is invisible, and a bare return leaves
+  // someone who asked for --cinematic staring at an unchanged video. Say it on
+  // stderr, in the same shape as the other skips below.
   const video = result.artifacts.find((a) => a.kind === "video");
   if (!video) {
+    process.stderr.write(
+      "  ⚠ cinematic pass skipped: this session recorded no video (was --no-video passed to session start?)\n"
+    );
+    logger.warn("no video artifact; skipping cinematic pass");
     return;
   }
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) {
+    process.stderr.write(
+      "  ⚠ cinematic pass skipped: ffmpeg not found — install ffmpeg (brew install ffmpeg / apt install ffmpeg) or set $DAILIES_FFMPEG\n"
+    );
     logger.info("ffmpeg not found; skipping cinematic pass");
     return;
   }
@@ -885,28 +899,10 @@ export async function sessionEnd(
   }
 
   // Scrub credentials out of the HAR before anything else can copy or share it.
-  // Playwright records `Cookie` / `Authorization` verbatim, and a session
-  // directory is meant to be handed to someone else.
+  // Playwright records `Cookie` / `Authorization` (and a login POST's body)
+  // verbatim, and a session directory is meant to be handed to someone else.
   if (opts.scrubHar !== false) {
-    const harArtifact = endResult.artifacts.find((a) => a.kind === "har");
-    if (harArtifact) {
-      const outcome = await scrubHarFile(harArtifact.path, logger);
-      if (outcome.scrubbed) {
-        if (outcome.replaced > 0) {
-          logger.info(
-            { har: harArtifact.path, replaced: outcome.replaced },
-            `scrubbed ${outcome.replaced} credential value(s) from network.har`
-          );
-        }
-      } else {
-        // Loudly: the artifact is still on disk WITH its credentials, and the
-        // whole point of the pass is that someone is about to share it.
-        logger.warn(
-          { har: harArtifact.path, reason: outcome.reason },
-          "could not scrub network.har — it still contains credential headers; do not share this session directory"
-        );
-      }
-    }
+    await scrubSessionHar(endResult, logger);
   }
 
   // The preserved condensed cut (written by a prior condense) marks the video as
@@ -1003,9 +999,12 @@ export async function sessionEnd(
           resultsPath: sessionResultsPath(id),
           // The run verdict (agent-declared or the fallback tally) + any reason,
           // so a CI job can fail the build on a failed session.
-          // Named numbers this run produced (--metric), for a caller that
-          // wants to report or compare them.
-          metrics,
+          // Named numbers on the record (--metric), for a caller that wants to
+          // report or compare them. Read back off the record rather than from
+          // this invocation's flags: a re-finalize that passes no --metric still
+          // has the earlier run's numbers in results.json, and reporting [] for
+          // them made the comparison against the previous demo silently empty.
+          metrics: record.metrics ?? [],
           status: runStatus,
           verdictReason,
         },

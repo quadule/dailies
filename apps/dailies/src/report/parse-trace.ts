@@ -1,4 +1,5 @@
 import { unzipSync } from "fflate";
+import { namesCredential, REDACTED } from "../session/redact.js";
 
 // A single Playwright call extracted from the session trace — the readable
 // answer to "what command was sent". apiName is reconstructed as `Class.method`
@@ -26,7 +27,32 @@ function truncate(value: string): string {
     : value;
 }
 
-function summarizeParams(params: unknown): string | undefined {
+// The trace records the text handed to a fill/type call verbatim, and this
+// summary is rendered into report.html — the artifact meant to be shared. Same
+// rule as session/redact.ts: the SELECTOR decides, so only a value typed into a
+// credential-named field is replaced. Playwright names the payload `value` on
+// fill and `text` on type/pressSequentially.
+const TYPING_METHODS = new Set(["fill", "type", "pressSequentially"]);
+const TYPED_VALUE_KEYS = ["value", "text"];
+
+function redactTypedValue(
+  rest: Record<string, unknown>,
+  method: string | undefined
+): void {
+  if (!(method && TYPING_METHODS.has(method))) {
+    return;
+  }
+  if (!(typeof rest.selector === "string" && namesCredential(rest.selector))) {
+    return;
+  }
+  for (const key of TYPED_VALUE_KEYS) {
+    if (typeof rest[key] === "string") {
+      rest[key] = REDACTED;
+    }
+  }
+}
+
+function summarizeParams(params: unknown, method?: string): string | undefined {
   if (!params || typeof params !== "object") {
     return;
   }
@@ -46,6 +72,7 @@ function summarizeParams(params: unknown): string | undefined {
   if (Object.keys(rest).length === 0) {
     return;
   }
+  redactTypedValue(rest, method);
   return truncate(JSON.stringify(rest));
 }
 
@@ -117,7 +144,7 @@ function toAction(
     // yields "Frame" / "goto" rather than a dangling "Frame." / ".goto".
     apiName: [before.class, before.method].filter(Boolean).join("."),
   };
-  const params = summarizeParams(before.params);
+  const params = summarizeParams(before.params, before.method);
   if (params !== undefined) {
     action.params = params;
   }

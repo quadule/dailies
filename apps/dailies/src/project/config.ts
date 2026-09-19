@@ -246,6 +246,11 @@ export function isWorthDemoing(
 
 export interface LoadedProject {
   config: ProjectConfig;
+  // Set when a config.json EXISTS but could not be read as JSON. Loading still
+  // fails open with defaults — a config typo must not stop a recording — but a
+  // caller that silently defaults leaves the user reading "no demo target" for a
+  // `url` they did set. Surfaced by `session start` and `ci decide`.
+  configError?: string;
   // Line count of flows.md, for the budget warning.
   flowsLines: number;
   // Absolute path to flows.md, when the repo has one.
@@ -382,12 +387,15 @@ export async function fetchProject(
   }
 
   let config = EMPTY_CONFIG;
+  let configError: string | undefined;
   if (rawConfig !== null) {
     try {
       config = parseProjectConfig(JSON.parse(rawConfig));
       await writeFile(path.join(root, CONFIG_FILE), rawConfig, "utf8");
-    } catch {
-      // Served but not valid JSON — defaults stand, exactly as for a local file.
+    } catch (err) {
+      // Served but not usable — defaults stand and the run is told why, exactly
+      // as for a local file (fail open, never silently).
+      configError = `${PROJECT_DIR}/${CONFIG_FILE} served by ${base.href} is not valid JSON or could not be cached (${(err as Error).message}) — using defaults`;
     }
   }
   // An environment that serves `.dailies/` knows its own address better than the person
@@ -396,13 +404,27 @@ export async function fetchProject(
   config = { ...config, url: base.href.replace(/\/$/, "") };
 
   if (rawFlows === null) {
-    return { config, flowsLines: 0, flowsPath: null, root, source: "remote" };
+    return {
+      config,
+      flowsLines: 0,
+      flowsPath: null,
+      root,
+      source: "remote",
+      configError,
+    };
   }
   const flowsPath = path.join(root, FLOWS_FILE);
   try {
     await writeFile(flowsPath, rawFlows, "utf8");
   } catch {
-    return { config, flowsLines: 0, flowsPath: null, root, source: "remote" };
+    return {
+      config,
+      flowsLines: 0,
+      flowsPath: null,
+      root,
+      source: "remote",
+      configError,
+    };
   }
   return {
     config,
@@ -410,12 +432,14 @@ export async function fetchProject(
     flowsPath,
     root,
     source: "remote",
+    configError,
   };
 }
 
 // Load the project convention for `cwd`. Never throws: a missing directory,
 // unreadable file or malformed JSON yields defaults, because a bad project config
-// must not be able to stop someone recording a session.
+// must not be able to stop someone recording a session. A config that exists but
+// could not be parsed also sets `configError` — fail open, but never silently.
 //
 // A checkout always wins over a served copy: if you are standing in the repo, the repo
 // is the truth — and a `flows.md` you are editing must be the one the agent reads.
@@ -433,19 +457,50 @@ export async function loadProject(
         )
       : NO_PROJECT;
   }
-  let config = EMPTY_CONFIG;
-  try {
-    const raw = await readFile(path.join(root, CONFIG_FILE), "utf8");
-    config = parseProjectConfig(JSON.parse(raw));
-  } catch {
-    // No config.json, or it isn't valid JSON — defaults stand.
-  }
+  const { config, configError } = await readLocalConfig(root);
   const flowsPath = path.join(root, FLOWS_FILE);
   let flowsLines = 0;
   try {
     flowsLines = (await readFile(flowsPath, "utf8")).split(/\r?\n/).length;
   } catch {
-    return { config, flowsLines: 0, flowsPath: null, root, source: "local" };
+    return {
+      config,
+      configError,
+      flowsLines: 0,
+      flowsPath: null,
+      root,
+      source: "local",
+    };
   }
-  return { config, flowsLines, flowsPath, root, source: "local" };
+  return { config, configError, flowsLines, flowsPath, root, source: "local" };
+}
+
+// Read `<root>/config.json`, distinguishing "there is no config" from "there is
+// one and it is broken". The read and the parse were one try/catch, so a
+// malformed file was indistinguishable from an absent one — and the run then
+// blamed the user for a `url` they had set. Still fails open; it just says so.
+async function readLocalConfig(
+  root: string
+): Promise<{ config: ProjectConfig; configError?: string }> {
+  const configPath = path.join(root, CONFIG_FILE);
+  let raw: string;
+  try {
+    raw = await readFile(configPath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { config: EMPTY_CONFIG }; // optional file, as documented
+    }
+    return {
+      config: EMPTY_CONFIG,
+      configError: `${PROJECT_DIR}/${CONFIG_FILE} could not be read (${(err as Error).message}) — using defaults`,
+    };
+  }
+  try {
+    return { config: parseProjectConfig(JSON.parse(raw)) };
+  } catch (err) {
+    return {
+      config: EMPTY_CONFIG,
+      configError: `${PROJECT_DIR}/${CONFIG_FILE} is not valid JSON (${(err as Error).message}) — using defaults`,
+    };
+  }
 }

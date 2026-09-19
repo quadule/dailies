@@ -157,10 +157,11 @@ the session DIRECTORY as sensitive.
   --no-scrub-har      keep the real credential values in network.har (for replaying it against
                       the same live session)
 
-Videos are condensed when ffmpeg is available (PATH, $DAILIES_FFMPEG, or Playwright's bundled
-copy): the pre-page-load segment is dropped and motionless stretches are trimmed out with a
-frame-accurate re-encode that keeps real motion (cursor, typing, captions). Pass --no-condense
-to keep the raw recordings.
+Videos are condensed when a full ffmpeg is available (on PATH, or $DAILIES_FFMPEG): the
+pre-page-load segment is dropped and motionless stretches are trimmed out with a frame-accurate
+re-encode that keeps real motion (cursor, typing, captions). Pass --no-condense to keep the raw
+recordings. Install one with 'brew install ffmpeg' / 'apt install ffmpeg' — a minimal build (such
+as the one Playwright bundles for screencasts) lacks the filters this needs and is not used.
 
 CINEMATIC MODE (--cinematic): turn the silent recording into a narrated short.
 An LLM writes themed narration per step, a voice reads it, and each step's frame is held just
@@ -314,7 +315,10 @@ Examples:
   dailies ci metrics --current "$(cat metrics.txt)" --previous "$PREV" --prefix "- "`;
 
 export const INSTALL_LONG_ABOUT = `Install the embedded daemon runtime: Chromium plus the Playwright + QuickJS
-sandbox, into ~/.dailies. Run once before your first session (downloads ~150 MB).`;
+sandbox, into ~/.dailies. Run once before your first session (downloads ~150 MB), and again
+after upgrading the CLI: it also retires an idle daemon left over from the previous build so the
+next command starts the new one (a daemon with an open session or browser is left alone — run
+\`dailies stop\` when those have ended).`;
 
-export const INIT_LONG_ABOUT = `One-shot setup: install the browser runtime, then print next steps (add the
-agent plugin, install skills, open a report). Run it once before your first session.`;
+export const INIT_LONG_ABOUT = `One-shot setup: install the browser runtime, then print next steps (where reports
+land, how to add the agent plugin). Run it once before your first session.`;

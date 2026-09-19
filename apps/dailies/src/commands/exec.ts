@@ -3,7 +3,7 @@ import { requestId } from "dailies-cli-kit";
 import { ensureDaemonRunning, sendRequest } from "dailies-daemon-client";
 import type { ExecuteRequest } from "dailies-protocol";
 import { readInjectScripts } from "../inject-scripts.js";
-import { renderJsonResult } from "./render.js";
+import { resultRenderer } from "./render.js";
 
 // One-off, UNRECORDED script execution — the counterpart to `dailies run`,
 // which requires a session and records the script as a step (trace/video/HAR/
@@ -12,6 +12,8 @@ import { renderJsonResult } from "./render.js";
 // step you meant to record into a silent no-op that never reaches the report.
 export interface ExecArgs {
   browser: string;
+  // A CDP URL, or the literal "auto" to let the daemon discover a running
+  // Chrome. Commander's bare `--connect` is mapped to "auto" in cli.ts.
   connect?: string;
   file?: string;
   headless: boolean;
@@ -67,5 +69,5 @@ export async function execScript(args: ExecArgs): Promise<number> {
     request.initScripts = initScripts;
   }
 
-  return sendRequest(request, renderJsonResult);
+  return sendRequest(request, resultRenderer(args.json));
 }

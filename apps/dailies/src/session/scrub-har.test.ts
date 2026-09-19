@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createLogger } from "dailies-logger";
 import { describe, expect, it } from "vitest";
-import { SCRUB_PLACEHOLDER, scrubHarFile, scrubHarLog } from "./scrub-har.js";
+import {
+  SCRUB_PLACEHOLDER,
+  scrubHarFile,
+  scrubHarLog,
+  scrubSessionHar,
+} from "./scrub-har.js";
 
 const log = createLogger({ level: "silent" });
 
@@ -126,6 +131,85 @@ describe("scrubHarLog", () => {
   });
 });
 
+// A sign-in POST, the request a recorded session is most likely to carry — and
+// the one whose credential is in the BODY, where the header pass never looked.
+function loginEntry(postData: unknown) {
+  return {
+    log: {
+      entries: [
+        {
+          request: {
+            headers: [{ name: "content-type", value: "application/json" }],
+            method: "POST",
+            postData,
+            url: "https://app.example.com/login",
+          },
+        },
+      ],
+    },
+  };
+}
+
+describe("scrubHarLog request bodies", () => {
+  it("replaces a form field named like a credential, and keeps the rest", () => {
+    const har = loginEntry({
+      mimeType: "application/x-www-form-urlencoded",
+      params: [
+        { name: "username", value: "ada" },
+        { name: "user[password]", value: "hunter2" },
+      ],
+      text: "username=ada&user%5Bpassword%5D=hunter2",
+    });
+
+    expect(scrubHarLog(har)).toBeGreaterThan(0);
+    const post = har.log.entries[0]?.request.postData as {
+      params: { name: string; value: string }[];
+      text: string;
+    };
+    expect(post.params[0]?.value).toBe("ada");
+    expect(post.params[1]?.value).toBe(SCRUB_PLACEHOLDER);
+    // The raw body carries the same password, and there is no structure in it
+    // to replace field-wise — so the whole body goes.
+    expect(post.text).toBe(SCRUB_PLACEHOLDER);
+  });
+
+  it("drops a JSON login body, which HAR gives us no params for", () => {
+    const har = loginEntry({
+      mimeType: "application/json",
+      text: '{"email":"ada@example.com","password":"hunter2"}',
+    });
+
+    expect(scrubHarLog(har)).toBe(1);
+    expect(
+      (har.log.entries[0]?.request.postData as { text: string }).text
+    ).toBe(SCRUB_PLACEHOLDER);
+  });
+
+  it("leaves a body with nothing credential-looking in it readable", () => {
+    // The debugging signal is the point: an ordinary POST must survive whole.
+    const body = '{"quantity":2,"sku":"abc"}';
+    const har = loginEntry({ mimeType: "application/json", text: body });
+
+    expect(scrubHarLog(har)).toBe(0);
+    expect(
+      (har.log.entries[0]?.request.postData as { text: string }).text
+    ).toBe(body);
+  });
+
+  it("is idempotent, and tolerates a missing or malformed postData", () => {
+    const har = loginEntry({
+      params: [{ name: "token", value: "t" }],
+      text: "token=t",
+    });
+    expect(scrubHarLog(har)).toBe(2);
+    expect(scrubHarLog(har)).toBe(0);
+
+    expect(scrubHarLog(loginEntry(undefined))).toBe(0);
+    expect(scrubHarLog(loginEntry("not-an-object"))).toBe(0);
+    expect(scrubHarLog(loginEntry({ params: "junk" }))).toBe(0);
+  });
+});
+
 describe("scrubHarFile", () => {
   it("rewrites the file in place as valid, scrubbed JSON", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "scrub-har-"));
@@ -180,5 +264,41 @@ describe("scrubHarFile", () => {
 
     expect(outcome).toEqual({ replaced: 0, scrubbed: true });
     expect(await readFile(harPath, "utf8")).toBe(clean);
+  });
+});
+
+describe("scrubSessionHar", () => {
+  // `session abort` scrubs through this helper too — an aborted session's HAR is
+  // as sensitive as an ended one's, and for a while only `session end` scrubbed.
+  async function harIn(dir: string): Promise<string> {
+    const harPath = path.join(dir, "network.har");
+    await writeFile(harPath, JSON.stringify(harFixture()));
+    return harPath;
+  }
+
+  it("scrubs the har artifact of a finished session", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "scrub-har-"));
+    const harPath = await harIn(dir);
+
+    await scrubSessionHar(
+      {
+        artifacts: [
+          { bytes: 1, kind: "video", path: path.join(dir, "v.webm") },
+          { bytes: 2, kind: "har", path: harPath },
+        ],
+      } as never,
+      log
+    );
+
+    const reparsed = JSON.parse(await readFile(harPath, "utf8"));
+    expect(reparsed.log.entries[0].request.headers[0].value).toBe(
+      SCRUB_PLACEHOLDER
+    );
+  });
+
+  it("does nothing when the session captured no HAR (--no-har)", async () => {
+    await expect(
+      scrubSessionHar({ artifacts: [] } as never, log)
+    ).resolves.toBeUndefined();
   });
 });

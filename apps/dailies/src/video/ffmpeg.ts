@@ -343,11 +343,12 @@ export async function probeDurationSec(
   }
 }
 
-// The set of filters this ffmpeg build supports. Minimal builds — notably
-// Playwright's bundled ffmpeg — omit drawtext (title card) and subtitles
-// (caption burn); even some Homebrew builds lack drawtext when compiled without
-// freetype. We probe so the pipeline can do as much as the build allows instead
-// of failing wholesale.
+// The set of filters this ffmpeg build supports. Stripped-down builds omit
+// drawtext (title card) and subtitles (caption burn) — even some Homebrew builds
+// lack drawtext when compiled without freetype. We probe so the pipeline can do
+// as much as the build allows instead of failing wholesale. (Playwright's
+// bundled ffmpeg is far below that floor and findFfmpeg no longer offers it; see
+// the note at the top of condense.ts.)
 export function parseFilterNames(stdout: string): Set<string> {
   const names = new Set<string>();
   for (const line of stdout.split("\n")) {

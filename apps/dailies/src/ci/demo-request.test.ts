@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { EMPTY_CONFIG, parseProjectConfig } from "../project/config.js";
 import {
@@ -6,9 +9,11 @@ import {
   decideDemoWithAgent,
   demoedShas,
   isAlreadyDemoed,
+  parseArgs,
   parseDecision,
   parseDemoRequest,
   previousMetrics,
+  runDecide,
   targetFromComments,
 } from "./demo-request.js";
 
@@ -684,5 +689,54 @@ describe("previousMetrics", () => {
     // The freshness check and the metric read share one regex.
     const HEAD = "c".repeat(40);
     expect(isAlreadyDemoed(HEAD, [marker(HEAD, " coverage=42.5")])).toBe(true);
+  });
+});
+
+describe("parseArgs", () => {
+  it("reads valued flags", () => {
+    expect(parseArgs(["--head-sha", "abc123", "--cwd", "/repo"])).toEqual({
+      "head-sha": "abc123",
+      cwd: "/repo",
+    });
+  });
+
+  it("does not let a boolean flag swallow the next flag as its value", () => {
+    // `--force --head-sha abc` used to set force="--head-sha" and drop the sha
+    // entirely, so the freshness check ran against no commit.
+    expect(parseArgs(["--force", "--head-sha", "abc123"])).toEqual({
+      force: "",
+      "head-sha": "abc123",
+    });
+    // main() keys off presence, not value, so an empty string still means "set".
+    expect(parseArgs(["--force"]).force).toBe("");
+  });
+
+  it("handles a trailing boolean flag and ignores stray positionals", () => {
+    expect(parseArgs(["--cwd", "/repo", "--force"])).toEqual({
+      cwd: "/repo",
+      force: "",
+    });
+    expect(parseArgs(["junk", "--cwd", "/repo"])).toEqual({ cwd: "/repo" });
+  });
+});
+
+describe("runDecide", () => {
+  it("says in the reason when the repo's config.json could not be read", async () => {
+    // A scheduled run has nobody watching stderr: without this the decision
+    // reads as "you forgot to set a url" for a repo that set one.
+    const dir = await mkdtemp(path.join(tmpdir(), "dailies-decide-"));
+    await mkdir(path.join(dir, ".dailies"), { recursive: true });
+    await writeFile(
+      path.join(dir, ".dailies", "config.json"),
+      '{"url": "http://x",}'
+    );
+
+    // No target and no changed files, so this settles deterministically and
+    // never reaches a model.
+    const decision = JSON.parse(await runDecide({ cwd: dir }));
+
+    expect(decision.run).toBe(false);
+    expect(decision.reason).toContain("not valid JSON");
+    expect(decision.reason).toContain("no demo target");
   });
 });

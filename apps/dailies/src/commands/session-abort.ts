@@ -5,6 +5,7 @@ import { logger } from "../logger.js";
 import { writeSessionReport } from "../report/load-and-render.js";
 import { endResultFromDisk } from "../session/artifacts.js";
 import { readSessionRecord, updateSessionRecord } from "../session/registry.js";
+import { scrubSessionHar } from "../session/scrub-har.js";
 import { stopDaemonIfIdle } from "./daemon-stop.js";
 
 interface SessionAbortOpts {
@@ -57,6 +58,11 @@ export async function sessionAbort(
   // one, otherwise reconstructed from disk).
   try {
     const endResult = result ?? (await endResultFromDisk(record));
+    // Before the report, and unconditionally: an aborted session's HAR holds the
+    // same live credentials an ended one's does, and `abort` has no
+    // --no-scrub-har because there is no "replay this HAR" story for a teardown
+    // that went wrong.
+    await scrubSessionHar(endResult, logger);
     await writeSessionReport(id, record, endResult);
   } catch (err) {
     logger.debug({ err, sessionId: id }, "abort: report render failed");

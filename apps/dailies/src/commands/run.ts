@@ -4,23 +4,7 @@ import { ensureDaemonRunning, sendRequest } from "dailies-daemon-client";
 import type { ExecuteRequest } from "dailies-protocol";
 import { withSessionLock } from "../session/lock.js";
 import { readSessionRecord, writeSessionRecord } from "../session/registry.js";
-import { renderJsonResult } from "./render.js";
-
-// Emit the script's return value as strict JSON under --json (so `| jq` works,
-// including string results which renderJsonResult prints unquoted), otherwise
-// fall back to the friendly renderer.
-function resultRenderer(
-  json: boolean
-): (data: unknown, stdout: NodeJS.WritableStream) => void {
-  if (!json) {
-    return renderJsonResult;
-  }
-  return (data, stdout) => {
-    if (data !== null && data !== undefined) {
-      stdout.write(`${JSON.stringify(data)}\n`);
-    }
-  };
-}
+import { resultRenderer } from "./render.js";
 
 interface RunArgs {
   file?: string;

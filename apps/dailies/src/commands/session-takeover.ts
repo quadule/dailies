@@ -4,6 +4,7 @@ import type {
   SessionTakeoverStartRequest,
   SessionTakeoverStopRequest,
 } from "dailies-protocol";
+import { redactSecrets } from "../session/redact.js";
 import { readSessionRecord, updateSessionRecord } from "../session/registry.js";
 
 interface TakeoverOpts {
@@ -94,7 +95,11 @@ async function stopTakeover(
     process.stderr.write("Takeover stopped but no result was returned.\n");
     return 1;
   }
-  const captured = result;
+  // A takeover is exactly the moment a human signs in, and the recorder writes
+  // down whatever they typed. Redact here, ONCE, before the code is stored on
+  // the record (→ results.json → report.html) or echoed back — so the password
+  // isn't in the artifact, the agent's transcript, or the --json output.
+  const captured = { ...result, code: redactSecrets(result.code) };
 
   // Record the captured code as a session step so it lands in results.json /
   // the report alongside the trace + video of the takeover.
