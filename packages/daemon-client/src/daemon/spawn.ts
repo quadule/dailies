@@ -10,7 +10,7 @@ export interface DaemonCommand {
   workdir: string;
 }
 
-// Open ~/.dailies/daemon.stderr.log for append and hand back the fd, or
+// Open ~/.dailies/daemon.stderr.log for this spawn and hand back the fd, or
 // undefined if it can't be opened (a read-only home, a full disk) — losing the
 // crash log must never stop the daemon from starting.
 function openStderrLog(): number | undefined {
@@ -31,7 +31,7 @@ function openStderrLog(): number | undefined {
 //
 // - `detached: true` on POSIX calls setsid(2) on the child.
 // - `detached: true` on Windows sets DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP.
-// - stdin/stdout are /dev/null equivalents; stderr is appended to
+// - stdin/stdout are /dev/null equivalents; stderr is written to
 //   ~/.dailies/daemon.stderr.log. The daemon builds its own pino logger only
 //   after imports that can throw (the Playwright internals and the QuickJS
 //   bundle both resolve files at import time), so a half-installed runtime

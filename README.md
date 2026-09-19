@@ -575,7 +575,7 @@ the `dailies-scripting` skill and its `references/REFERENCE.md` carry the full A
 
 ## Updating
 
-Already installed? Grab the latest CLIs from npm, then refresh the runtime:
+Already installed? Grab the latest CLI from npm, then refresh the runtime:
 
 ```bash
 npm i -g dailies-cli@latest                     # update dailies

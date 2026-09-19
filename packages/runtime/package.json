@@ -1,0 +1,34 @@
+{
+  "name": "dailies-runtime",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Shared filesystem layout and artifact discovery for the Dailies CLI and daemon.",
+  "exports": {
+    "./artifacts": {
+      "source": "./src/artifacts.ts",
+      "types": "./src/artifacts.ts",
+      "default": "./src/artifacts.ts"
+    },
+    "./paths": {
+      "source": "./src/paths.ts",
+      "types": "./src/paths.ts",
+      "default": "./src/paths.ts"
+    }
+  },
+  "scripts": {
+    "compile": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "dailies-protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "dailies-config": "workspace:*",
+    "@types/node": "^20.17.10",
+    "typescript": "^5.8.0",
+    "vitest": "^4.1.0"
+  }
+}

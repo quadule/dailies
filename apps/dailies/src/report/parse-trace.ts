@@ -1,5 +1,6 @@
 import { unzipSync } from "fflate";
 import { namesCredential, REDACTED } from "../session/redact.js";
+import { parseJsonLines } from "./json-lines.js";
 
 // A single Playwright call extracted from the session trace — the readable
 // answer to "what command was sent". apiName is reconstructed as `Class.method`
@@ -101,6 +102,20 @@ function readTraceText(zip: Uint8Array): string {
   }
 }
 
+function beforeEvent(event: Record<string, unknown>): BeforeEvent {
+  return {
+    callId: typeof event.callId === "string" ? event.callId : undefined,
+    class: typeof event.class === "string" ? event.class : undefined,
+    method: typeof event.method === "string" ? event.method : undefined,
+    params: event.params,
+    startTime:
+      typeof event.startTime === "number" && Number.isFinite(event.startTime)
+        ? event.startTime
+        : undefined,
+    title: typeof event.title === "string" ? event.title : undefined,
+  };
+}
+
 // Split the JSONL trace into before-events (in start order) and an after-map.
 function parseEvents(text: string): {
   afters: Map<string, AfterInfo>;
@@ -108,23 +123,16 @@ function parseEvents(text: string): {
 } {
   const befores: BeforeEvent[] = [];
   const afters = new Map<string, AfterInfo>();
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(trimmed) as Record<string, unknown>;
-    } catch {
-      continue;
-    }
+  for (const event of parseJsonLines(text)) {
     if (event.type === "before") {
-      befores.push(event as BeforeEvent);
+      befores.push(beforeEvent(event));
     } else if (event.type === "after" && typeof event.callId === "string") {
       const err = event.error as { message?: string } | undefined;
       afters.set(event.callId, {
-        endTime: typeof event.endTime === "number" ? event.endTime : undefined,
+        endTime:
+          typeof event.endTime === "number" && Number.isFinite(event.endTime)
+            ? event.endTime
+            : undefined,
         error: typeof err?.message === "string" ? err.message : undefined,
       });
     }
@@ -165,7 +173,8 @@ function toAction(
 // Any malformed / missing / unexpected input yields an empty result, never throws.
 export function parseTraceActions(zip: Uint8Array): TraceActions {
   const { befores, afters } = parseEvents(readTraceText(zip));
-  const byStep: Record<string, TraceAction[]> = {};
+  // Step names are user supplied, including names such as "constructor".
+  const byStep: Record<string, TraceAction[]> = Object.create(null);
   let currentStep = "(setup)";
   let total = 0;
   for (const before of befores) {

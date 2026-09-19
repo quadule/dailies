@@ -54,7 +54,7 @@ async function commandFromEntry(entry: string): Promise<DaemonCommand> {
   if (!parent || parent === "." || parent === resolved) {
     throw new Error("Daemon entrypoint has no parent directory");
   }
-  const ext = extname(resolved); // includes the dot, case-sensitive — matches Rust
+  const ext = extname(resolved); // Includes the dot; case-sensitive.
 
   switch (ext) {
     case ".js":

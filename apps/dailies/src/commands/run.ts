@@ -1,10 +1,10 @@
-import { readFile } from "node:fs/promises";
 import { requestId } from "dailies-cli-kit";
 import { ensureDaemonRunning, sendRequest } from "dailies-daemon-client";
 import type { ExecuteRequest } from "dailies-protocol";
 import { withSessionLock } from "../session/lock.js";
 import { readSessionRecord, writeSessionRecord } from "../session/registry.js";
 import { resultRenderer } from "./render.js";
+import { readScript } from "./script-input.js";
 
 interface RunArgs {
   file?: string;
@@ -26,25 +26,10 @@ export async function runInSession(args: RunArgs): Promise<number> {
     return 1;
   }
 
-  let script = args.script;
-  if (script === undefined && args.file) {
-    try {
-      script = await readFile(args.file, "utf8");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error("No such file or directory (os error 2)");
-      }
-      throw err;
-    }
-  }
-  // Treat an empty or whitespace-only script (e.g. empty piped stdin or an
-  // empty file) as "no script" — a defined-but-falsy "" would otherwise slip
-  // past an `=== undefined` check and record a phantom no-op step.
-  if (script === undefined || script.trim() === "") {
-    process.stderr.write("No script provided (pass a FILE or pipe stdin)\n");
+  const scriptText = await readScript(args);
+  if (scriptText === undefined) {
     return 2;
   }
-  const scriptText = script;
 
   // Make sure a daemon is up before we serialize on the session. If it had been
   // stopped/crashed, ensureDaemonRunning starts a fresh one that no longer knows

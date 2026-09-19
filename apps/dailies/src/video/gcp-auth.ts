@@ -16,6 +16,7 @@ import { readFileSync } from "node:fs";
 // token exchange grants against a service account.
 const CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 const DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token";
+const TOKEN_TIMEOUT_MS = 30_000;
 
 // The fields we need from a service-account JSON. Real keys carry more; we read
 // only these and ignore the rest.
@@ -135,6 +136,7 @@ export function createTokenSource(
     const assertion = buildJwtAssertion(sa, nowSec);
     const res = await doFetch(sa.token_uri, {
       method: "POST",
+      signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",

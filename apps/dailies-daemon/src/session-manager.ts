@@ -1,27 +1,23 @@
 import { createWriteStream, type WriteStream } from "node:fs";
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Logger } from "dailies-logger";
 import {
-  type ArtifactInfo,
   type CaptionEvent,
   type CaptureOptions,
   DEFAULT_SESSION_VIEWPORT,
-  SESSION_ATTACHMENTS_DIR,
   SESSION_CAPTIONS_FILE,
   SESSION_CONSOLE_FILE,
   SESSION_HAR_FILE,
-  SESSION_SCREENSHOT_EXT,
-  SESSION_SCREENSHOTS_DIR,
-  SESSION_TRACE_FILE,
   SESSION_VIDEO_DIR,
-  SESSION_VIDEO_EXT,
   type SessionEndResult,
   type SessionPhase,
   type SessionStartRequest,
   type SessionSummary,
+  type SessionTakeoverStopResult,
   type StepPage,
 } from "dailies-protocol";
+import { collectSessionArtifacts } from "dailies-runtime/artifacts";
 import type { ConsoleMessage, Page, WebError } from "playwright";
 import type { BrowserEntry, BrowserManager } from "./browser-manager.js";
 import { getSessionDir } from "./local-endpoint.js";
@@ -60,7 +56,6 @@ interface SessionState {
   ending?: Promise<SessionEndResult>;
   entry: BrowserEntry;
   errorDisposers: Array<() => void>;
-  harPath: string;
   headless: boolean;
   name?: string;
   // Last known page count, captured before the context closes (summarize()
@@ -75,7 +70,6 @@ interface SessionState {
   startedAt: number;
   // The page each step ended on, in order — see endStep.
   stepPages: StepPage[];
-  videoDir: string;
   // name-by-video-path, read while the pages are still open (see end()).
   videoNamesByPath?: Map<string, string>;
 }
@@ -107,14 +101,6 @@ interface RecorderCapableContext {
     },
     sink?: RecorderSink
   ): Promise<void>;
-}
-
-export interface TakeoverStopResult {
-  actionCount: number;
-  code: string;
-  durationMs: number;
-  startedAt: number;
-  step: string;
 }
 
 // Owns the daemon-side session registry and all capture wiring (tracing, video,
@@ -238,7 +224,6 @@ export class SessionManager {
       consolePath,
       entry,
       errorDisposers: [],
-      harPath,
       headless: req.headless ?? false,
       name: req.name,
       pageCount: 0,
@@ -247,7 +232,6 @@ export class SessionManager {
       sessionId: req.sessionId,
       startedAt: Date.now(),
       stepPages: [],
-      videoDir,
     };
 
     // launchSessionBrowser already registered the capture context. If the
@@ -484,7 +468,7 @@ export class SessionManager {
   // Disable the recorder and return the captured Playwright source. `cancel`
   // still tears the recorder down (and closes the trace group) but signals the
   // caller to discard the capture rather than record a step.
-  async takeoverStop(sessionId: string): Promise<TakeoverStopResult> {
+  async takeoverStop(sessionId: string): Promise<SessionTakeoverStopResult> {
     const state = this.sessions.get(sessionId);
     if (!state) {
       throw new Error(`Session "${sessionId}" not found`);
@@ -743,80 +727,21 @@ export class SessionManager {
     state: SessionState,
     reason: EndReason
   ): Promise<SessionEndResult> {
-    const artifacts: ArtifactInfo[] = [];
-    const add = async (
-      kind: ArtifactInfo["kind"],
-      filePath: string,
-      pageName?: string
-    ) => {
-      try {
-        const info = await stat(filePath);
-        if (info.isFile()) {
-          artifacts.push({ bytes: info.size, kind, pageName, path: filePath });
-        }
-      } catch {
-        // missing/partial artifact — leave it out of the manifest
-      }
-    };
-
-    if (state.capture.trace) {
-      await add("trace", path.join(state.artifactsDir, SESSION_TRACE_FILE));
-    }
-    if (state.capture.har) {
-      await add("har", state.harPath);
-    }
-    if (state.capture.console) {
-      await add("console", state.consolePath);
-    }
+    const artifacts = await collectSessionArtifacts(
+      state.artifactsDir,
+      state.capture
+    );
     if (state.capture.video) {
-      // Normally captured by end() while the pages were still open. Only the
-      // interrupted-teardown branch of end() reaches collect() without that
-      // step, and its pages are long gone — the fallback will usually come back
-      // empty, which leaves those recordings unlabelled rather than missing.
+      // Normally captured before the pages close. Interrupted teardown can only
+      // recover names if its pages are still available; unlabeled videos remain
+      // valid artifacts when they are not.
       const namesByPath =
         state.videoNamesByPath ?? (await this.videoPageNames(state));
-      const files = await readdir(state.videoDir).catch(() => [] as string[]);
-      for (const file of files) {
-        if (file.endsWith(SESSION_VIDEO_EXT)) {
-          const filePath = path.join(state.videoDir, file);
-          await add("video", filePath, namesByPath.get(filePath));
+      for (const artifact of artifacts) {
+        const pageName = namesByPath.get(artifact.path);
+        if (artifact.kind === "video" && pageName) {
+          artifact.pageName = pageName;
         }
-      }
-    }
-    const screenshotsDir = path.join(
-      state.artifactsDir,
-      SESSION_SCREENSHOTS_DIR
-    );
-    const shots = await readdir(screenshotsDir).catch(() => [] as string[]);
-    for (const file of shots) {
-      if (file.endsWith(SESSION_SCREENSHOT_EXT)) {
-        await add("screenshot", path.join(screenshotsDir, file));
-      }
-    }
-
-    // Freeform files an external tool dropped into attachments/ before
-    // `session end` ran. Not gated by a capture flag — dropping a file there
-    // is itself the opt-in. Dotfiles are skipped (editor/OS cruft); `add`
-    // already skips non-files and (via `info.size` below) we skip empties.
-    const attachmentsDir = path.join(
-      state.artifactsDir,
-      SESSION_ATTACHMENTS_DIR
-    );
-    const attachments = await readdir(attachmentsDir).catch(
-      () => [] as string[]
-    );
-    for (const file of attachments) {
-      if (file.startsWith(".")) {
-        continue;
-      }
-      const filePath = path.join(attachmentsDir, file);
-      const info = await stat(filePath).catch(() => undefined);
-      if (info?.isFile() && info.size > 0) {
-        artifacts.push({
-          kind: "attachment",
-          path: filePath,
-          bytes: info.size,
-        });
       }
     }
 

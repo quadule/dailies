@@ -162,11 +162,17 @@ function parseTimeout(value: string): number {
   return parsed;
 }
 
-function stdinIsTty(): boolean {
-  return Boolean(process.stdin.isTTY);
-}
-
-async function readScriptFromStdin(): Promise<string> {
+async function scriptFromStdin(
+  file: string | undefined,
+  program: CommandType
+): Promise<string | undefined> {
+  if (file) {
+    return;
+  }
+  if (process.stdin.isTTY) {
+    program.outputHelp();
+    throw new ExitCodeError(2);
+  }
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(
@@ -484,14 +490,7 @@ export function buildProgram(): CommandType {
       parseTimeout
     )
     .action(async (file: string | undefined, opts: RunOpts) => {
-      let script: string | undefined;
-      if (!file) {
-        if (stdinIsTty()) {
-          program.outputHelp();
-          throw new ExitCodeError(2);
-        }
-        script = await readScriptFromStdin();
-      }
+      const script = await scriptFromStdin(file, program);
       const code = await runInSession({
         sessionId: opts.session,
         step: opts.step,
@@ -541,14 +540,7 @@ export function buildProgram(): CommandType {
       30
     )
     .action(async (file: string | undefined, opts: ExecOpts) => {
-      let script: string | undefined;
-      if (!file) {
-        if (stdinIsTty()) {
-          program.outputHelp();
-          throw new ExitCodeError(2);
-        }
-        script = await readScriptFromStdin();
-      }
+      const script = await scriptFromStdin(file, program);
       const code = await execScript({
         browser: opts.browser,
         connect: resolveConnect(opts.connect),

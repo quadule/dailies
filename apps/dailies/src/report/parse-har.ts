@@ -33,7 +33,7 @@ export function parseHar(raw: string): HarSummary {
   const rawEntries = Array.isArray(log?.entries) ? log.entries : [];
 
   const entries: HarRequestSummary[] = rawEntries.map((value) => {
-    const entry = value as {
+    const entry = (value ?? {}) as {
       request?: { method?: string; url?: string };
       response?: { status?: number };
       time?: number;
@@ -42,13 +42,19 @@ export function parseHar(raw: string): HarSummary {
       // HAR uses time: -1 as the "not available" sentinel; treat any negative
       // (or non-numeric) value as 0 rather than rendering a negative duration.
       durationMs:
-        typeof entry.time === "number" && entry.time >= 0
+        typeof entry.time === "number" &&
+        Number.isFinite(entry.time) &&
+        entry.time >= 0
           ? Math.round(entry.time)
           : 0,
-      method: entry.request?.method ?? "",
+      method:
+        typeof entry.request?.method === "string" ? entry.request.method : "",
       status:
-        typeof entry.response?.status === "number" ? entry.response.status : 0,
-      url: entry.request?.url ?? "",
+        typeof entry.response?.status === "number" &&
+        Number.isFinite(entry.response.status)
+          ? entry.response.status
+          : 0,
+      url: typeof entry.request?.url === "string" ? entry.request.url : "",
     };
   });
 

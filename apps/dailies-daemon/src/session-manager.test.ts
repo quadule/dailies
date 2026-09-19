@@ -584,6 +584,16 @@ describe("SessionManager", () => {
     );
     expect(calls).not.toContain("tracing.start");
 
+    // Even if files are left on disk, live teardown honors the capture flags.
+    // Recovery from disk intentionally does not have this restriction.
+    const dir = getSessionDir("s1");
+    await mkdir(join(dir, "video"), { recursive: true });
+    await Promise.all(
+      ["trace.zip", "network.har", "console.log", "video/page.webm"].map(
+        (file) => writeFile(join(dir, file), "leftover")
+      )
+    );
+
     const result = await sessions.end("s1", "end");
     expect(calls).not.toContain("tracing.stop");
     expect(result.artifacts).toHaveLength(0);

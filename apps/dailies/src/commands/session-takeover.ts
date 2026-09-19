@@ -3,6 +3,7 @@ import { ensureDaemonRunning, sendRequest } from "dailies-daemon-client";
 import type {
   SessionTakeoverStartRequest,
   SessionTakeoverStopRequest,
+  SessionTakeoverStopResult,
 } from "dailies-protocol";
 import { redactSecrets } from "../session/redact.js";
 import { readSessionRecord, updateSessionRecord } from "../session/registry.js";
@@ -11,14 +12,6 @@ interface TakeoverOpts {
   cancel?: boolean;
   step?: string;
   stop?: boolean;
-}
-
-interface TakeoverStopData {
-  actionCount: number;
-  code: string;
-  durationMs: number;
-  startedAt: number;
-  step: string;
 }
 
 // Interactive takeover: hand the live headed browser to the user and capture
@@ -78,9 +71,9 @@ async function stopTakeover(
     sessionId: id,
     cancel,
   };
-  let result: TakeoverStopData | undefined;
+  let result: SessionTakeoverStopResult | undefined;
   const code = await sendRequest(request, (data) => {
-    result = data as TakeoverStopData;
+    result = data as SessionTakeoverStopResult;
   });
   if (code !== 0) {
     return code;

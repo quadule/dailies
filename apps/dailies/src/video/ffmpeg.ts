@@ -141,8 +141,13 @@ export async function run(
     const e = err as { stderr?: string; stdout?: string; message?: string };
     const source = (e.stderr ?? "").trim() || (e.stdout ?? "").trim();
     const tail = source.split("\n").slice(-4).join("\n");
-    throw new Error(
-      `${cmd} failed${tail ? `:\n${tail}` : `: ${e.message ?? String(err)}`}`
+    throw Object.assign(
+      new Error(
+        `${cmd} failed${tail ? `:\n${tail}` : `: ${e.message ?? String(err)}`}`
+      ),
+      // Some probes deliberately exit non-zero after printing useful output
+      // (ffmpeg -i reports Duration on stderr). Keep it for those callers.
+      { stderr: e.stderr, stdout: e.stdout }
     );
   }
 }
@@ -226,27 +231,9 @@ export async function audioDurationSec(
   ffmpeg: string,
   filePath: string
 ): Promise<number | undefined> {
-  const ffprobe = ffprobeFor(ffmpeg);
-  try {
-    const { stdout } = await run(
-      ffprobe,
-      [
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        filePath,
-      ],
-      PROBE_TIMEOUT_MS
-    );
-    const value = Number(stdout.trim());
-    if (Number.isFinite(value) && value > 0) {
-      return value;
-    }
-  } catch {
-    // ffprobe missing or failed — fall through to ffmpeg stderr.
+  const duration = await probeDurationSec(ffmpeg, filePath);
+  if (duration !== undefined) {
+    return duration;
   }
   try {
     const { stderr } = await run(

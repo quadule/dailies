@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
 import { previousMetrics, runDecide } from "../ci/demo-request.js";
+import { readComments } from "../ci/inputs.js";
 import {
   deserializeMetrics,
   formatMetricLines,
@@ -62,17 +62,7 @@ export interface CiPreviousMetricsArgs {
 export async function ciPreviousMetrics(
   args: CiPreviousMetricsArgs
 ): Promise<number> {
-  let comments: string[] = [];
-  if (args.commentsFile) {
-    try {
-      const raw = JSON.parse(await readFile(args.commentsFile, "utf8"));
-      comments = Array.isArray(raw)
-        ? raw.filter((c): c is string => typeof c === "string")
-        : [];
-    } catch {
-      comments = [];
-    }
-  }
+  const comments = await readComments(args.commentsFile);
   process.stdout.write(serializeMetrics(previousMetrics(comments)));
   return 0;
 }

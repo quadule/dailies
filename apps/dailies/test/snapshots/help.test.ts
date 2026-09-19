@@ -17,6 +17,12 @@ beforeAll(() => {
 // need — reached via a same-CLI pointer (never the separately-installed
 // removed `dailies-browser` binary, and no engine-only flags leaking in).
 describe("--help content", () => {
+  it("the bundled entry emits only its version, without running imported CLIs", async () => {
+    const out = await runCli(["--version"]);
+    expect(out.code).toBe(0);
+    expect(out.stdout.trim()).toMatch(/^\d+\.\d+\.\d+(?:[-+][\w.+-]+)?$/);
+  });
+
   it("root --help: lifecycle, compact API, workflow guide, pointer to run", async () => {
     const out = await runCli(["--help"]);
     expect(out.code).toBe(0);

@@ -116,7 +116,6 @@ export async function streamResponses(
   conn: DaemonConnection,
   handlers: StreamHandlers
 ): Promise<number> {
-  let sawTerminal = false;
   try {
     for await (const line of conn.reader) {
       let message: Response;
@@ -137,17 +136,15 @@ export async function streamResponses(
           handlers.renderResult?.(message.data, handlers.stdout);
           break;
         case "complete":
-          sawTerminal = true;
           return 0;
         case "error": {
-          sawTerminal = true;
           const text = message.message ?? "Unknown daemon error";
           handlers.onError?.(text);
           handlers.stderr.write(`${text}\n`);
           return 1;
         }
         default:
-          // Unknown message types are ignored (matches Rust + Go).
+          // Ignore new message types from a newer daemon for compatibility.
           break;
       }
     }
@@ -155,10 +152,7 @@ export async function streamResponses(
     conn.socket.destroy();
   }
 
-  if (!sawTerminal) {
-    throw new DaemonConnectionClosed();
-  }
-  return 0;
+  throw new DaemonConnectionClosed();
 }
 
 // Convenience helper: open, send, stream, return exit code.

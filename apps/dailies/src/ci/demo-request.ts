@@ -27,7 +27,6 @@
 // Kept as pure, unit-tested functions with a thin JSON CLI — bash `grep` in a
 // YAML `run:` block is where this kind of logic rots.
 
-import { readFile } from "node:fs/promises";
 import { createLogger } from "dailies-logger";
 import { generateJson } from "../llm/index.js";
 import { tryParseJson } from "../llm/json.js";
@@ -40,6 +39,7 @@ import {
   type TargetCommentConfig,
 } from "../project/config.js";
 import { deserializeMetrics, type Metric } from "../session/metrics.js";
+import { readComments, readTextInput } from "./inputs.js";
 
 // The commit each existing demo comment was recorded at, newest last.
 //
@@ -544,34 +544,6 @@ export function parseArgs(argv: string[]): Record<string, string> {
   return out;
 }
 
-async function readOrEmpty(file: string | undefined): Promise<string> {
-  if (!file) {
-    return "";
-  }
-  try {
-    return await readFile(file, "utf8");
-  } catch {
-    // A missing input file means "nothing here" — never a failed run.
-    return "";
-  }
-}
-
-// A JSON array of comment bodies; anything else yields no comments, which fails
-// OPEN (the PR gets demoed again) rather than silently suppressing a demo.
-function parseComments(raw: string): string[] {
-  if (!raw.trim()) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed)
-      ? parsed.filter((c): c is string => typeof c === "string")
-      : [];
-  } catch {
-    return [];
-  }
-}
-
 // The decision as the CLI exposes it (`dailies ci decide`), reading the same
 // file inputs the direct `tsx src/ci/demo-request.ts` invocation took. Exported
 // so a pipeline outside this repo can reach it through the published binary
@@ -585,15 +557,15 @@ export async function runDecide(args: {
   headSha?: string;
 }): Promise<string> {
   const [body, changed, comments] = await Promise.all([
-    readOrEmpty(args.bodyFile),
-    readOrEmpty(args.changedFile),
-    readOrEmpty(args.commentsFile),
+    readTextInput(args.bodyFile),
+    readTextInput(args.changedFile),
+    readComments(args.commentsFile),
   ]);
   const { config, configError } = await loadProject(args.cwd ?? process.cwd());
   const decision = await decideDemoWithAgent({
     body,
     changedPaths: changed.split(/\r?\n/),
-    comments: parseComments(comments),
+    comments,
     config,
     force: args.force ?? false,
     headSha: args.headSha ?? "",
@@ -624,7 +596,8 @@ async function main(): Promise<void> {
   process.stdout.write(`${json}\n`);
 }
 
-// Run main only when invoked directly (not when imported by the test).
+// Keep this source-only entry filename-specific: esbuild merges this module
+// into cli.js, where import.meta.url is also the main CLI's URL.
 if (process.argv[1]?.endsWith("demo-request.ts")) {
   await main();
 }

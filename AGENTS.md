@@ -39,6 +39,7 @@ or verifiable.
 | `apps/dailies`            | The CLI (`dailies`) — records QA sessions, renders reports, and runs one-offs via `dailies exec`. |
 | `apps/dailies-daemon`     | Internal Playwright host + QuickJS sandbox. Built standalone, embedded into the CLI             |
 | `packages/protocol`      | Zod IPC schemas. Single source of truth — daemon validates, CLIs infer types                    |
+| `packages/runtime`       | Shared filesystem paths, IPC endpoint naming, and session artifact discovery for CLI + daemon |
 | `packages/config`        | Shared tsconfig bases (`base`, `node-app`)                                                       |
 | `packages/logger`        | Shared pino-backed structured logger (source-distributed)                                       |
 | `packages/cli-kit`       | Shared CLI helpers (request ids, formatting, logger factory)                                    |
@@ -48,7 +49,7 @@ or verifiable.
 
 `turbo run build` topo-sorts via `^build`:
 
-1. `dailies-protocol` + `dailies-config` + `dailies-logger` (no build, source-distributed)
+1. `dailies-protocol` + `dailies-config` + `dailies-logger` + `dailies-runtime` (no build, source-distributed)
 2. `dailies-daemon` builds → emits `dist/daemon.bundle.mjs` + `dist/sandbox-client.js`
 3. `dailies-cli` embeds its assets (the daemon bundle via `dailies-daemon-client`), then bundles with esbuild
 
@@ -69,10 +70,11 @@ workflow rules — is single-sourced in `docs/snippets/` and stitched by `script
 `session end --attach <file>` copies a file into the session's `attachments/`, which surfaces in
 `results.json` and the report next to the trace and video. Implemented in
 `apps/dailies/src/session/attach.ts`; the copy happens BEFORE the session-end RPC, deliberately —
-both the daemon (`session-manager.ts`) and the on-disk fallback (`session/artifacts.ts`) build
-their artifact list as the session ends, so a file copied afterwards is silently missing from the
-report. That was a documented hazard every external tool had to work around; it is the command's
-problem now.
+both the daemon (`session-manager.ts`) and the on-disk fallback (`session/artifacts.ts`) use the
+shared scanner in `packages/runtime/src/artifacts.ts` as the session ends, so a file copied
+afterwards is silently missing from the report. The daemon supplies capture flags; recovery scans
+every surviving artifact. Filesystem policy belongs in `dailies-runtime`, while IPC schemas stay
+in `dailies-protocol`.
 
 This is how anything Dailies doesn't produce gets into a report: a coverage report, a Lighthouse
 score, an accessibility audit, a database diff. **Resist adding features for those.** Coverage in

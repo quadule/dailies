@@ -66,6 +66,26 @@ function makeEndResult(): SessionEndResult {
 }
 
 describe("buildManifest", () => {
+  it("does not treat inherited object properties as step actions", () => {
+    const record = makeRecord();
+    record.steps = ["__proto__", "constructor", "toString"].map((name) => ({
+      durationMs: 100,
+      exitCode: 0,
+      name,
+      ok: true,
+      startedAt: record.createdAt,
+    }));
+    const manifest = buildManifest({
+      actionsByStep: {},
+      consoleErrors: 0,
+      endResult: makeEndResult(),
+      networkFailures: 0,
+      record,
+    });
+    expect(manifest.steps.map((step) => step.actions)).toEqual([[], [], []]);
+    expect(manifest.summary.commandCount).toBe(0);
+  });
+
   it("fuses steps + artifacts and rolls up the summary", () => {
     const m = buildManifest({
       consoleErrors: 1,

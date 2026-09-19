@@ -14,6 +14,7 @@ import { writeFile } from "node:fs/promises";
 import type { Logger } from "dailies-logger";
 import type { MediaProviders, TitleBackgroundProvider } from "./providers.js";
 import { buildImagePrompt } from "./providers.js";
+import { singleQuote } from "./shell.js";
 
 const GENERATE_TIMEOUT_MS = 180_000;
 
@@ -72,10 +73,6 @@ export function imageFromResponse(
   return null;
 }
 
-function sq(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`;
-}
-
 // Redacted, copy-pasteable curl preview (key shown as the env-var reference).
 export function describeImageCurl(args: {
   baseUrl: string;
@@ -90,7 +87,7 @@ export function describeImageCurl(args: {
     `${args.baseUrl}/v1/images/generations`,
     ...auth,
     "-H 'content-type: application/json'",
-    `-d ${sq(JSON.stringify(args.body))}`,
+    `-d ${singleQuote(JSON.stringify(args.body))}`,
   ].join(" ");
 }
 

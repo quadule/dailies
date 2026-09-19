@@ -1,5 +1,5 @@
 import { createVerify, generateKeyPairSync } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildJwtAssertion,
   createTokenSource,
@@ -149,5 +149,44 @@ describe("createTokenSource", () => {
       }) as unknown as Response) as unknown as typeof fetch;
     const src = createTokenSource(sa, { fetchImpl: impl });
     await expect(src()).rejects.toThrow(/no access_token/);
+  });
+
+  it("bounds a stalled token exchange and lets the next call retry", async () => {
+    const controller = new AbortController();
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(controller.signal);
+    const retry = fakeFetch();
+    const impl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(
+        (_url, options) =>
+          new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener(
+              "abort",
+              () => reject(options.signal?.reason),
+              { once: true }
+            );
+          })
+      )
+      .mockImplementationOnce(retry.impl);
+    try {
+      const src = createTokenSource(sa, { fetchImpl: impl });
+      const pending = src();
+      const rejected = expect(pending).rejects.toMatchObject({
+        name: "TimeoutError",
+      });
+      controller.abort(
+        new DOMException("token exchange timed out", "TimeoutError")
+      );
+      await rejected;
+
+      expect(timeout).toHaveBeenCalledWith(30_000);
+      timeout.mockRestore();
+      await expect(src()).resolves.toBe("tok-1");
+      expect(impl).toHaveBeenCalledTimes(2);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 });

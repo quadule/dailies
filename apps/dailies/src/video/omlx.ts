@@ -18,12 +18,14 @@
 // PRIVACY: the API key comes from env, or from the local oMLX config when (and
 // only when) the server is this machine; it is never logged, echoed (the curl
 // preview uses a $DAILIES_OMLX_API_KEY placeholder), or written to disk.
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Logger } from "dailies-logger";
 import { isLocalUrl } from "./acestep.js";
+import { writeFileAtomic } from "./media-files.js";
 import type { MediaProviders, TtsProvider } from "./providers.js";
+import { singleQuote } from "./shell.js";
 
 const DEFAULT_URL = "http://127.0.0.1:8000";
 const MODELS_TIMEOUT_MS = 4000;
@@ -123,11 +125,6 @@ export function buildSpeechBody(args: {
   return body;
 }
 
-// Single-quote a string for a copy-pasteable shell command (POSIX: ' → '\'').
-function sq(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`;
-}
-
 // A redacted, copy-pasteable curl equivalent of a /v1/audio/speech call. The key
 // is shown as the env-var reference $DAILIES_OMLX_API_KEY (never the value) so the
 // line runs verbatim once that var is exported. Pure → unit-tested.
@@ -141,25 +138,9 @@ export function describeSpeechCurl(args: {
     `${args.baseUrl}/v1/audio/speech`,
     '-H "Authorization: Bearer $DAILIES_OMLX_API_KEY"',
     "-H 'content-type: application/json'",
-    `-d ${sq(JSON.stringify(args.body))}`,
-    `-o ${sq(args.outPath)}`,
+    `-d ${singleQuote(JSON.stringify(args.body))}`,
+    `-o ${singleQuote(args.outPath)}`,
   ].join(" ");
-}
-
-// Write bytes to `outPath` atomically (temp + rename) so a crash mid-write never
-// leaves a partial file the caller might use.
-async function writeFileAtomic(outPath: string, bytes: Buffer): Promise<void> {
-  if (bytes.length === 0) {
-    throw new Error("oMLX returned 0 audio bytes");
-  }
-  const tmp = `${outPath}.tmp-${process.pid}`;
-  try {
-    await writeFile(tmp, bytes);
-    await rename(tmp, outPath);
-  } catch (err) {
-    await rm(tmp, { force: true });
-    throw err instanceof Error ? err : new Error(String(err));
-  }
 }
 
 // List the model ids the oMLX server has loaded, or null if it's unreachable /
@@ -221,7 +202,7 @@ async function synthesizeSpeech(args: {
     throw new Error(`oMLX ${model} returned JSON, not audio`);
   }
   const bytes = Buffer.from(await res.arrayBuffer());
-  await writeFileAtomic(outPath, bytes);
+  await writeFileAtomic(outPath, bytes, "oMLX returned 0 audio bytes");
 }
 
 function createTtsProvider(args: {

@@ -30,8 +30,8 @@
 // echoed (the curl previews show the env-var reference), or written to disk.
 // The signed `content_url` an image job returns lives on third-party storage
 // and is fetched WITHOUT the key.
-import { rename, rm, writeFile } from "node:fs/promises";
 import type { Logger } from "dailies-logger";
+import { writeFileAtomic } from "./media-files.js";
 import {
   aspectRatioFor,
   buildImagePrompt,
@@ -41,6 +41,7 @@ import {
   type TitleBackgroundProvider,
   type TtsProvider,
 } from "./providers.js";
+import { singleQuote } from "./shell.js";
 
 const DEFAULT_URL = "https://api.elevenlabs.io";
 
@@ -298,11 +299,6 @@ export function readImageJob(body: unknown): ImageJobStatus {
   return { state: "pending" };
 }
 
-// Single-quote a string for a copy-pasteable shell command (POSIX: ' → '\'').
-function sq(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`;
-}
-
 // Redacted, copy-pasteable curl previews. The key is shown as the env-var
 // reference $ELEVENLABS_API_KEY (never the value) so each line runs verbatim
 // once that var is exported. Pure → unit-tested.
@@ -320,33 +316,13 @@ export function describeCurl(args: {
   if (args.body) {
     parts.push(
       "-H 'content-type: application/json'",
-      `-d ${sq(JSON.stringify(args.body))}`
+      `-d ${singleQuote(JSON.stringify(args.body))}`
     );
   }
   if (args.outPath) {
-    parts.push(`-o ${sq(args.outPath)}`);
+    parts.push(`-o ${singleQuote(args.outPath)}`);
   }
   return parts.join(" ");
-}
-
-// Write bytes to `outPath` atomically (temp + rename) so a crash mid-write never
-// leaves a partial file the caller might use.
-async function writeFileAtomic(
-  outPath: string,
-  bytes: Buffer,
-  what: string
-): Promise<void> {
-  if (bytes.length === 0) {
-    throw new Error(`ElevenLabs returned 0 ${what} bytes`);
-  }
-  const tmp = `${outPath}.tmp-${process.pid}`;
-  try {
-    await writeFile(tmp, bytes);
-    await rename(tmp, outPath);
-  } catch (err) {
-    await rm(tmp, { force: true });
-    throw err instanceof Error ? err : new Error(String(err));
-  }
 }
 
 function headers(
@@ -450,7 +426,11 @@ function createTtsProvider(args: {
         timeoutMs: TTS_TIMEOUT_MS,
         what: `TTS ${model}`,
       });
-      await writeFileAtomic(outPath, await mediaBytes(res, "TTS"), "audio");
+      await writeFileAtomic(
+        outPath,
+        await mediaBytes(res, "TTS"),
+        "ElevenLabs returned 0 audio bytes"
+      );
     },
   };
 }
@@ -474,7 +454,11 @@ function createMusicProvider(args: {
       timeoutMs: MUSIC_TIMEOUT_MS,
       what: `music ${model}`,
     });
-    await writeFileAtomic(outPath, await mediaBytes(res, "music"), "audio");
+    await writeFileAtomic(
+      outPath,
+      await mediaBytes(res, "music"),
+      "ElevenLabs returned 0 audio bytes"
+    );
   };
   return {
     id: "elevenlabs-music",
@@ -574,7 +558,7 @@ function createTitleBackgroundProvider(args: {
       }
       const { url } = await awaitImageJob(config, created.id);
       // A signed URL on third-party storage: fetched WITHOUT the API key.
-      echo?.(`$ curl -sL ${sq(url)} -o ${sq(outPath)}`);
+      echo?.(`$ curl -sL ${singleQuote(url)} -o ${singleQuote(outPath)}`);
       let download: Response;
       try {
         download = await fetch(url, {
@@ -592,7 +576,7 @@ function createTitleBackgroundProvider(args: {
       await writeFileAtomic(
         outPath,
         Buffer.from(await download.arrayBuffer()),
-        "image"
+        "ElevenLabs returned 0 image bytes"
       );
     },
   };

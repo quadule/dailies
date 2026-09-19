@@ -171,7 +171,10 @@ export function buildManifest(input: BuildManifestInput): SessionManifest {
   const steps: ManifestStep[] = record.steps.map((step) => {
     const shot = artifacts.screenshots[sessionStepSlug(step.name)];
     return {
-      actions: actionsByStep?.[step.name] ?? [],
+      actions:
+        actionsByStep && Object.hasOwn(actionsByStep, step.name)
+          ? (actionsByStep[step.name] ?? [])
+          : [],
       durationMs: step.durationMs,
       exitCode: step.exitCode,
       name: step.name,

@@ -22,7 +22,8 @@
   },
   "dependencies": {
     "dailies-logger": "workspace:*",
-    "dailies-protocol": "workspace:*"
+    "dailies-protocol": "workspace:*",
+    "dailies-runtime": "workspace:*"
   },
   "devDependencies": {
     "dailies-config": "workspace:*",

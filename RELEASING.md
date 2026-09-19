@@ -9,7 +9,7 @@ binary on your PATH. Everything else is private: bundled or embedded into it.
 | ---------------- | ------------------ | ---------------- | -------------------------------------------------- |
 | `dailies-cli`    | public             | `dailies`         | Self-contained esbuild bundle (deps inlined)       |
 | `dailies-daemon` | **private**        | —                | Embedded as a string into the CLI bundle           |
-| `dailies-protocol`, `dailies-logger`, `dailies-cli-kit`, `dailies-daemon-client`, `dailies-config` | **private** | — | Bundled into the CLI by esbuild |
+| `dailies-protocol`, `dailies-runtime`, `dailies-logger`, `dailies-cli-kit`, `dailies-daemon-client`, `dailies-config` | **private** | — | Bundled into the CLI by esbuild |
 
 `dailies-daemon`'s Playwright runtime is **not** a package dependency — it's fetched into
 `~/.dailies/` at runtime by `dailies install`, so a plain `npm i -g dailies-cli` stays small.

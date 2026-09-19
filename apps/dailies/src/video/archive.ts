@@ -22,6 +22,7 @@ import { promisify } from "node:util";
 import type { Logger } from "dailies-logger";
 import { userAgent } from "./http.js";
 import type { MediaProviders, MusicProvider } from "./providers.js";
+import { singleQuote } from "./shell.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -173,10 +174,6 @@ async function downloadTo(
     throw new Error("archive.org returned 0 bytes");
   }
   await writeFile(outPath, bytes);
-}
-
-function sq(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
 export interface ArchiveDeps {
@@ -344,7 +341,7 @@ async function trimTo(
     "44100",
     outPath,
   ];
-  echo?.(`$ ${[ffmpeg, ...args].map(sq).join(" ")}`);
+  echo?.(`$ ${[ffmpeg, ...args].map(singleQuote).join(" ")}`);
   await execFileAsync(ffmpeg, args, {
     timeout: TRIM_TIMEOUT_MS,
     maxBuffer: 64 * 1024 * 1024,
@@ -358,7 +355,7 @@ async function selectTrack(
   instrumental: boolean
 ): Promise<ArchiveTrack> {
   const searchUrl = buildSearchUrl(directionText, instrumental);
-  deps.echo?.(`$ curl -s ${sq(searchUrl)}`);
+  deps.echo?.(`$ curl -s ${singleQuote(searchUrl)}`);
   const tracks = parseSearchDocs(await getJson(searchUrl, SEARCH_TIMEOUT_MS));
   if (tracks.length === 0) {
     throw new Error("no archive.org tracks matched");
@@ -387,7 +384,7 @@ async function downloadAndTrim(
   }
   const dlUrl = `${DL_BASE}/${track.identifier}/${encodeURIComponent(file)}`;
   const raw = `${outPath}.src`;
-  deps.echo?.(`$ curl -sL ${sq(dlUrl)} -o ${sq(raw)}`);
+  deps.echo?.(`$ curl -sL ${singleQuote(dlUrl)} -o ${singleQuote(raw)}`);
   try {
     await downloadTo(dlUrl, raw, DOWNLOAD_TIMEOUT_MS);
     // Smarter section selection: play the loudest (fullest) window of the track,

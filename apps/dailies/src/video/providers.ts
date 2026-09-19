@@ -35,13 +35,13 @@
 // are sent to Google's API. The API key / service-account key are read from
 // `env` only; neither the key nor a minted token is ever logged, embedded in an
 // error message, or written to disk.
-import { rename, rm, writeFile } from "node:fs/promises";
 import type { Logger } from "dailies-logger";
 import {
   createTokenSource,
   loadServiceAccount,
   type TokenSource,
 } from "./gcp-auth.js";
+import { writeFileAtomic } from "./media-files.js";
 
 // ---------------------------------------------------------------------------
 // Public interfaces (the only contract: each method writes `outPath` or throws).
@@ -723,22 +723,6 @@ function mediaOrThrow(
     throw new Error(`Gemini ${model} returned no media bytes`);
   }
   return found;
-}
-
-// Write bytes to `outPath` atomically: write a sibling temp first, then rename,
-// so a crash mid-write never leaves a partial/0-byte file the caller might use.
-async function writeFileAtomic(outPath: string, bytes: Buffer): Promise<void> {
-  if (bytes.length === 0) {
-    throw new Error("refusing to write 0 bytes");
-  }
-  const tmp = `${outPath}.tmp-${process.pid}`;
-  try {
-    await writeFile(tmp, bytes);
-    await rename(tmp, outPath);
-  } catch (err) {
-    await rm(tmp, { force: true });
-    throw err instanceof Error ? err : new Error(String(err));
-  }
 }
 
 // Audio can come back as raw PCM (Gemini TTS: `audio/l16` / `audio/pcm`) or as a

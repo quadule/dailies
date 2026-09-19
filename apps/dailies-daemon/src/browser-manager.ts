@@ -9,6 +9,7 @@ import {
   chromium,
   type Page,
 } from "playwright";
+import { getBrowsersDir } from "./local-endpoint.js";
 import {
   buildDomQuiescenceJs,
   FAST_SETTLE_DOM_QUIESCENCE_JS,
@@ -142,7 +143,7 @@ export class BrowserManager {
   private readonly disconnectHandlers = new Set<(name: string) => void>();
 
   constructor(
-    baseDir = path.join(os.homedir(), ".dailies", "browsers"),
+    baseDir = getBrowsersDir(),
     dependencies: Partial<BrowserManagerDependencies> = {}
   ) {
     this.baseDir = baseDir;
@@ -409,8 +410,6 @@ export class BrowserManager {
     return Array.from(this.browsers.values())
       .filter((entry) => !entry.isSession)
       .map((entry) => {
-        this.pruneClosedPages(entry);
-
         const connected = entry.browser.isConnected();
         let status: BrowserSummary["status"];
         if (entry.type === "connected") {
@@ -714,12 +713,8 @@ export class BrowserManager {
     const browser = await this.dependencies.connectOverCDP(endpoint);
     const contexts = browser.contexts();
 
-    // Enumerate existing tabs for connected browsers, but leave them unnamed so getPage(name)
-    // still opens a fresh tab unless a targetId is provided.
-    for (const browserContext of contexts) {
-      browserContext.pages();
-    }
-
+    // Leave existing tabs unnamed so getPage(name) opens a fresh tab unless a
+    // targetId is provided. listPages discovers them from the live contexts.
     const context = contexts[0] ?? (await browser.newContext());
 
     const entry: BrowserEntry = {
@@ -816,22 +811,11 @@ export class BrowserManager {
     return null;
   }
 
-  private async probePort(port: number): Promise<string | null> {
-    const endpoint = `http://127.0.0.1:${port}`;
-    const result = await this.fetchDebuggerWebSocketUrl(
-      endpoint,
+  private probePort(port: number): Promise<string | null> {
+    return this.resolveHttpEndpoint(
+      `http://127.0.0.1:${port}`,
       PROBE_TIMEOUT_MS
     );
-
-    if (result.status === "ok") {
-      return result.webSocketDebuggerUrl;
-    }
-
-    if (result.status === "not-found") {
-      return this.readDevToolsActivePort(port);
-    }
-
-    return null;
   }
 
   private getDevToolsActivePortCandidates(): string[] {
@@ -1228,10 +1212,9 @@ export class BrowserManager {
   private listNamedPages(entry: BrowserEntry): string[] {
     this.pruneClosedPages(entry);
 
-    return Array.from(entry.pages.entries())
-      .filter(([, page]) => !page.isClosed())
-      .map(([name]) => name)
-      .sort((left, right) => left.localeCompare(right));
+    return Array.from(entry.pages.keys()).sort((left, right) =>
+      left.localeCompare(right)
+    );
   }
 
   private getNamedPagesByPage(entry: BrowserEntry): Map<Page, string> {

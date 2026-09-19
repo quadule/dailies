@@ -418,15 +418,6 @@ export class QuickJSHost {
         }
       }
 
-      if (promiseState.type === "pending") {
-        const resolved = await this.#awaitQuickJSPromise(handle);
-        try {
-          return this.#dumpHandle(resolved);
-        } finally {
-          resolved.dispose();
-        }
-      }
-
       if (promiseState.type === "rejected") {
         try {
           throw this.#toError("QuickJS promise rejected", promiseState.error);

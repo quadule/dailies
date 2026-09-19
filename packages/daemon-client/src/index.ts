@@ -1,6 +1,6 @@
 // dailies-daemon-client — shared daemon transport, endpoint/paths resolution,
-// and daemon lifecycle/extract. Consumed by the `dailies`
-// CLIs so both drive the same daemon and embed the same daemon bundle.
+// and daemon lifecycle/extract. Consumed by the `dailies` CLI to drive the
+// daemon and embed its bundle.
 
 export type { BrowserSummary, StatusSummary } from "dailies-protocol";
 export { findDaemonCommand } from "./daemon/entry.js";

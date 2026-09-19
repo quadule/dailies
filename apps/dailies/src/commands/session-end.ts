@@ -812,30 +812,34 @@ export async function sessionEnd(
     }
   }
 
-  const request: SessionEndRequest = {
-    id: requestId("session-end"),
-    type: "session-end",
-    sessionId: id,
-    reason: "end",
-  };
   let result: SessionEndResult | undefined;
   let code = 1;
-  try {
-    code = await sendRequest(request, (data) => {
-      result = data as SessionEndResult;
-    });
-  } catch (err) {
-    // Daemon unreachable (e.g. it was stopped). Fall through to reconcile the
-    // record and finalize a report from whatever artifacts are on disk.
-    logger.warn(
-      { err, sessionId: id },
-      "daemon unreachable; finalizing from on-disk artifacts"
-    );
+  // A terminal record is a deliberate re-finalize. The daemon already dropped
+  // that session, so asking it again only emits a misleading "not found" error.
+  // Scan the current files below, including any attachments just added above.
+  if (record0.status === "active") {
+    const request: SessionEndRequest = {
+      id: requestId("session-end"),
+      type: "session-end",
+      sessionId: id,
+      reason: "end",
+    };
+    try {
+      code = await sendRequest(request, (data) => {
+        result = data as SessionEndResult;
+      });
+    } catch (err) {
+      // Daemon unreachable (e.g. it was stopped). Fall through to reconcile the
+      // record and finalize a report from whatever artifacts are on disk.
+      logger.warn(
+        { err, sessionId: id },
+        "daemon unreachable; finalizing from on-disk artifacts"
+      );
+    }
   }
 
-  // Was this session already ended before this call? Then the daemon has long
-  // since dropped it, and its "Session not found" is the expected answer to a
-  // deliberate re-finalize — not a failure. See the `degraded` note below.
+  // Read the latest status under the session lock: another finalizer may have
+  // completed while this invocation was waiting for its daemon response.
   let wasAlreadyEnded = false;
 
   // Reconcile the on-disk record regardless of the daemon outcome: if the daemon
@@ -862,9 +866,7 @@ export async function sessionEnd(
   //
   // Re-running on an ALREADY-ended record is not that. It is the supported way
   // to re-render a report or re-cut a video (see the idempotence note further
-  // down), and the daemon necessarily no longer holds the session — so its
-  // "not found" is the expected answer, and exiting non-zero for it failed a CI
-  // step that had just succeeded.
+  // down). It needs no live daemon, and rebuilding it is not a degraded run.
   let degraded = isDegradedEnd({
     daemonCode: code,
     hasResult: Boolean(result),

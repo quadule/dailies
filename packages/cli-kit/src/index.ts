@@ -9,7 +9,7 @@ import {
 import pretty from "pino-pretty";
 
 // Shared `--help` prose (sandbox rules, script API, LLM usage guide) composed
-// into both CLIs' help output — single source of truth, no drift.
+// into the CLI's command help — single source of truth, no drift.
 export {
   buildScriptingGuide,
   type ExampleOptions,
@@ -129,7 +129,7 @@ function buildStream(): DestinationStream | undefined {
   return;
 }
 
-// Root CLI logger shared by the dailies CLIs. Diagnostics go to stderr so stdout
+// Root logger for the dailies CLI. Diagnostics go to stderr so stdout
 // stays clean for machine-readable output. Quiet by default (warn);
 // `--verbose`/`-v` or DAILIES_LOG_LEVEL raises it, `--json` forces structured
 // output. `sync: true` flushes records before the CLI calls process.exit().

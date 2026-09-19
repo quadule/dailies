@@ -288,6 +288,14 @@ export interface SessionStartResult {
   session: SessionSummary;
 }
 
+export interface SessionTakeoverStopResult {
+  actionCount: number;
+  code: string;
+  durationMs: number;
+  startedAt: number;
+  step: string;
+}
+
 export interface SessionEndResult {
   artifacts: ArtifactInfo[];
   manifestPath: string;

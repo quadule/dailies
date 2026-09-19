@@ -19,4 +19,24 @@ describe("parseConsole", () => {
   it("returns an empty array for empty input", () => {
     expect(parseConsole("")).toEqual([]);
   });
+
+  it("skips JSON values and malformed fields that cannot be rendered", () => {
+    const raw = [
+      null,
+      false,
+      12,
+      "text",
+      [],
+      { type: ["error"], text: "bad type" },
+      { type: "log", text: { nested: "bad text" } },
+      { kind: "pageerror", message: "survived", ts: 123 },
+    ]
+      .map((value) => JSON.stringify(value))
+      .join("\n");
+    const entries = parseConsole(raw);
+    expect(entries).toEqual([
+      { kind: "pageerror", message: "survived", ts: 123 },
+    ]);
+    expect(countConsoleErrors(entries)).toBe(1);
+  });
 });

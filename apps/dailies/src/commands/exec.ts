@@ -1,9 +1,9 @@
-import { readFile } from "node:fs/promises";
 import { requestId } from "dailies-cli-kit";
 import { ensureDaemonRunning, sendRequest } from "dailies-daemon-client";
 import type { ExecuteRequest } from "dailies-protocol";
 import { readInjectScripts } from "../inject-scripts.js";
 import { resultRenderer } from "./render.js";
+import { readScript } from "./script-input.js";
 
 // One-off, UNRECORDED script execution — the counterpart to `dailies run`,
 // which requires a session and records the script as a step (trace/video/HAR/
@@ -25,20 +25,8 @@ export interface ExecArgs {
 }
 
 export async function execScript(args: ExecArgs): Promise<number> {
-  let script = args.script;
-  if (script === undefined && args.file) {
-    try {
-      script = await readFile(args.file, "utf8");
-    } catch (err) {
-      // Normalize ENOENT to the canonical message the daemon/tests expect.
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error("No such file or directory (os error 2)");
-      }
-      throw err;
-    }
-  }
-  if (script === undefined || script.trim() === "") {
-    process.stderr.write("No script provided (pass a FILE or pipe stdin)\n");
+  const script = await readScript(args);
+  if (script === undefined) {
     return 2;
   }
 

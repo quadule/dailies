@@ -1003,6 +1003,7 @@ async function assembleVideo(args: {
   repoDir: string;
   base: string;
   temps: string[];
+  pendingJobs: Promise<unknown>[];
   notes: string[];
   log: Logger;
   progress: (message: string) => void;
@@ -1071,6 +1072,7 @@ async function assembleVideo(args: {
         directionText,
       })
     : Promise.resolve({ contributors: [], musicCredit: undefined });
+  args.pendingJobs.push(Promise.allSettled([backgroundJob, creditInputsJob]));
 
   progress("re-timing the video to fit the narration…");
   const clipDurSec = narratableSteps.map(
@@ -1087,9 +1089,6 @@ async function assembleVideo(args: {
     silentTargetSec: silentFootageTargetSec(process.env),
   });
   if (!retimed) {
-    // Drain the in-flight jobs before bailing so neither can settle after we've
-    // returned (and so their temps are on the cleanup list).
-    await Promise.allSettled([backgroundJob, creditInputsJob]);
     return null;
   }
   const background = await backgroundJob;
@@ -1280,6 +1279,7 @@ async function assembleSongVideo(args: {
   repoDir: string;
   base: string;
   temps: string[];
+  pendingJobs: Promise<unknown>[];
   notes: string[];
   log: Logger;
   progress: (message: string) => void;
@@ -1340,6 +1340,7 @@ async function assembleSongVideo(args: {
         directionText,
       })
     : Promise.resolve({ contributors: [], musicCredit: undefined });
+  args.pendingJobs.push(Promise.allSettled([backgroundJob, creditInputsJob]));
 
   // Re-time the body: each step plays at natural speed then freezes its last frame to
   // fill its budget (preserving motion + quality). When `onsets` are given (the
@@ -1358,7 +1359,6 @@ async function assembleSongVideo(args: {
     bodyEnd,
   });
   if (!retimed) {
-    await Promise.allSettled([backgroundJob, creditInputsJob]);
     return null;
   }
   const background = await backgroundJob;
@@ -2468,6 +2468,8 @@ interface CinematicContext {
   // per-track attribution into it at fetch time).
   notes: string[];
   options: CinematicOptions;
+  // Started background work must settle before those temp files are removed.
+  pendingJobs: Promise<unknown>[];
   progress: (message: string) => void;
   providers: MediaProviders;
   // A music model that actually SINGS supplied lyrics (ACE-Step / ElevenLabs /
@@ -2851,6 +2853,7 @@ async function prepareCinematic(args: {
   steps: CinematicStep[];
   options: CinematicOptions;
   temps: string[];
+  pendingJobs: Promise<unknown>[];
 }): Promise<CinematicContext | Skip> {
   const { videoPath, steps, options, temps } = args;
   const { ffmpegPath, log } = options;
@@ -2908,6 +2911,7 @@ async function prepareCinematic(args: {
     providers: media.providers,
     singingMusic: media.singingMusic,
     temps,
+    pendingJobs: args.pendingJobs,
     videoPath,
   };
 }
@@ -3142,6 +3146,7 @@ async function runNarrationPass(
     repoDir,
     base,
     temps,
+    pendingJobs: ctx.pendingJobs,
     notes,
     log,
     progress,
@@ -3649,6 +3654,7 @@ async function runSongPass(ctx: CinematicContext): Promise<CinematicResult> {
     repoDir: script.repoDir,
     base: script.base,
     temps,
+    pendingJobs: ctx.pendingJobs,
     notes,
     log,
     progress,
@@ -3749,8 +3755,15 @@ export async function cinematicProcess(
   // Temps are all siblings of videoPath; the finally removes them even on a
   // partial failure (mirrors condense.ts).
   const temps: string[] = [];
+  const pendingJobs: Promise<unknown>[] = [];
   try {
-    const ctx = await prepareCinematic({ videoPath, steps, options, temps });
+    const ctx = await prepareCinematic({
+      videoPath,
+      steps,
+      options,
+      temps,
+      pendingJobs,
+    });
     if ("skip" in ctx) {
       return notApplied(ctx.skip);
     }
@@ -3762,6 +3775,9 @@ export async function cinematicProcess(
     );
     return notApplied(err instanceof Error ? err.message : String(err));
   } finally {
+    // Providers may still be writing when an encode fails. Drain them before
+    // removing siblings, including any temp paths registered as they finish.
+    await Promise.allSettled(pendingJobs);
     await Promise.all(temps.map((t) => rm(t, { force: true })));
   }
 }

@@ -34,7 +34,9 @@ export async function runCli(
   child.stderr.on("data", (c) => err.push(c));
   const code: number = await new Promise((resolveExit, reject) => {
     child.once("error", reject);
-    child.once("exit", (c) => resolveExit(c ?? 0));
+    // Exit can arrive before the pipe's final data event. Wait until both output
+    // streams close so even a short --version invocation is captured reliably.
+    child.once("close", (c) => resolveExit(c ?? 0));
   });
   return {
     stdout: Buffer.concat(out).toString("utf8"),

@@ -128,4 +128,35 @@ describe("parseTraceActions", () => {
     const zip = zipSync({ "other.txt": strToU8("hello") });
     expect(parseTraceActions(zip)).toEqual({ byStep: {}, total: 0 });
   });
+
+  it("retains valid trace actions around unexpected JSON records", () => {
+    const result = parseTraceActions(
+      makeTraceZip([
+        null,
+        [],
+        5,
+        "text",
+        { type: "before", class: { unexpected: true }, method: false },
+        { type: "before", class: "Frame", method: "goto" },
+      ])
+    );
+    expect(result.total).toBe(1);
+    expect(result.byStep["(setup)"]).toEqual([{ apiName: "Frame.goto" }]);
+  });
+
+  it.each([
+    "__proto__",
+    "constructor",
+    "toString",
+  ])("accepts the step name %s without colliding with object properties", (title) => {
+    const result = parseTraceActions(
+      makeTraceZip([
+        { type: "before", class: "Tracing", method: "tracingGroup", title },
+        { type: "before", class: "Frame", method: "click" },
+      ])
+    );
+    expect(result.total).toBe(1);
+    expect(Object.hasOwn(result.byStep, title)).toBe(true);
+    expect(result.byStep[title]).toEqual([{ apiName: "Frame.click" }]);
+  });
 });

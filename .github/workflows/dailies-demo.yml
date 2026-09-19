@@ -160,8 +160,9 @@ jobs:
             # "/dailies dailies-theme: noir" re-themes without also becoming the
             # thing the agent tries to record.
             printf '%s' "${COMMENT_BODY:-}" \
-              | sed '1s|^[[:space:]]*/dailies[[:space:]]*||' \
-              | sed -E '/^[[:space:]]*(dailies-url|dailies-target|dailies-theme|dailies-prompt|demo url|demo target|theme)[[:space:]]*:/Id' \
+              | sed '1s|^[[:space:]]*/dailies[[:space:]]*||' > /tmp/dailies-pick/comment.txt
+            sed -E '/^[[:space:]]*(dailies-url|dailies-target|dailies-theme|dailies-prompt|demo url|demo target|theme)[[:space:]]*:/Id' \
+              /tmp/dailies-pick/comment.txt \
               | sed -e '/./,$!d' > /tmp/dailies-pick/ask.txt
             if [ -s /tmp/dailies-pick/ask.txt ] && grep -q '[^[:space:]]' /tmp/dailies-pick/ask.txt; then
               ASK="$(cat /tmp/dailies-pick/ask.txt)"
@@ -188,18 +189,16 @@ jobs:
             # explicit `dailies-theme:` in the comment beats a stale one in the
             # PR description.
             : > /tmp/dailies-pick/"$N".body
-            if [ -n "$ASK" ]; then
-              printf '%s\n\n' "$ASK" >> /tmp/dailies-pick/"$N".body
+            if [ "$EVENT" = "issue_comment" ]; then
+              cat /tmp/dailies-pick/comment.txt >> /tmp/dailies-pick/"$N".body
+              printf '\n\n' >> /tmp/dailies-pick/"$N".body
             fi
             jq -r '.body // ""' "$META" >> /tmp/dailies-pick/"$N".body
             # A JSON array of comment bodies — what --comments-file expects.
             jq '[.comments[].body]' "$META" > /tmp/dailies-pick/"$N".comments
             gh pr diff "$N" --name-only > /tmp/dailies-pick/"$N".changed || true
 
-            # --force re-demos the same commit: hide the comment history from the
-            # freshness check rather than adding a second code path for it.
             COMMENTS="/tmp/dailies-pick/$N.comments"
-            COMMENTS_ALL="/tmp/dailies-pick/$N.comments"
             # --force skips the FRESHNESS check inside `ci decide`. It used to
             # blank the comments file instead, which now would also throw away
             # the deploy comment carrying the review-app URL (demo.targetComment)
@@ -228,7 +227,7 @@ jobs:
             if [ "$(echo "$DECISION" | jq -r '.run')" = "true" ]; then
               # `prevMetrics` is the previous demo comment's marker payload —
               # the comment step diffs this run's numbers against it.
-              PREV=$(dailies ci previous-metrics --comments-file "$COMMENTS_ALL" 2>/dev/null || true)
+              PREV=$(dailies ci previous-metrics --comments-file "$COMMENTS" 2>/dev/null || true)
               MATRIX=$(jq -c --argjson d "$DECISION" --arg n "$N" --arg sha "$SHA" \
                         --arg prev "$PREV" \
                         --arg ask "$ASK" \

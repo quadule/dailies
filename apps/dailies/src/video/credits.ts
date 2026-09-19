@@ -12,15 +12,15 @@
 // stages run inside cinematicProcess's try/catch).
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { ENCODE_TIMEOUT_MS, type ProbedVideo } from "./ffmpeg.js";
+
+export type { ProbedVideo } from "./ffmpeg.js";
 
 const execFileAsync = promisify(execFile);
 
 // macOS ffmpeg is usually built without fontconfig, so drawtext needs an
 // explicit font file rather than a font name (mirrors narrate's TITLE_FONT_FILE).
 const TITLE_FONT_FILE = "/System/Library/Fonts/Helvetica.ttc";
-
-// Encode timeout (ms), matching narrate/condense's ENCODE_TIMEOUT_MS.
-const ENCODE_TIMEOUT_MS = 300_000;
 
 // git log is fast, but bound it like narrate's other probes so a wedged repo
 // can't hang the pipeline.
@@ -36,15 +36,6 @@ const MAX_SEC = 20;
 // Cap the named contributors so the block stays legible (and bounded); the rest
 // collapse into a single "and N more" line that still scrolls past.
 const MAX_NAMED = 20;
-
-// Mirrors narrate's ProbedVideo: a non-exported interface there, so it can't be
-// imported without editing that file. TS is structural, so this is assignable to
-// and from narrate's type.
-export interface ProbedVideo {
-  frameRate: number;
-  height: number;
-  width: number;
-}
 
 export interface Contributor {
   commits: number;
@@ -111,9 +102,8 @@ export function creditsDurationSec(
 }
 
 // drawtext is sensitive to colons, single quotes, backslashes and percent;
-// newlines would split the arg, so collapse them. Replicated from narrate's
-// (non-exported) escapeDrawText so we don't reach into that file. Names are
-// git-derived and may contain any of these.
+// newlines would split the arg, so collapse them. Names are git-derived and may
+// contain any of these.
 function escapeDrawText(text: string): string {
   return text
     .replace(/[\r\n]+/g, " ")

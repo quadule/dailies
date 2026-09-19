@@ -1,13 +1,13 @@
 import { constants } from "node:fs";
 import { type FileHandle, lstat, mkdir, open } from "node:fs/promises";
 import path from "node:path";
-import { getDailiesBaseDir } from "./local-endpoint.js";
+import { dailiesDir, tmpDir } from "dailies-runtime/paths";
 
 const SAFE_PATH_SEGMENT_PATTERN = /[^A-Za-z0-9._-]/g;
 const NOFOLLOW_FLAG = constants.O_NOFOLLOW ?? 0;
 
-export const DAILIES_BASE_DIR = getDailiesBaseDir();
-export const DAILIES_TMP_DIR = path.join(DAILIES_BASE_DIR, "tmp");
+export const DAILIES_BASE_DIR = dailiesDir();
+export const DAILIES_TMP_DIR = tmpDir();
 
 function requireNonEmptyString(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -222,26 +222,10 @@ export async function writeDailiesTempFile(
 }
 
 export async function readDailiesTempFile(fileName: unknown): Promise<string> {
-  const destinationPath = await resolveDailiesTempPath(fileName);
-  await assertDestinationIsNotSymlink(destinationPath);
-
-  let handle: FileHandle | undefined;
-  try {
-    handle = await open(destinationPath, constants.O_RDONLY | NOFOLLOW_FLAG);
-    return await handle.readFile({
-      encoding: "utf8",
-    });
-  } catch (error) {
-    throw normalizeSymlinkError(error, destinationPath);
-  } finally {
-    await handle?.close();
-  }
+  return (await readDailiesTempFileBytes(fileName)).toString("utf8");
 }
 
-// Read a temp file as raw bytes — for binary payloads like image/PDF uploads.
-// Mirrors readDailiesTempFile's containment and symlink defenses exactly (the
-// same sanitized path resolution, the lstat symlink check, and O_NOFOLLOW on
-// open) so a binary read can't escape the controlled temp directory either.
+// Text reads and binary uploads share the same containment and symlink checks.
 export async function readDailiesTempFileBytes(
   fileName: unknown
 ): Promise<Buffer> {

@@ -13,9 +13,10 @@
 // PRIVACY: directionText is sent only to the configured (local by default) ACE-
 // Step server. Any API key is read from env, never logged or echoed (the curl
 // preview uses a $DAILIES_ACESTEP_API_KEY placeholder).
-import { rename, rm, writeFile } from "node:fs/promises";
 import type { Logger } from "dailies-logger";
+import { writeFileAtomic } from "./media-files.js";
 import type { MediaProviders, MusicProvider } from "./providers.js";
+import { singleQuote } from "./shell.js";
 
 const DEFAULT_URL = "http://127.0.0.1:8001";
 const MODELS_TIMEOUT_MS = 4000;
@@ -158,10 +159,6 @@ export function lrcFromResponse(body: unknown): string | undefined {
   return typeof lrc === "string" && lrc.trim() ? lrc : undefined;
 }
 
-function sq(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`;
-}
-
 // Redacted, copy-pasteable curl preview (key shown as the env-var reference).
 export function describeMusicCurl(args: {
   baseUrl: string;
@@ -176,22 +173,8 @@ export function describeMusicCurl(args: {
     `${args.baseUrl}/v1/chat/completions`,
     ...auth,
     "-H 'content-type: application/json'",
-    `-d ${sq(JSON.stringify(args.payload))}`,
+    `-d ${singleQuote(JSON.stringify(args.payload))}`,
   ].join(" ");
-}
-
-async function writeFileAtomic(outPath: string, bytes: Buffer): Promise<void> {
-  if (bytes.length === 0) {
-    throw new Error("ACE-Step returned 0 audio bytes");
-  }
-  const tmp = `${outPath}.tmp-${process.pid}`;
-  try {
-    await writeFile(tmp, bytes);
-    await rename(tmp, outPath);
-  } catch (err) {
-    await rm(tmp, { force: true });
-    throw err instanceof Error ? err : new Error(String(err));
-  }
 }
 
 function authHeaders(config: AceStepConfig): Record<string, string> {
@@ -269,7 +252,7 @@ async function generate(args: {
   if (!bytes) {
     throw new Error("ACE-Step response had no audio");
   }
-  await writeFileAtomic(outPath, bytes);
+  await writeFileAtomic(outPath, bytes, "ACE-Step returned 0 audio bytes");
   // The model's own per-line lyric timestamps, when the server exposes them (a
   // patched server that runs get_lyric_timestamp) — the ideal caption source.
   return { lrcText: lrcFromResponse(body) };

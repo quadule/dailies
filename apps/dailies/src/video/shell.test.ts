@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { formatCommand, shellQuote } from "./shell.js";
+import { formatCommand, shellQuote, singleQuote } from "./shell.js";
+
+describe("singleQuote", () => {
+  it("preserves the quoted curl preview format for paths, empty values, and apostrophes", () => {
+    expect(singleQuote("/tmp/audio.wav")).toBe("'/tmp/audio.wav'");
+    expect(singleQuote("")).toBe("''");
+    expect(singleQuote("it's")).toBe("'it'\\''s'");
+  });
+});
 
 describe("shellQuote", () => {
   it("leaves safe bare tokens unquoted", () => {

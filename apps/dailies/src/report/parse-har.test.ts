@@ -39,4 +39,27 @@ describe("parseHar", () => {
     });
     expect(parseHar("").total).toBe(0);
   });
+
+  it("keeps partial requests renderable when HAR entries have unexpected shapes", () => {
+    const summary = parseHar(
+      JSON.stringify({
+        log: {
+          entries: [
+            null,
+            { request: { method: {}, url: 5 }, response: { status: "200" } },
+            {
+              request: { method: "GET", url: "https://example.com" },
+              response: { status: 200 },
+            },
+          ],
+        },
+      })
+    );
+    expect(summary.entries).toEqual([
+      { durationMs: 0, method: "", status: 0, url: "" },
+      { durationMs: 0, method: "", status: 0, url: "" },
+      { durationMs: 0, method: "GET", status: 200, url: "https://example.com" },
+    ]);
+    expect(summary.failed).toBe(2);
+  });
 });

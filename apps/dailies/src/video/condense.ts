@@ -42,6 +42,7 @@ import { execFile } from "node:child_process";
 import { access, rename, rm, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { Logger } from "dailies-logger";
+import { ENCODE_TIMEOUT_MS } from "./ffmpeg.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -139,7 +140,6 @@ export const MAX_SELECT_TERMS = 50;
 // far heavier than the freezedetect pass it replaced (~3s per minute of
 // 1440x900 video, measured) — generous enough for a long session.
 const ANALYZE_TIMEOUT_MS = 300_000;
-const ENCODE_TIMEOUT_MS = 300_000;
 
 export interface Segment {
   end: number;
