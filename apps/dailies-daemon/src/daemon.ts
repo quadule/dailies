@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { chmod, mkdir, unlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -12,6 +11,7 @@ import {
   serialize,
   sessionStepSlug,
 } from "dailies-protocol";
+import { installRuntimeDependencies } from "dailies-runtime/install";
 import { BrowserManager } from "./browser-manager.js";
 import {
   getBrowsersDir,
@@ -386,23 +386,12 @@ async function handleInstall(
         path.join(BASE_DIR, "package.json"),
         EMBEDDED_PACKAGE_JSON
       );
-      const npmProgram = "npm";
-      await runInstallCommand(
-        output,
-        request.id,
-        npmProgram,
-        ["install"],
-        BASE_DIR,
-        "npm install"
-      );
-      await runInstallCommand(
-        output,
-        request.id,
-        npmProgram,
-        ["exec", "--", "playwright", "install", "chromium"],
-        BASE_DIR,
-        "Playwright install"
-      );
+      await installRuntimeDependencies(BASE_DIR, {
+        write(type, data) {
+          void output.push({ id: request.id, type, data });
+        },
+        drain: () => output.drain(),
+      });
       await writeMessage(socket, {
         id: request.id,
         type: "complete",
@@ -417,64 +406,6 @@ async function handleInstall(
       });
     }
   });
-}
-
-async function runInstallCommand(
-  output: ReturnType<typeof createMessageQueue>,
-  requestId: string,
-  program: string,
-  args: string[],
-  cwd: string,
-  label: string
-): Promise<void> {
-  const child = spawn(program, args, {
-    cwd,
-    env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-    shell: process.platform === "win32",
-  });
-
-  child.stdout?.setEncoding("utf8");
-  child.stdout?.on("data", (data: string) => {
-    void output.push({
-      id: requestId,
-      type: "stdout",
-      data,
-    });
-  });
-
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (data: string) => {
-    void output.push({
-      id: requestId,
-      type: "stderr",
-      data,
-    });
-  });
-
-  const result = await new Promise<{
-    code: number | null;
-    signal: NodeJS.Signals | null;
-  }>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      resolve({ code, signal });
-    });
-  });
-
-  await output.drain();
-
-  if (result.code === 0) {
-    return;
-  }
-
-  const reason =
-    result.signal === null
-      ? `${label} failed with exit code ${result.code ?? "unknown"}`
-      : `${label} terminated by signal ${result.signal}`;
-
-  throw new Error(reason);
 }
 
 async function handleRequest(socket: net.Socket, line: string): Promise<void> {

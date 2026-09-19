@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "Shared filesystem layout and artifact discovery for the Dailies CLI and daemon.",
+  "description": "Shared runtime layout, installation and artifact discovery for the Dailies CLI and daemon.",
   "exports": {
     "./artifacts": {
       "source": "./src/artifacts.ts",
@@ -15,6 +15,11 @@
       "source": "./src/paths.ts",
       "types": "./src/paths.ts",
       "default": "./src/paths.ts"
+    },
+    "./install": {
+      "source": "./src/install.ts",
+      "types": "./src/install.ts",
+      "default": "./src/install.ts"
     }
   },
   "scripts": {

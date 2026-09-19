@@ -110,6 +110,18 @@ Both are optional and both fail open: a missing or malformed file yields default
 failing a run. `flows.md` becomes agent instructions, so treat it as untrusted when it comes from a
 repo you don't control.
 
+## Shared execution and installation
+
+General CLI subprocess handling lives in `apps/dailies/src/util/process.ts`, and shell preview
+formatting in `util/shell.ts`. Keep media probes in `video/ffmpeg.ts`; text providers should not
+import video utilities. The shared runner closes supplied stdin and waits for process termination
+before rejecting, so callers can safely clean temporary files.
+
+The CLI install command and legacy daemon install RPC both use `dailies-runtime/install`. Keep
+bundle extraction in the caller, preserve the RPC's framed/drained output, and retire only an idle
+daemon after a CLI upgrade. Guest JavaScript lives in `apps/dailies-daemon/src/sandbox/guest/` as
+explicit source strings; host orchestration and capabilities remain in `quickjs-sandbox.ts`.
+
 ## Text generation (`apps/dailies/src/llm/`)
 
 Every LLM call in the project goes through `generateJson` — narration, lyrics, and the nightly demo

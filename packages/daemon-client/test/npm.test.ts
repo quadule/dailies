@@ -1,5 +1,5 @@
+import { npmCommand } from "dailies-runtime/install";
 import { describe, expect, it } from "vitest";
-import { npmCommand } from "../src/daemon/npm.js";
 
 describe("npmCommand", () => {
   it("returns the bare `npm` (the shell resolves the .cmd shim on Windows)", () => {

@@ -3,6 +3,7 @@
 // daemon and embed its bundle.
 
 export type { BrowserSummary, StatusSummary } from "dailies-protocol";
+export { npmCommand } from "dailies-runtime/install";
 export { findDaemonCommand } from "./daemon/entry.js";
 export {
   embeddedRuntimeInstalled,
@@ -14,7 +15,6 @@ export {
   ensureDaemonRunning,
   waitForDaemonExit,
 } from "./daemon/lifecycle.js";
-export { npmCommand } from "./daemon/npm.js";
 export { type DaemonCommand, spawnDaemon } from "./daemon/spawn.js";
 export {
   connectToDaemon,
