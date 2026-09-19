@@ -339,7 +339,20 @@ describe("SessionManager", () => {
     // browser.close() over that transport, and it runs in end()'s finally —
     // so an unbounded wait strands `session end` after every artifact is
     // already safely on disk.
-    vi.useFakeTimers();
+    //
+    // Fake only the timer functions: the loop below bounds itself by the REAL
+    // clock (process.hrtime), which the default fake set would also freeze —
+    // that turned the bound back into a turn count and made the test flaky
+    // under the full parallel suite.
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+        "Date",
+      ],
+    });
     try {
       const { entry, calls } = makeSession();
       const manager = makeManager(entry, calls, []);
@@ -354,12 +367,15 @@ describe("SessionManager", () => {
       // collect() does real file I/O before the stop, so the stop's timeout
       // timer only exists a few event-loop turns in — keep advancing until
       // end() returns rather than guessing at the turn count.
-      let turns = 0;
+      // Bound the wait in WALL-CLOCK time, not loop turns: each turn only
+      // yields a few event-loop ticks, and under a loaded machine (the rest of
+      // this suite runs real browsers in parallel) the real file I/O can need
+      // more of them than any fixed count — a turn cap made this flaky. Finite
+      // so a regression fails here instead of hanging the suite.
+      const startedAt = process.hrtime.bigint();
+      const wallClockCapNs = 20_000_000_000n;
       while (pending) {
-        // Several bounded stages run back to back (each up to 5 s of fake
-        // time), so allow well past their sum — but stay finite, so a
-        // regression fails here instead of hanging the suite.
-        if (turns++ > 120) {
+        if (process.hrtime.bigint() - startedAt > wallClockCapNs) {
           expect.fail("end() never returned — the browser-stop bound is gone");
         }
         await vi.advanceTimersByTimeAsync(1000);
@@ -371,7 +387,7 @@ describe("SessionManager", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
+  }, 60_000);
 
   it("joins an end already in flight instead of tearing down twice", async () => {
     // Daemon shutdown calls endAll() without the per-session browser lock the
