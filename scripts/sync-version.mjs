@@ -8,10 +8,12 @@
 // pinned at 0.0.0), plus every plugin-pack manifest when present: the Claude
 // Code manifests under .claude-plugin/ (top-level "version" + each
 // plugins[].version), the Cursor and Codex plugin.json files, and each
-// skills/*/SKILL.md frontmatter `metadata.version`. Keeping every package in
-// lockstep means `pnpm publish`'s workspace:* -> semver rewrite never pins a
-// stale internal version — and plugin marketplaces (which compare manifest
-// versions to detect updates) always see the new release.
+// skills/*/SKILL.md frontmatter `metadata.version`. Lockstep is for the plugin
+// packs, not for npm: the agent marketplaces detect an update by comparing the
+// version in a manifest against the installed copy (Claude Code reads
+// .claude-plugin/marketplace.json, Cursor and Codex their plugin.json), so a
+// release that doesn't bump every manifest is a release nobody's agent sees.
+// See "How updates reach agents" in RELEASING.md.
 import { execFile } from "node:child_process";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";

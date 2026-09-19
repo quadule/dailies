@@ -6,14 +6,19 @@ name: Release
 # decisions, and an accidental `git push --tags` must not reach the registry.
 #
 # To release: `node scripts/sync-version.mjs <version>`, commit, tag, push —
-# then run this workflow from the Actions tab (or `gh workflow run release.yml
-# -f version=X.Y.Z`) and confirm. See RELEASING.md.
+# then dispatch this workflow ON THE TAG, so what is published is what was
+# tagged rather than whatever main has drifted to since:
+#
+#   gh workflow run release.yml --ref vX.Y.Z -f version=X.Y.Z
+#
+# (or pick the tag as the ref when running **Release** from the Actions tab).
+# The verify step below enforces that. See RELEASING.md.
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish (must match package.json, e.g. 0.5.0)"
+        description: "Version to publish — must match package.json AND the tag this is dispatched on (gh workflow run release.yml --ref v0.5.0 -f version=0.5.0)"
         required: true
         type: string
 
@@ -44,9 +49,17 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # The typed version must match the workspace, so a mistyped dispatch fails
-      # here rather than publishing something unintended.
-      - name: Verify the requested version matches the workspace
+      # Two checks, both of which have to hold before anything is built.
+      #
+      # 1. The typed version must match the workspace, so a mistyped dispatch
+      #    fails here rather than publishing something unintended.
+      # 2. The checked-out ref must BE the tag. A dispatch on `main` also
+      #    satisfies (1) — the release commit is on main — so without this a run
+      #    started after later commits landed would stage a tarball built from
+      #    those commits under the tagged version number. Publishing something
+      #    that isn't what v<version> points at is the one unrecoverable mistake
+      #    here: npm never lets that version be republished.
+      - name: Verify the requested version matches the workspace and the tag
         env:
           REQUESTED: ${{ inputs.version }}
         run: |
@@ -54,6 +67,11 @@ jobs:
           PKG=$(node -p "require('./package.json').version")
           if [ "$WANT" != "$PKG" ]; then
             echo "Requested $WANT but the workspace is at $PKG (run scripts/sync-version.mjs)"
+            exit 1
+          fi
+          if [ "$GITHUB_REF" != "refs/tags/v$WANT" ]; then
+            echo "Dispatched on $GITHUB_REF, not the tag. Re-run it on the tag:"
+            echo "  gh workflow run release.yml --ref v$WANT -f version=$WANT"
             exit 1
           fi
 
@@ -69,8 +87,9 @@ jobs:
       # Why npm and not `pnpm -r publish`: OIDC landed natively in pnpm 10, and
       # this repo is on pnpm 9.15 because pnpm 10 stopped running dependency
       # build scripts by default (esbuild/sharp/Playwright need them). Since the
-      # consolidation there is exactly ONE public package with ZERO runtime
-      # deps and no `workspace:*`, so pnpm's rewriting has nothing to do and
+      # consolidation there is exactly ONE public package with zero runtime deps
+      # (the only `workspace:*` specs are devDependencies, which npm leaves as-is
+      # and consumers never install), so pnpm's rewriting has nothing to do and
       # plain `npm publish` from the package dir is equivalent.
       #
       # npm's bundled version on Node 22 is 10.x. Trusted publishing needs

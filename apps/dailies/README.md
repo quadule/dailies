@@ -76,6 +76,38 @@ screenshot (taken from the last page opened during that step). So use **one prim
 step**, and reuse the same page name across steps to "click through" like a user — named pages persist
 across steps within a session.
 
+## Make it a film
+
+What `session end` collects is silent footage. `--cinematic` cuts it into a narrated short: an LLM
+writes the voice-over, a voice reads it, each step holds long enough to follow, and the result gets
+a title card, burned-in captions and credits. `--song` scores the whole thing with one original sung
+track instead of spoken narration.
+
+```bash
+dailies session end "$id" --cinematic
+dailies session end "$id" --song
+dailies session end "$id" --cinematic --prompt "noir detective, as a haiku"
+```
+
+Leave `--prompt` off and every cut draws its own random theme from 300+ of them. That is deliberate,
+not a missing default — a demo nobody chose to sit down and watch has to earn the click — and it
+costs you nothing in reproducibility: the direction it drew is printed with the run, so passing that
+text back as `--prompt` reproduces the same cut.
+
+**Prerequisites:** a full `ffmpeg` build (`brew install ffmpeg` / `apt install ffmpeg`); a text
+provider — the `claude` CLI (the default; no key), any OpenAI-compatible endpoint via
+`$DAILIES_LLM_URL`, or Apple Intelligence on-device; and a voice — macOS `say`, or
+`ELEVENLABS_API_KEY` / `GEMINI_API_KEY`, or a local oMLX server.
+
+Music and title art fill themselves in from whatever you have, ending at free Creative-Commons
+stock, so a bare install still produces a complete cut. Pin any slot with `--narrator <provider>`,
+`--music <provider>` or `--image <provider>` — a pin is exact: the named provider is used or the
+slot degrades with a note, never a silent swap.
+
+Run `dailies session end --help` for every flag and every provider's environment variables, or see
+[Voices, music and title art](https://github.com/quadule/dailies#voices-music-and-title-art) in the
+main README.
+
 ## Commands
 
 | Command | What it does |
@@ -84,11 +116,16 @@ across steps within a session.
 | `dailies install` | Install the embedded runtime (Chromium + Playwright + QuickJS) into `~/.dailies`. |
 | `dailies session start` | Start a capture-enabled session; prints its id. Toggle capture with `--no-trace` / `--no-video` / `--no-har` / `--no-console`; `--headless` for unattended runs. |
 | `dailies run [FILE]` | Run a script (a file, or stdin if omitted) as one step. Requires `--session <id>`; label it with `--step <name>`; bound it with `--timeout <seconds>`. |
-| `dailies session end <id>` | Stop recording, collect artifacts, render `report.html` + `results.json`. `--stop-daemon` shuts the daemon down afterward if nothing else needs it. |
+| `dailies session end <id>` | Stop recording, collect artifacts, render `report.html` + `results.json`. Declare the outcome with `--pass` / `--fail [reason]` (otherwise it's the per-step tally); add evidence with `--attach <file>` and numbers with `--metric name=value` (both repeatable); `--video <page>` picks which recording to finish when the run drove several pages, `--open` opens the report, `--stop-daemon` shuts the daemon down afterward if nothing else needs it. Cut a film with `--cinematic` / `--song` / `--prompt <text>`, pinning slots with `--narrator` / `--music` / `--image <provider>`. |
 | `dailies session abort <id>` | Best-effort teardown of a session — salvage a wedged run from whatever artifacts survived. |
 | `dailies session list` | List recorded sessions (table; `--json` for machine output). |
+| `dailies session url <id>` | Print the session's current page URL — read-only, records nothing. Use it between steps to check where you actually landed. |
+| `dailies session takeover <id>` | Hand the live headed browser to a human and capture their actions as a step: `--step <name>` labels it, `--stop` records it, `--cancel` discards it. |
 | `dailies status [--session <id>]` | Daemon status, or one session's status. |
-| `dailies exec <file>` | Run a script once, unrecorded and outside any session — the quick one-off. Options: `--browser`, `--connect`, `--headless`, `--inject-script`, `--timeout`. |
+| `dailies exec <file>` | Run a script once, unrecorded and outside any session — the quick one-off. Options: `--browser`, `--connect`, `--headless`, `--ignore-https-errors`, `--inject-script`, `--timeout`. |
+| `dailies ci decide` | Decide whether a PR is worth demoing, as one line of JSON — for the nightly demo workflow. Reads the PR body, changed files and comments from files. |
+| `dailies ci metrics` | Render a PR comment's metric lines, each with its delta against the last demo (`--current` / `--previous` / `--prefix`). |
+| `dailies ci previous-metrics` | Read the previous demo's metrics back out of the PR comments, for `ci metrics --previous`. |
 | `dailies stop` | Stop the background daemon and every browser/session it's running (alias: `dailies daemon stop`). |
 
 Global flags: `--json` (machine-readable output on stdout), `-v` / `--verbose` (more logging on

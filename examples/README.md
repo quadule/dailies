@@ -1,8 +1,8 @@
 # Demo scripts (dev only)
 
-Sample browser-automation scripts used to **seed the session viewer** and as **end-to-end smoke
-tests**. They are **not** shipped to end users (not in any package's `files`) — they live here for
-development.
+Sample browser-automation scripts used to **seed a session with real artifacts** and as
+**end-to-end smoke tests**. They are **not** shipped to end users (not in any package's `files`) —
+they live here for development.
 
 Each script uses the sandbox API (`browser.getPage`, `page.goto`, `page.evaluate`, `page.locator`,
 `saveScreenshot(buffer, name)`, `console.log`). They navigate live sites, so selectors drift — treat
@@ -15,7 +15,7 @@ dailies install                        # once: downloads Chromium
 dailies exec examples/hacker-news/demo.js
 ```
 
-## Record a session you can open in the viewer
+## Record a session and open its report
 
 ```bash
 id=$(dailies session start --name "Hacker News demo")

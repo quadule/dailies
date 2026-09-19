@@ -4,8 +4,7 @@
 # Bumps every workspace package.json (+ the Claude plugin manifests) in lockstep
 # via scripts/sync-version.mjs, refreshes the lockfile, validates the build and
 # the npm packaging (dry-run), then creates the release commit and the vX.Y.Z
-# tag — and STOPS. Pushing the tag is deliberately left to you, because that push
-# is what triggers .github/workflows/release.yml and publishes to npm:
+# tag — and STOPS.
 #
 #   make release                  # interactive: pick patch / minor / major
 #   make release BUMP=minor        # non-interactive bump
@@ -15,6 +14,17 @@
 #   YES=1         skip the final confirmation prompt
 #   NO_VERIFY=1   skip the local build + publish dry-run (faster, less safe)
 #   ALLOW_DIRTY=1 escape hatch — proceed on a dirty tree (discouraged)
+#
+# Nothing here reaches npm, and neither does the push: the push only records the
+# release in git, and .github/workflows/release.yml is workflow_dispatch-only.
+# Publishing is three deliberate steps you run yourself afterwards, which this
+# script prints when it is done:
+#
+#   git push origin <branch> --follow-tags
+#   gh workflow run release.yml --ref v<NEW> -f version=<NEW>   # stages on npm
+#   npm stage approve <stage-id>                                # 2FA, makes it public
+#
+# See RELEASING.md.
 set -euo pipefail
 
 # --- presentation -----------------------------------------------------------
@@ -128,7 +138,7 @@ if [ -z "$NO_VERIFY" ]; then
 fi
 printf '  4. commit  "chore(release): %s"\n' "$TAG"
 printf '  5. tag     %s (annotated)\n' "$TAG"
-printf '  %s→ then YOU run: git push origin %s --follow-tags%s\n\n' "$DIM" "$BRANCH" "$RST"
+printf '  %s→ then YOU push, dispatch release.yml on %s, and approve the stage%s\n\n' "$DIM" "$TAG" "$RST"
 
 if [ -z "$YES" ]; then
   [ "$(ask "Proceed? [y/N] ")" = "y" ] || die "Aborted — no changes made."
@@ -157,19 +167,15 @@ info "Tagging ${TAG}…"
 git tag -a "$TAG" -m "$TAG"
 ok "Release ${BOLD}${TAG}${RST}${GRN} committed and tagged.${RST}"
 
-# --- npm token preflight (the usual gotcha) ---------------------------------
-if command -v gh >/dev/null 2>&1; then
-  if gh secret list 2>/dev/null | grep -q '^NPM_TOKEN'; then
-    ok "Repo secret NPM_TOKEN is set — the Release workflow can publish."
-  else
-    warn "Repo secret NPM_TOKEN is NOT set. The Release workflow will build but"
-    warn "  fail at the publish step (401). Run 'gh secret set NPM_TOKEN' before pushing."
-  fi
-else
-  warn "gh CLI not found — can't verify the NPM_TOKEN repo secret. Ensure it exists."
-fi
-
-# --- hand off the push ------------------------------------------------------
-printf '\n%sNext — this is the publish trigger, so it is yours to run:%s\n' "$BOLD" "$RST"
-printf '  %sgit push origin %s --follow-tags%s\n\n' "$GRN" "$BRANCH" "$RST"
+# --- hand off the publish ---------------------------------------------------
+# Three steps, none of them automatic: the push only records the release in git,
+# the workflow STAGES the tarball (its trusted publisher allows `npm stage
+# publish` only), and a human with 2FA is what makes it installable. There is no
+# NPM_TOKEN to check for — publishing authenticates with OIDC. See RELEASING.md.
+printf '\n%sNext — publishing is yours, in three deliberate steps:%s\n' "$BOLD" "$RST"
+printf '  %s1.%s git push origin %s --follow-tags\n' "$GRN" "$RST" "$BRANCH"
+printf '  %s2.%s gh workflow run release.yml --ref %s -f version=%s   %s(stages it on npm)%s\n' \
+  "$GRN" "$RST" "$TAG" "$NEW" "$DIM" "$RST"
+printf '  %s3.%s npm stage approve <stage-id>   %s(2FA — this is what makes it public)%s\n\n' \
+  "$GRN" "$RST" "$DIM" "$RST"
 printf '%sTo undo before pushing:%s git tag -d %s && git reset --hard HEAD~1\n' "$DIM" "$RST" "$TAG"

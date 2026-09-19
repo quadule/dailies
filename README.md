@@ -79,13 +79,20 @@ to watch, the evidence behind it, and the exact Playwright script that produced 
 ```bash
 npm i -g dailies-cli                     # puts `dailies` on your PATH
 dailies install                          # one-time: Chromium + the runtime into ~/.dailies (~150 MB)
+brew install ffmpeg                      # or: apt install ffmpeg — see below
 ```
 
-…or run the guided setup, which offers to install all of the above for you:
+…or `npx dailies-cli init`, which installs the runtime and prints the plugin-install commands for
+your agent.
 
-```bash
-npx dailies-cli init                     # guided setup
-```
+**ffmpeg.** Recording and the report need none. A **full** ffmpeg build is what trims dead air out
+of the video and what `--cinematic` needs for the title card and burned-in captions. Playwright
+ships a minimal one, but Dailies deliberately does not fall back to it (it can't do any of that):
+without a full ffmpeg the video is left uncondensed and `--cinematic` is skipped, each with a
+warning saying so. Point `$DAILIES_FFMPEG` at a specific binary if you keep more than one.
+
+**On Linux**, Chromium also needs system libraries that aren't in the `dailies install` download. If
+the browser fails to launch, install them once with `sudo npx playwright install-deps chromium`.
 
 Record a session and open the report:
 
@@ -187,15 +194,25 @@ is the one built to be handed around; the session **directory** is not.
 
 | Artifact | Safe to share | What's in it |
 | --- | --- | --- |
-| `report.html` | **Yes** — this is the shareable one | Steps, screenshots, video, script, console. No request headers. |
-| `results.json` | Yes | Step outcomes, timings, artifact paths. |
-| `network.har` | **Scrubbed, but check** | Full traffic. `Cookie` / `set-cookie` / `Authorization` **values are replaced at `session end`** (names kept). Response **bodies are not** — a login response can still hold a token. |
+| `report.html` | **Yes** — this is the shareable one | Steps, screenshots, video, each step's script verbatim, console. No request headers. |
+| `results.json` | Yes | Step outcomes, timings, artifact paths, and each step's script verbatim. |
+| `network.har` | **Scrubbed, but check** | Full traffic. `Cookie` / `set-cookie` / `Authorization` **values are replaced at `session end`** (names kept), and so are request-**body** fields whose *name* looks like a credential (`password`, `secret`, `token`, `api_key`, …). Response **bodies are not scrubbed at all** — a login response can still hold a token. |
 | `trace.zip` | **No** | The same traffic as the HAR, unscrubbed. |
 | `profile/` | **No** | A real Chrome profile — an actual cookie database and `Login Data`. |
 
-`--no-scrub-har` keeps the real header values, for when you need to replay the HAR against the same
-live session. Nothing is scrubbed retroactively, so sessions recorded before this landed still have
-their credentials in `network.har`.
+One thing the "yes" rows don't protect you from: **step scripts are stored verbatim** in both
+`results.json` and `report.html` — including the Playwright code captured from a `session
+takeover`. In that captured code, and in the trace's own fill/type entries, a value typed into a
+field whose locator *names* a credential (a password box, an `api_key` input) is replaced with
+`[redacted]`; a step script you wrote yourself is stored exactly as written. A token filled into
+a field called something ordinary, or sitting in a URL or a comment in the step, travels in plain
+text. So read credentials from a file or the environment in whatever drives
+Dailies and pass the value in, rather than inlining one in a step you intend to share.
+
+The HAR's scrubbing matches by field **name**, so a credential travelling under an unusual name
+survives it. `--no-scrub-har` keeps the real header values, for when you need to replay the HAR
+against the same live session. Nothing is scrubbed retroactively, so sessions recorded before this
+landed still have their credentials in `network.har`.
 
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/fdb5efbc-a92d-4eb6-b64c-0f7efb8977a7" />
 
@@ -288,6 +305,29 @@ deterministic glob match instead, or `"always"` to demo every change; under `"ag
 Leave `demo.prompt` **unset** unless you specifically want one house style: unset means every
 nightly cut draws its own random theme, which is the point of a demo nobody chose to sit down and
 watch.
+
+When the app to drive only exists once the PR is deployed — a review app with a per-PR URL — there
+is nothing useful to put in `url`. `demo.targetComment` reads the URL out of the deploy bot's own
+comment instead: `marker` identifies that comment (ideally the bot's HTML marker) and `pattern` is
+the regex matching the URL inside it. The most recent matching comment wins; `marker` is optional,
+and only `https://` URLs are accepted.
+
+```json
+{
+  "demo": {
+    "targetComment": {
+      "marker": "review-app-deploy::pr-commenter",
+      "pattern": "https://[a-z0-9-]+\\.review\\.example\\.com"
+    }
+  }
+}
+```
+
+> A comment is written by a person, not by the repo. On a **public** repo anyone who can comment can
+> forge that marker and aim the run at a URL of their choosing. Before enabling `targetComment`
+> there, narrow the comments the workflow collects to the deploy bot — in the discover step of
+> `dailies-demo.yml`, replace `jq '[.comments[].body]'` with
+> `jq '[.comments[] | select(.author.login == "my-deploy-bot") | .body]'`.
 
 > This file becomes agent instructions, so it's only as trustworthy as the repo it came from. Don't
 > point Dailies at a project config from a repo you don't control; the demo workflow deliberately
@@ -542,8 +582,11 @@ npm i -g dailies-cli@latest                     # update dailies
 dailies install                                 # refresh the runtime (Chromium + Playwright)
 ```
 
-`dailies install` is safe to re-run — it pulls the browser/runtime versions the new CLI pins. Running
-via npx instead of a global install? `npx dailies-cli@latest …` always fetches the newest release.
+`dailies install` is safe to re-run — it pulls the browser/runtime versions the new CLI pins, and
+it retires a daemon that is still serving the **old** build, as long as that daemon is idle. If a
+session or browser is still open it says so and leaves it alone; run `dailies stop` once those
+have ended, or the upgrade will look like one that didn't take. Running via npx instead of a
+global install? `npx dailies-cli@latest …` always fetches the newest release.
 
 **Agent integrations** update through each agent's own mechanism:
 
@@ -610,7 +653,7 @@ Run `make` with no args to see all targets.
 - **Conventional Commits** enforced via `commitlint` + a husky `commit-msg` hook.
 - **Linting & formatting** via [Ultracite](https://docs.ultracite.ai/) (Biome) — `pnpm lint` checks, `pnpm format` autofixes; pre-commit runs `lint-staged` → `ultracite fix` on staged files.
 - **Logging** via `dailies-logger` (pino, structured). Set `DAILIES_LOG_LEVEL` (trace|debug|info|warn|error|silent); the CLI also accepts `--verbose`/`-v`.
-- **Node 20+** and **pnpm 9.15.0** (see `.nvmrc` and `packageManager`).
+- **Node 20.11+** and **pnpm 9.15.0** (see `engines`, `.nvmrc` and `packageManager`). CI runs on Node 22.
 - **Turbo** orchestrates builds (`turbo run build`, `dev`, `test`, `compile`); lint/format run via Ultracite at the root.
 
 </details>

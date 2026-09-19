@@ -23,13 +23,14 @@
     "directory": "apps/dailies"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.11"
   },
   "bin": {
     "dailies": "dist/cli.js"
   },
   "files": [
-    "dist/"
+    "dist/cli.js",
+    "dist/cli.js.map"
   ],
   "publishConfig": {
     "access": "public"

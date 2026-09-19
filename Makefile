@@ -2,8 +2,8 @@
 #
 # Thin, self-documenting wrapper over pnpm + turbo. Run `make` (or `make help`)
 # for the menu. Workspace-scoped targets go through `turbo --filter` so the
-# topological build graph (^build) is respected — e.g. building/testing the
-# browser first builds the daemon it embeds.
+# topological build graph (^build) is respected — e.g. building/testing the CLI
+# first builds the daemon it embeds.
 
 .DEFAULT_GOAL := help
 
@@ -20,12 +20,12 @@ DAEMON  := dailies-daemon
 CLI     := dailies-cli
 
 .PHONY: help install hooks outdated clean reset \
-        dev dev-browser dev-daemon dev-ui dev-cli \
-        build build-browser build-daemon build-ui build-cli \
+        dev dev-daemon dev-cli \
+        build build-daemon build-cli \
         typecheck lint format doctor docs docs-check \
-        test test-browser test-daemon test-ui test-cli \
-        watch-browser watch-daemon watch-ui watch-cli \
-        check ci ui release \
+        test test-daemon test-cli \
+        watch-daemon watch-cli \
+        check ci release \
         install-local link unlink plugin-dev plugin-update
 
 ##@ General
@@ -72,9 +72,6 @@ build: ## Build all workspaces in topological order
 build-daemon: ## Build the daemon bundle + sandbox client
 	$(TURBO) run build --filter=$(DAEMON)
 
-build-ui: ## Build the session viewer (astro build, self-contained node standalone)
-	$(TURBO) run build --filter=$(UI)
-
 build-cli: ## Build the dailies session orchestrator
 	$(TURBO) run build --filter=$(CLI)
 
@@ -115,9 +112,6 @@ test-cli: ## Test the dailies session orchestrator
 watch-daemon: ## Watch-test the daemon
 	pnpm --filter $(DAEMON) test:watch
 
-watch-ui: ## Watch-test the session viewer
-	pnpm --filter $(UI) test:watch
-
 watch-cli: ## Watch-test the dailies session orchestrator
 	pnpm --filter $(CLI) test:watch
 
@@ -129,11 +123,6 @@ check: ## What CI runs: ultracite check + turbo compile + test
 ci: ## Full CI gate from clean: frozen install + check
 	pnpm install --frozen-lockfile
 	pnpm check
-
-##@ Run
-
-ui: build-ui ## Build and serve the local session viewer
-	pnpm --filter $(UI) start
 
 ##@ Local install (run THIS checkout everywhere)
 
@@ -162,6 +151,8 @@ plugin-update: ## Re-copy this checkout's skills into the installed Claude Code 
 
 ##@ Release
 
-release: ## Cut a release: bump + commit + tag, then YOU `git push --follow-tags`
+# Cutting stops at the tag. Publishing is separate and manual: push, dispatch
+# release.yml on the tag, then `npm stage approve` — the script prints all three.
+release: ## Cut a release: bump + commit + tag (publishing stays manual — see RELEASING.md)
 	@BUMP="$(BUMP)" VERSION="$(VERSION)" YES="$(YES)" NO_VERIFY="$(NO_VERIFY)" \
 		ALLOW_DIRTY="$(ALLOW_DIRTY)" bash scripts/release.sh

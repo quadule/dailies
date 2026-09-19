@@ -12,13 +12,11 @@
 
   What changed for you:
 
-  - The CLIs are `dailies`, `dailies-browser` and `dailies-viewer`.
-  - Packages publish unscoped: `dailies-cli`, `dailies-browser`, `dailies-ui`, `create-dailies`
-    (the `@usecanary` scope is gone).
+  - The CLI is `dailies`, published as the single npm package `dailies-cli` (the `@usecanary`
+    scope is gone).
   - Skills, subagents and slash commands are `dailies-*` and `/dailies:*`.
   - Environment variables are `DAILIES_*`.
-  - State lives in `~/.dailies`, and the viewer's per-root organization sidecar is
-    `.dailies-ui.json`.
+  - State lives in `~/.dailies`.
 
   This is a **breaking rename with no compatibility path**: old package names, binaries, env vars
   and paths are simply gone. To carry an existing install over, move the sessions across rather
@@ -28,7 +26,6 @@
 
   ```bash
   mkdir -p ~/.dailies/sessions && mv ~/.canary/sessions/* ~/.dailies/sessions/
-  mv ~/.canary/browsers/* ~/.dailies/browsers/ 2>/dev/null || true
   rm -rf ~/.canary   # the daemon runtime is rebuilt by `dailies install`
   ```
 
@@ -51,7 +48,6 @@
   singer) that isn't set up skips the pass with the reason; pinned music or title art falls back
   with a note. Common spellings ("Lyria", "ACE-Step", "archive.org", "off") are accepted, and the
   skills tell an agent to pass a user's named provider through rather than pick one for them.
-
 - **`session end --attach <file>` and `--metric name=value`.** Attach copies any external file into
   the session's `attachments/`, which surfaces in `results.json` and the report next to the trace
   and video — a coverage report, a Lighthouse score, an accessibility audit. It copies *before* the
@@ -156,6 +152,34 @@
 
 ### Changed
 
+- **Silent stretches fast-forward.** Footage nobody narrates — a run of consecutive un-narrated
+  steps, typically signing in — plays as a fast-forward toward a four-second target instead of in
+  real time, so a sign-in that took 17 of a film's 51 seconds no longer plays out in silence. Every
+  action stays on camera; nothing is cut. Narration itself is never sped up and song mode is
+  untouched. `$DAILIES_SILENT_FOOTAGE_SEC` sets the target; `0` restores real-time playback.
+- **Narration and lyrics aim at the feature under test.** A run of setup/auth steps collapses into
+  one section before the lines are written, so signing in costs at most one line, and both prompts
+  open with what is being tested. Steering is limited to what the lines are *about* — the random
+  theme draw is untouched. A `$DAILIES_SONG_FILE` sidecar generated before this has one line too
+  many and should be regenerated.
+- **Hosted narration reads at voiceover pace.** Gemini TTS has no rate control and read at a
+  talking-head pace, so the prompt asks for a brisk delivery and the rendered audio is sped up
+  1.2× with pitch preserved (ffmpeg `atempo`). `$DAILIES_TTS_TEMPO` overrides it; `1` disables.
+- **The cursor, typing and caret read as a person.** After a click the cursor drifts from where the
+  click actually landed instead of snapping to the field's corner, glide targets get bounded
+  jitter, typing cadence is planned to a 4.5 s budget (193 characters in 7.9 s, still one key at a
+  time), and the text caret is painted transparent in the recording — its 1 Hz blink defeated the
+  dead-air trimming. `--no-cursor` disables all of it.
+- **Condensing cuts on changed pixels, not the frame-mean freeze.** The virtual cursor is 0.06% of
+  the frame, far under `freezedetect`'s noise floor, so a glide read as a freeze and the pass had
+  to keep a 1.5 s lead-out around every cut. Counting changed pixels sees the cursor; on a real
+  51 s session the trim went from removing 1.3 s to cutting the film to 28 s with every motion
+  frame intact.
+- **Burned captions anchor to the top of their band** and use the frame's real width (58
+  characters at 1440 px, up from 48), so one-line and two-line cues start at the same height.
+- **`dailies install` on Linux** prints the one-line hint about Chromium's system libraries
+  (`sudo npx playwright install-deps chromium`) instead of declaring success and failing at the
+  first launch.
 - Agent guidance (skills, subagents, and the scripting reference) now mandates the human helpers
   for recorded clicks and text entry; directs clicking labels for checkboxes/radios (the real
   input is often hidden behind a custom control); checking for overlays/modals before interacting;
@@ -181,3 +205,55 @@
 - Viewer: a `--dir` (or `CANARY_UI_ROOT`) pointed at a single session directory now roots at its
   parent sessions folder instead of selecting an empty source — so opening a specific session from
   the review flow shows the sessions list rather than nothing.
+- **The credits name who wrote the words.** They always said "Narration — Claude (Anthropic)",
+  even for a cut written by an OpenAI-compatible model or Apple Intelligence. The end credits now
+  name the text provider that produced the narration or lyrics (and a pinned song's sidecar keeps
+  it); the `claude` CLI's label is unchanged.
+- **A pinned media provider that is configured but unusable** — an ElevenLabs key the API
+  rejected, an ACE-Step URL nobody answers, an oMLX server with no TTS model — fails with that
+  reason instead of "set ELEVENLABS_API_KEY" when the variable is already set.
+- **The score swell landed 2.5 s late.** The music tracks were timed against the title-prefixed
+  video and then shifted by the title offset a second time; the credits swell now starts on the
+  credits' first frame. In song mode the instrumental intro no longer replays the first step's
+  footage before the step itself. When a hosted narrator fails mid-run the note names the provider
+  and its error instead of claiming macOS `say` took over, and the "no vocal timing" note names the
+  real remedies (a transcriber on PATH, or `$DAILIES_TRANSCRIBE_URL`) rather than a variable that
+  forces the wrong backend.
+- **A daemon left over from the previous install is retired.** `dailies install` now stops the
+  running daemon when it is idle, so an upgrade takes effect on the next command instead of the
+  old build serving until the machine restarts; a daemon with an open session is left alone and
+  says so. A daemon that dies on startup now shows the tail of its stderr
+  (`~/.dailies/daemon.stderr.log`) and where to look next, runs on the same Node binary as the
+  CLI rather than whatever `node` is on PATH, and a `session end` can no longer hang forever on a
+  wedged browser close. The step barrier settles the page the step drove rather than the newest
+  tab, caption writes are serialized so back-to-back `showCaption` calls can't corrupt
+  `captions.json`, a `stop` during an in-flight `session end` joins it instead of finalizing the
+  session twice, the IPC frame cap is per message rather than per connection, `--connect`
+  auto-discovery finds Chrome under `$XDG_CONFIG_HOME`, snap and Flatpak on Linux, and
+  `~/.dailies` and the daemon socket are created owner-only.
+- **CLI corrections.** A bare `dailies exec --connect` now auto-discovers the running Chrome (it
+  used to send commander's `true` and be rejected). `dailies status` no longer starts a daemon as a
+  side effect of asking whether one is running, and honors `--json` (`{"running":false}`, or
+  `{"running":true,…}` with the summary). `dailies exec --json` emits strict JSON like `run`. A
+  re-run of `session end --json` reports the metrics on the record, not only the ones passed that
+  time. A malformed `.dailies/config.json` (local or served) is reported by `session start` and in
+  the demo decision instead of being silently replaced by defaults. An unknown flag after a global
+  one (`dailies --json session end … --bogus`) names the right command's flags. Missing ffmpeg and a
+  session recorded without video now say so on stderr instead of silently skipping condensing or
+  the cinematic pass — and Playwright's bundled ffmpeg is no longer tried as a fallback, since it
+  can't do anything the pipeline needs.
+- **Credentials in artifacts.** `session abort` scrubs `network.har` like `session end` does;
+  request bodies are scrubbed by credential-looking field name (form fields and JSON keys — a
+  login POST no longer carries the password); the Playwright code a `session takeover` captures
+  and the trace's fill/type entries have values on credential-named fields replaced with
+  `[redacted]`. The oMLX key read from the local app's config is never sent to a remote
+  `$DAILIES_OMLX_URL`, and Wikimedia/archive.org requests carry a real user agent naming this
+  repository.
+- **Release tooling.** `scripts/release.sh` matches trusted publishing (no `NPM_TOKEN`, publish is
+  a manual dispatch on the tag, which `release.yml` now verifies); the CLI build cleans `dist/`
+  and the tarball lists only `cli.js` and its map, so a stale bundle can't ship; the demo
+  workflow's discover job can actually make the model decision (it installs Claude Code and gets
+  the key) and the demo job no longer assumes a pnpm workspace; the Node floor is `20.11` and the
+  daemon build no longer uses a newer-Node-only API. Dead Makefile viewer targets, stale turbo
+  outputs and gitignore lines, the Codex manifest's non-existent "review" skill, and the npm
+  package README (which never mentioned the film) are fixed.

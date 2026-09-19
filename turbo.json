@@ -3,14 +3,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": [
-        "dist/**",
-        "assets/viewer-bundle.js",
-        "assets/viewer-bundle.css",
-        "assets/recorder-adapter.bundle.js",
-        "src/assets/embedded.generated.ts",
-        ".astro/**"
-      ]
+      "outputs": ["dist/**", "src/assets/embedded.generated.ts"]
     },
     "dev": {
       "cache": false,

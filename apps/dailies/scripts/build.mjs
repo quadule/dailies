@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmod, copyFile, mkdir, readFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 // Build entry: bundles src/cli.ts into dist/cli.js with esbuild.
@@ -9,6 +9,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
 const dist = resolve(root, "dist");
 
+// Wipe dist first. esbuild overwrites only what it emits, so an output it
+// STOPPED producing lingers forever: a renamed dist/cli.cjs survived that way
+// and kept shipping in the tarball long after nothing referenced it. The
+// narrowed `files` in package.json is the second half of that fix.
+await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 
 // Inject the package version so `dailies --version` reports it without reading

@@ -31,7 +31,10 @@
 # kind of logic rots when it lives in bash inside YAML.
 #
 # REQUIRED REPO SECRETS:
-#   ANTHROPIC_API_KEY  — the Claude Code agent + `claude -p` narration
+#   ANTHROPIC_API_KEY  — the Claude Code agent + `claude -p` narration, and the
+#                        `dailies ci decide` step below, which asks a model
+#                        whether the change is worth filming at all. Without it
+#                        that decision silently degrades to `demo.paths`.
 #   plus ONE voice key. CI is Linux, so there is no macOS `say`: without one a
 #   cinematic run has no voice-over.
 #   ELEVENLABS_API_KEY — narration (ElevenLabs TTS) + music (Eleven Music)
@@ -121,9 +124,18 @@ jobs:
       - name: Install the dailies CLI
         run: npm install -g dailies-cli
 
+      # `dailies ci decide` asks a model whether the change is worth filming,
+      # and its default text provider is the `claude` CLI. Without Claude Code
+      # on PATH (and a key in the step below) every decision falls through to
+      # `demo.paths` — which is a legitimate fallback, but not the one this
+      # workflow advertises.
+      - name: Install Claude Code (the decide step's text provider)
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Pick the PRs worth demoing
         id: pick
         env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           COMMENT_PR: ${{ github.event.issue.number }}
@@ -203,7 +215,15 @@ jobs:
               --comments-file "$COMMENTS" "${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"}")
             # decidedBy names the provider/model that judged — the first thing
             # you want when a verdict looks wrong.
-            echo "PR #$N: [$(echo "$DECISION" | jq -r '.decidedBy')] $(echo "$DECISION" | jq -r '.reason')"
+            DECIDED_BY=$(echo "$DECISION" | jq -r '.decidedBy')
+            echo "PR #$N: [$DECIDED_BY] $(echo "$DECISION" | jq -r '.reason')"
+            # That exact string is decideDemoWithAgent's fallback for "no text
+            # provider answered": the model gate quietly became a glob match.
+            # Worth a warning annotation — a missing ANTHROPIC_API_KEY or a
+            # broken Claude Code install otherwise reads as a normal night.
+            if [ "$DECIDED_BY" = "paths (agent unavailable)" ]; then
+              echo "::warning::PR #$N: no text provider answered, so the demo decision fell back to demo.paths. Check the ANTHROPIC_API_KEY secret and the Claude Code install."
+            fi
 
             if [ "$(echo "$DECISION" | jq -r '.run')" = "true" ]; then
               # `prevMetrics` is the previous demo comment's marker payload —
@@ -256,38 +276,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh pr checkout ${{ matrix.pr }}
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.0
+      # Node only — no pnpm, no workspace install. Everything this job runs comes
+      # from npm (the dailies CLI and Claude Code), which is what makes the file
+      # copyable into an app repo that has no pnpm lockfile at all.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
       - name: Install ffmpeg and a font (title card / credits need drawtext + a font)
         run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
 
-      # The browser comes from `dailies install` below, which pins Chromium to the
-      # embedded daemon's runtime Playwright version (dailies-protocol's
-      # DAEMON_RUNTIME_DEPENDENCIES). We deliberately do NOT download it via the
-      # daemon package here — that would tie the CI browser to the package's
-      # dev-dep rather than the runtime pin. So this step installs only the apt
-      # system libs Chromium links against; `dailies install` is the single
-      # source of the browser, and the ms-playwright cache holds the binary.
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      # Cache only the daemon's npm deps (~/.dailies/node_modules) — NOT
-      # ~/.dailies/sessions, which a stale restore could feed to Finalize's
-      # `session list | .[0]` fallback. `dailies install` still runs and
-      # reconciles, so a partial/stale cache is safe; this just skips the
-      # npm install on a hit.
-      - uses: actions/cache@v4
-        with:
-          path: ~/.dailies/node_modules
-          key: dailies-runtime-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Install Chromium system dependencies
+        # Only the apt libraries: the browser itself comes from `dailies install`
+        # below, after the cache is restored, so don't let playwright's
+        # postinstall download it here.
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: npx --yes playwright install-deps chromium
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
@@ -298,24 +301,53 @@ jobs:
         # purpose here; see the note in the discover job. A copy of this file in
         # an app repo must pin.
         run: npm install -g dailies-cli
-      - name: Verify the dailies CLIs are runnable
+      - name: Verify the dailies CLI is runnable
+        id: cli
         # Fail fast and cheaply: if the CLI isn't on PATH the agent would
         # otherwise flail for minutes hitting permission walls (every fallback
         # `ls`/`cat`/`find` is denied by the `Bash(dailies *)` allowlist, and in
         # headless `-p` mode a denial is returned to the model as a retryable
         # error). This step turns that whole failure class into a ~2s job failure
         # before the agent — and any API spend — starts.
+        #
+        # The version doubles as the cache key below: what a cached ~/.dailies
+        # holds is decided by the CLI (it pins both Chromium and the runtime
+        # deps), so the CLI's own version is the thing those caches vary with.
         run: |
-          dailies --version
+          set -euo pipefail
+          VERSION=$(dailies --version)
+          echo "dailies $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # The browser comes from `dailies install` below, which pins Chromium to the
+      # embedded daemon's runtime Playwright version (dailies-protocol's
+      # DAEMON_RUNTIME_DEPENDENCIES). We deliberately do NOT download it via the
+      # daemon package here — that would tie the CI browser to the package's
+      # dev-dep rather than the runtime pin. So the apt step above installs only
+      # the system libs Chromium links against; `dailies install` is the single
+      # source of the browser, and the ms-playwright cache holds the binary.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-dailies-${{ steps.cli.outputs.version }}
+      # Cache only the daemon's npm deps (~/.dailies/node_modules) — NOT
+      # ~/.dailies/sessions, which a stale restore could feed to Finalize's
+      # `session list | .[0]` fallback. `dailies install` still runs and
+      # reconciles, so a partial/stale cache is safe; this just skips the
+      # npm install on a hit.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.dailies/node_modules
+          key: dailies-runtime-${{ runner.os }}-${{ steps.cli.outputs.version }}
+
       - name: Install the dailies daemon runtime
         # Set up the embedded daemon NOW, in a free CI step — not lazily inside
         # the agent, where a first `dailies session start` would die with
         # "Embedded daemon dependencies are missing" and then run the ~150 MB
         # download mid-turn, burning agent wall-clock and tokens. Idempotent; a
-        # cache hit makes it near-free, and it reconciles a stale cached
-        # node_modules (the ~/.dailies cache key tracks pnpm-lock, which a
-        # protocol-only version bump doesn't change, so `dailies install` is what
-        # actually upgrades it).
+        # cache hit makes it near-free, and it reconciles whatever the cache
+        # restored — so even if the CLI version keying those caches is a blunt
+        # instrument, `dailies install` is what actually decides the contents.
         run: dailies install
 
       - name: Record the demo
@@ -403,6 +435,19 @@ jobs:
             "   end, an abandoned retry — are honest evidence and do NOT make the run a" \
             "   failure. Judge the flow, not the step tally.")
 
+          # Where the dailies skills/subagents come from. In THIS repo the
+          # checkout is the plugin, so use it — that is the dogfooding: a skill
+          # edit is exercised by the next demo run. Anywhere else the checkout is
+          # the app being demoed and has no plugin manifest, so clone the pack.
+          # (A copy of this file in an app repo will always take the clone path;
+          # pin a tag there for the same reason you pin the CLI version.)
+          if [ -f "$GITHUB_WORKSPACE/.claude-plugin/plugin.json" ]; then
+            PLUGIN_DIR="$GITHUB_WORKSPACE"
+          else
+            git clone --depth 1 https://github.com/quadule/dailies /tmp/dailies-plugin
+            PLUGIN_DIR=/tmp/dailies-plugin
+          fi
+
           # The agent records but does NOT end the session — the workflow
           # finalizes it so the cinematic/theme decision stays in tested code.
           claude -p "$PROMPT" \
@@ -415,7 +460,7 @@ jobs:
             --output-format stream-json \
             --verbose \
             --exclude-dynamic-system-prompt-sections \
-            --plugin-dir "$GITHUB_WORKSPACE" \
+            --plugin-dir "$PLUGIN_DIR" \
             --append-system-prompt 'CI run: use the `dailies` CLI directly (it is already on PATH) — never `npx dailies-cli` or any other npx form. The skill files mention `npx dailies-cli` because they target end-users; substitute `dailies` for every such reference. This runner has NO display: always pass `--headless` to `dailies session start`, and never attempt `xvfb`/`Xvfb`/`DISPLAY=` — those are unavailable and will be denied. Do not pass `--no-video`; the recorded video is required. Do not edit `.dailies/flows.md` in this run: corrections belong in the PR comment the workflow posts, not in a commit made by CI.' \
             2>&1 | tee agent.log | grep -v '"subtype":"thinking_tokens"'
 

@@ -1,7 +1,7 @@
 {
   "name": "dailies",
   "version": "0.6.0",
-  "description": "Dailies for your coding agent: record a browser flow as a verifiable session (trace, video, HAR, console) and cut it into a narrated demo video. Ships a sandbox scripting reference, verify/automate/session/review skills, subagents, and workflows for Codex.",
+  "description": "Dailies for your coding agent: record a browser flow as a verifiable session (trace, video, HAR, console) and cut it into a narrated demo video. Ships a sandbox scripting reference, verify/automate/session/session-interactive skills, subagents, and workflows for Codex.",
   "author": {
     "name": "quadule",
     "url": "https://github.com/quadule"
@@ -24,7 +24,7 @@
   "interface": {
     "displayName": "Dailies",
     "shortDescription": "Record a browser flow, get a demo video and the evidence.",
-    "longDescription": "Dailies drives a real browser through a flow and hands back something you can watch — a narrated, captioned short of the run — plus the evidence underneath it (Playwright trace, video, network HAR, console, a screenshot of every step) and a replayable Playwright script. It also turns a code change into a prioritized QA plan and reviews recorded runs.",
+    "longDescription": "Dailies drives a real browser through a flow and hands back something you can watch — a narrated, captioned short of the run — plus the evidence underneath it (Playwright trace, video, network HAR, console, a screenshot of every step) and a replayable Playwright script. It also turns a code change into a prioritized QA plan.",
     "developerName": "Dailies",
     "category": "Developer Tools",
     "capabilities": ["Interactive", "Read", "Write"],
@@ -33,7 +33,7 @@
       "Record a demo video of this change.",
       "What should I QA for these changes?",
       "Record a QA session for this flow.",
-      "Review my last dailies session."
+      "Record this flow with me and let me take over for the login."
     ],
     "brandColor": "#111827"
   }

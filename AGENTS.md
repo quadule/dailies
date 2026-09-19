@@ -125,6 +125,9 @@ decision. One contract: return an object matching a JSON schema.
   prose, an OpenAI endpoint returns clean JSON, Apple returns a serialized `GeneratedContent`.
 - Tests inject fake providers via `generateJson`'s `providers` argument — the suite must never make
   a real model call.
+- The cinematic pass checks `resolveProviders` (any usable backend), never the `claude` binary,
+  and the end credits name whichever provider actually wrote the narration or lyrics
+  (`writerCredit`) — don't reintroduce a hardcoded "Claude" there.
 - **Providers are not interchangeable across roles.** Narration has no wrong answer, so the
   on-device Apple provider is a good narrator. The demo decision is a gate, and measured on the
   borderline cases (a copy-only edit, a 2px margin nudge, 5 samples each) it got 5/10 where the
@@ -161,10 +164,17 @@ line in `narrate.ts` (`voiceCredit` / `musicToolName` / `titleArtToolName`), and
 
 A recorded session runs against a logged-in app, so its artifacts are not uniformly shareable:
 
-- `report.html` and `results.json` are the shareable ones — no request headers in them.
-- `network.har` has `Cookie` / `set-cookie` / `Authorization` **values** replaced at `session end`
-  (see `apps/dailies/src/session/scrub-har.ts`; `--no-scrub-har` opts out). Response bodies are
-  **not** scrubbed.
+- `report.html` and `results.json` are the shareable ones — no request headers in them. They DO
+  carry every step's script text verbatim (and a takeover's captured Playwright code), because
+  the replayable script is the point. A `fill`/`type` on a password-looking field is redacted
+  (`apps/dailies/src/session/redact.ts`, applied to takeover captures and to the trace's action
+  params); any other secret typed into a step script is in the report. The skills tell the agent
+  to keep credentials in a file read with `readFile` rather than in the script.
+- `network.har` has `Cookie` / `set-cookie` / `Authorization` **values** replaced when the session
+  is finalized — `session end` (`--no-scrub-har` opts out) and `session abort` alike (see
+  `apps/dailies/src/session/scrub-har.ts`). Request bodies are scrubbed by credential-looking
+  field name (`password`, `token`, …); response bodies are **not** scrubbed, so a login response
+  can still hold a token.
 - `trace.zip` carries the same traffic unscrubbed, and `profile/` is a real Chrome cookie database.
 
 So: attach or link `report.html`, never zip a whole session directory into a PR or a chat. Sessions

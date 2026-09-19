@@ -1,7 +1,7 @@
 {
   "name": "dailies",
   "version": "0.6.0",
-  "description": "Dailies for your coding agent: record a browser flow as a verifiable session (trace, video, HAR, console) and cut it into a narrated demo video. Ships a sandbox scripting reference, verify/automate/session skills, subagents, and slash commands and rules.",
+  "description": "Dailies for your coding agent: record a browser flow as a verifiable session (trace, video, HAR, console) and cut it into a narrated demo video. Ships a sandbox scripting reference, verify/automate/session/session-interactive skills, subagents, and slash commands and rules.",
   "author": {
     "name": "quadule"
   },

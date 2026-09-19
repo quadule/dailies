@@ -60,8 +60,8 @@ make release VERSION=1.4.0      # explicit version
 # env knobs: YES=1 (skip confirm) · NO_VERIFY=1 (skip build+dry-run) · ALLOW_DIRTY=1
 ```
 
-It prints the exact push to run last. Pushing the tag records the release in git; it does **not**
-publish. Publishing is a separate, deliberate step (below).
+It prints the three commands that follow it — push, dispatch, approve. Pushing the tag records the
+release in git; it does **not** publish. Publishing is a separate, deliberate step (below).
 
 The manual equivalent, if you'd rather run the steps yourself:
 
@@ -73,26 +73,37 @@ git tag v0.2.0
 git push origin main --follow-tags
 ```
 
+Before either: retitle `CHANGELOG.md`'s `## Unreleased` section to the version (nothing in the
+release flow does it). A version that was tagged but never published — a demo tag, a release
+that stalled — is still that version, not the next one: move the tag to the final commit
+(`git tag -fa vX.Y.Z`, then `git push --force origin refs/tags/vX.Y.Z` — force-push the tag only,
+never the branch) rather than bumping past it, so npm sees the number the changelog announced.
+
 ## Publishing
 
 Publishing is a **manual workflow run**, never a side effect of pushing a tag — so an accidental
 `git push --tags` can't reach the registry:
 
 ```bash
-gh workflow run release.yml -f version=0.2.0
+gh workflow run release.yml --ref v0.2.0 -f version=0.2.0
 ```
 
-(or run **Release** from the Actions tab and type the version). The workflow refuses to continue
-unless the version you typed matches the workspace version, then runs `pnpm build` (topo-ordered)
-and runs `npm stage publish` from `apps/dailies`. That does **not** make the release public —
-see *Promoting a staged release* below.
+`--ref v0.2.0` is not optional: dispatch it **on the tag**. The workflow refuses to continue unless
+the version you typed matches the workspace version *and* the ref it was dispatched on is
+`refs/tags/v<version>` — otherwise a run started on `main` after later commits landed would stage a
+tarball built from those commits under the tagged version number, and npm never lets that version be
+republished. (From the Actions tab: run **Release**, pick the tag in the ref dropdown, type the
+version.) It then runs `pnpm build` (topo-ordered) and `npm stage publish` from `apps/dailies`. That
+does **not** make the release public — see *Promoting a staged release* below.
 
 Publishing uses **npm**, not `pnpm -r publish`, because OIDC landed natively in pnpm 10 and this
 repo is pinned to pnpm 9.15 (pnpm 10 stopped running dependency build scripts by default, which
-esbuild/sharp/Playwright need). With a single public package that has zero runtime deps and no
-`workspace:*`, pnpm's rewriting has nothing to do, so the two are equivalent here. The workflow
-upgrades npm to the 11.x line first — trusted publishing needs npm >= 11.5.1, staged publishing
-needs >= 11.15.0, and Node 22 ships npm 10.x. Node must be >= 22.14.
+esbuild/sharp/Playwright need). With a single public package that has zero runtime deps — the only
+`workspace:*` specs are devDependencies, which npm leaves as-is and consumers never install —
+pnpm's rewriting has nothing to do, so the two are equivalent here. The workflow upgrades npm to the
+11.x line first: trusted publishing needs npm >= 11.5.1, staged publishing >= 11.15.0, and Node 22
+ships npm 10.x. That npm needs Node >= 22.14, which is a constraint on the **release runner** only
+(it pins `node-version: 22`) — the published CLI's own floor is the `engines` range, Node 20.11.
 
 ## Promoting a staged release
 
@@ -139,5 +150,11 @@ the skills, README, and the CLI's `--help` by `make docs` — edit snippets, res
 ```bash
 pnpm build
 (cd apps/dailies && npm pack)          # -> dailies-cli-<v>.tgz  (NB: `pnpm pack` rejects --filter)
-tar -tzf apps/dailies/dailies-cli-*.tgz # expect dist/, package.json, README.md — no node_modules
+tar -tzf apps/dailies/dailies-cli-*.tgz
 ```
+
+Expect exactly five entries: `dist/cli.js`, `dist/cli.js.map`, `package.json`, `README.md`,
+`LICENSE` — no `node_modules`, and nothing else out of `dist/`. `files` names the two dist files
+rather than `dist/` so an output the build stops emitting can't quietly keep shipping (a renamed
+`dist/cli.cjs` did exactly that); `README.md` and `LICENSE` come from npm's own defaults, which is
+why the LICENSE copy above has to land in the package **directory** and not in `dist/`.
