@@ -4,9 +4,10 @@
 // same contract (write a finished file to `outPath` or throw), wrapped in the
 // caller's try/catch so any failure degrades to the next provider / local `say`.
 //
-// WHY LOCAL: unlike the Gemini path, session-derived narration text never leaves
-// the machine — it's POSTed only to 127.0.0.1. That privacy win is surfaced in
-// the provider notes so the user knows nothing was sent off-box.
+// WHY LOCAL: unlike the Gemini path, session-derived narration text normally
+// never leaves the machine — it's POSTed only to 127.0.0.1. That privacy win is
+// surfaced in the provider notes. $DAILIES_OMLX_URL can point elsewhere, and
+// then the note says so instead of claiming a privacy it no longer has.
 //
 // API: oMLX speaks the OpenAI audio API. `POST /v1/audio/speech` takes
 // { model, input, voice?, response_format } and returns the audio BYTES directly
@@ -14,13 +15,14 @@
 // play aloud. `GET /v1/models` lists what's loaded so we can auto-pick a TTS
 // model. Auth is an OpenAI-style bearer token.
 //
-// PRIVACY: the API key is read from env or the local oMLX config only; it is
-// never logged, echoed (the curl preview uses a $DAILIES_OMLX_API_KEY
-// placeholder), or written to disk.
+// PRIVACY: the API key comes from env, or from the local oMLX config when (and
+// only when) the server is this machine; it is never logged, echoed (the curl
+// preview uses a $DAILIES_OMLX_API_KEY placeholder), or written to disk.
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Logger } from "dailies-logger";
+import { isLocalUrl } from "./acestep.js";
 import type { MediaProviders, TtsProvider } from "./providers.js";
 
 const DEFAULT_URL = "http://127.0.0.1:8000";
@@ -45,12 +47,20 @@ export function omlxBaseUrl(env: NodeJS.ProcessEnv): string {
 // out of the box on a machine running oMLX. Returns undefined when neither is
 // available (oMLX is then treated as not configured and we skip it entirely).
 // The key value is never logged.
+//
+// The config file is consulted ONLY for a local server: that key belongs to the
+// oMLX app on this machine, and a $DAILIES_OMLX_URL pointing at some other host
+// must bring its own $DAILIES_OMLX_API_KEY rather than have us mail the local
+// secret to whoever set the variable.
 export async function readOmlxApiKey(
   env: NodeJS.ProcessEnv
 ): Promise<string | undefined> {
   const fromEnv = env.DAILIES_OMLX_API_KEY?.trim();
   if (fromEnv) {
     return fromEnv;
+  }
+  if (!isLocalUrl(omlxBaseUrl(env))) {
+    return;
   }
   try {
     const raw = await readFile(
@@ -241,6 +251,17 @@ export async function resolveOmlxProviders(opts: {
   const { env, log, echo } = opts;
   const apiKey = await readOmlxApiKey(env);
   if (!apiKey) {
+    const url = env.DAILIES_OMLX_URL?.trim();
+    if (url && !isLocalUrl(url)) {
+      // Configured to reach off-box, but the only key we have belongs to the
+      // local oMLX app and is never sent elsewhere — say so rather than let a
+      // LAN server that worked yesterday vanish without a word.
+      return {
+        notes: [
+          `oMLX skipped — DAILIES_OMLX_URL points off this machine (${url}), so set DAILIES_OMLX_API_KEY explicitly (the local ~/.omlx key is never sent to another host)`,
+        ],
+      };
+    }
     // Not configured — stay silent so non-oMLX machines see no noise.
     return { notes: [] };
   }
@@ -260,10 +281,12 @@ export async function resolveOmlxProviders(opts: {
   }
   const voice = env.DAILIES_OMLX_TTS_VOICE?.trim() || undefined;
   log.debug({ url: config.baseUrl, ttsModel }, "oMLX TTS provider enabled");
+  // Phrased like ACE-Step's note: claim the privacy win only when it is true.
+  const where = isLocalUrl(config.baseUrl)
+    ? "narration is synthesized on this machine and never leaves it"
+    : `narration text is sent to ${config.baseUrl}`;
   return {
     tts: createTtsProvider({ config, model: ttsModel, voice, echo }),
-    notes: [
-      `oMLX local TTS enabled (${ttsModel}) — narration is synthesized on this machine and never leaves it.`,
-    ],
+    notes: [`oMLX TTS enabled (${ttsModel}) — ${where}.`],
   };
 }

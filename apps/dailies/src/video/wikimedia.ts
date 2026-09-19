@@ -8,19 +8,18 @@
 // search returns MIXED licenses — public domain, CC0, CC-BY, CC-BY-SA, and also
 // non-free / fair-use files. We query imageinfo `extmetadata`, filter to a
 // permissive allowlist, and push full attribution (artist, license, source page)
-// into the run `notes` — CC-BY/BY-SA REQUIRE attribution. Opt-in via
-// $DAILIES_WIKIMEDIA_IMAGES=1 (it reaches out to the network and licenses vary),
-// mirroring $DAILIES_ARCHIVE_MUSIC. Only public GET requests are made.
+// into the run `notes` — CC-BY/BY-SA REQUIRE attribution. $DAILIES_WIKIMEDIA_IMAGES=1
+// forces it on and =0 turns it off, but it now also switches on by itself when
+// no image MODEL covers the title-card slot (announced in the notes) — it is the
+// stock fallback, mirroring archive.org for music. Only public GETs are made.
 import { writeFile } from "node:fs/promises";
 import type { Logger } from "dailies-logger";
+import { userAgent } from "./http.js";
 import type { MediaProviders, TitleBackgroundProvider } from "./providers.js";
 
 const API_URL = "https://commons.wikimedia.org/w/api.php";
 const SEARCH_TIMEOUT_MS = 15_000;
 const DOWNLOAD_TIMEOUT_MS = 60_000;
-// A descriptive UA is Wikimedia API etiquette (and avoids throttling).
-const USER_AGENT =
-  "dailies-cli/1.0 (https://github.com/dailies; title-card backgrounds)";
 // How many hits to consider; the first permissive raster wins.
 const SEARCH_LIMIT = 20;
 
@@ -259,7 +258,7 @@ export function creditFor(image: CommonsImage): string {
 
 async function getJson(url: string): Promise<unknown> {
   const res = await fetch(url, {
-    headers: { "user-agent": USER_AGENT },
+    headers: { "user-agent": userAgent() },
     signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
   });
   if (!res.ok) {
@@ -270,7 +269,7 @@ async function getJson(url: string): Promise<unknown> {
 
 async function downloadTo(url: string, outPath: string): Promise<void> {
   const res = await fetch(url, {
-    headers: { "user-agent": USER_AGENT },
+    headers: { "user-agent": userAgent() },
     signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
   });
   if (!res.ok) {

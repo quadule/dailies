@@ -73,6 +73,25 @@ describe("buildSpeechBody", () => {
   });
 });
 
+describe("readOmlxApiKey", () => {
+  it("prefers the explicit env key", async () => {
+    await expect(
+      readOmlxApiKey({
+        DAILIES_OMLX_API_KEY: " k ",
+        DAILIES_OMLX_URL: "http://elsewhere:8000",
+      })
+    ).resolves.toBe("k");
+  });
+
+  it("never hands the local oMLX app's key to a remote server", async () => {
+    // ~/.omlx/settings.json may well exist on this machine; a non-local URL must
+    // still come up empty, so the key can only travel to 127.0.0.1.
+    await expect(
+      readOmlxApiKey({ DAILIES_OMLX_URL: "http://198.51.100.7:8000" })
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe("describeSpeechCurl", () => {
   it("is copy-pasteable and NEVER contains the real key", () => {
     const curl = describeSpeechCurl({
@@ -111,6 +130,37 @@ const ttsModelLoaded =
     })
     .catch(() => false));
 
+const fakeLog = {
+  debug() {
+    // no-op
+  },
+  error() {
+    // no-op
+  },
+  info() {
+    // no-op
+  },
+  warn() {
+    // no-op
+  },
+} as unknown as Parameters<typeof resolveOmlxProviders>[0]["log"];
+
+describe("resolveOmlxProviders notes", () => {
+  it("a remote URL with no explicit key disables oMLX and says why", async () => {
+    // The local ~/.omlx key must never be sent to another host, so without an
+    // explicit $DAILIES_OMLX_API_KEY a remote server is skipped — loudly, since a
+    // LAN oMLX that worked yesterday vanishing without a word is a support call.
+    const { tts, notes } = await resolveOmlxProviders({
+      env: { DAILIES_OMLX_URL: "http://198.51.100.7:8000" },
+      log: fakeLog,
+    });
+    expect(tts).toBeUndefined();
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain("198.51.100.7");
+    expect(notes[0]).toContain("set DAILIES_OMLX_API_KEY");
+  });
+});
+
 describe.skipIf(!ttsModelLoaded)("oMLX live TTS", () => {
   const out = path.join(os.tmpdir(), `dailies-omlx-test-${process.pid}.wav`);
   afterAll(() => rm(out, { force: true }));
@@ -118,10 +168,13 @@ describe.skipIf(!ttsModelLoaded)("oMLX live TTS", () => {
   it("synthesizes a real WAV via the provider", async () => {
     const { tts, notes } = await resolveOmlxProviders({
       env: process.env,
-      log: { debug() {}, info() {}, warn() {}, error() {} } as any,
+      log: fakeLog,
     });
     expect(tts, "a TTS model should be loaded in oMLX").toBeDefined();
-    expect(notes.some((n) => n.includes("never leaves"))).toBe(true);
+    const local = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/i.test(baseUrl);
+    expect(
+      notes.some((n) => n.includes(local ? "never leaves" : "is sent to"))
+    ).toBe(true);
     await tts?.synthesize("Dailies checks the login flow.", out);
     const bytes = await readFile(out);
     expect(bytes.length).toBeGreaterThan(1000);

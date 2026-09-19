@@ -15,6 +15,8 @@ import {
   lyricsPathFor,
   narrationJobs,
   orderGroupLyrics,
+  planLead,
+  planMusicTracks,
   planRetime,
   planSongTiming,
   precinematicVideoPath,
@@ -1454,6 +1456,120 @@ describe("planRetime — onset-anchored (song step-sync)", () => {
   });
 });
 
+describe("planLead", () => {
+  it("cuts the whole lead from source in narration mode", () => {
+    // Narration mode's leadSec IS the first step's source time, so the lead is
+    // real footage and nothing is frozen.
+    expect(planLead({ firstStepSrcSec: 4, leadSec: 4 })).toEqual({
+      footageSec: 4,
+      holdSec: 0,
+    });
+  });
+
+  it("freezes the song intro instead of replaying step 0's footage", () => {
+    // Song mode's leadSec is an OUTPUT time (the instrumental before the first
+    // sung line) while step 0 starts at ~0 in the source — cutting 3s of source
+    // here would play step 0's footage, which step 0 then plays again.
+    expect(planLead({ firstStepSrcSec: 0, leadSec: 3 })).toEqual({
+      footageSec: 0.1,
+      holdSec: 2.9,
+    });
+  });
+
+  it("uses only the footage that genuinely precedes step 0", () => {
+    expect(planLead({ firstStepSrcSec: 1, leadSec: 3 })).toEqual({
+      footageSec: 1,
+      holdSec: 2,
+    });
+  });
+
+  it("never asks for more footage than the lead is long", () => {
+    const lead = planLead({ firstStepSrcSec: 9, leadSec: 2 });
+    expect(lead.footageSec).toBe(2);
+    expect(lead.holdSec).toBe(0);
+  });
+});
+
+describe("planMusicTracks", () => {
+  it("starts the bed after the title card and scores nothing else", () => {
+    expect(
+      planMusicTracks({
+        bedPath: "/tmp/bed.wav",
+        creditsClip: undefined,
+        creditsLen: 0,
+        titleOffsetSec: 2.5,
+        total: 60,
+      })
+    ).toEqual([{ path: "/tmp/bed.wav", delaySec: 2.5, volume: 0.1 }]);
+  });
+
+  it("puts the swell at the credits, measured from the FINAL body", () => {
+    // `total` already includes the title card, so the credits position is
+    // absolute — adding the title offset to it again put the swell 2.5s late.
+    const [bed, swell] = planMusicTracks({
+      bedPath: "/tmp/bed.wav",
+      creditsClip: "/tmp/credits.wav",
+      creditsLen: 8,
+      titleOffsetSec: 2.5,
+      total: 60,
+    });
+    expect(bed).toEqual({
+      path: "/tmp/bed.wav",
+      delaySec: 2.5,
+      volume: 0.1,
+      fadeOutAtSec: 50.5, // 52 (credits start) - 1.5 ramp
+      fadeOutDurSec: 1.5,
+    });
+    expect(swell).toEqual({
+      path: "/tmp/credits.wav",
+      delaySec: 52,
+      volume: 0.6,
+      fadeInAtSec: 52,
+      fadeInDurSec: 1.5,
+    });
+  });
+
+  it("lets the quiet bed carry the credits when the swell is missing", () => {
+    // A failed trim leaves no clip; the bed must then NOT fade out into silence.
+    expect(
+      planMusicTracks({
+        bedPath: "/tmp/bed.wav",
+        creditsClip: undefined,
+        creditsLen: 8,
+        titleOffsetSec: 2.5,
+        total: 60,
+      })
+    ).toEqual([{ path: "/tmp/bed.wav", delaySec: 2.5, volume: 0.1 }]);
+  });
+
+  it("ignores a degenerate credits roll", () => {
+    const tracks = planMusicTracks({
+      bedPath: "/tmp/bed.wav",
+      creditsClip: "/tmp/credits.wav",
+      creditsLen: 0.5,
+      titleOffsetSec: 0,
+      total: 30,
+    });
+    expect(tracks).toEqual([
+      { path: "/tmp/bed.wav", delaySec: 0, volume: 0.1 },
+    ]);
+  });
+
+  it("never schedules anything before the title card", () => {
+    // A credits roll longer than the body would otherwise fade the bed out (and
+    // open the swell) before the picture even starts.
+    const [bed, swell] = planMusicTracks({
+      bedPath: "/tmp/bed.wav",
+      creditsClip: "/tmp/credits.wav",
+      creditsLen: 20,
+      titleOffsetSec: 2.5,
+      total: 10,
+    });
+    expect(bed?.fadeOutAtSec).toBe(2.5);
+    expect(swell?.delaySec).toBe(2.5);
+  });
+});
+
 describe("orderGroupLyrics", () => {
   const groups = [[0, 1], [2], [3, 4, 5]];
 
@@ -1500,6 +1616,7 @@ describe("planSongTiming — no vocal region (untranscribed)", () => {
     const timing = planSongTiming({
       clipCues: [],
       groups,
+      hasTranscript: false,
       lineByGroup,
       lineCount: 2,
       maxCueSec: 8,
@@ -1517,10 +1634,47 @@ describe("planSongTiming — no vocal region (untranscribed)", () => {
     expect(timing.note).toContain("vocal timing not detected");
   });
 
+  it("blames the missing transcriber, not a whisper model", () => {
+    const note = planSongTiming({
+      clipCues: [],
+      groups,
+      hasTranscript: false,
+      lineByGroup,
+      lineCount: 2,
+      maxCueSec: 8,
+      region: null,
+      sourceLabel: "",
+      stepCount: 3,
+    }).note;
+    // The old advice ($DAILIES_WHISPER_MODEL) diagnosed the wrong thing AND
+    // pinned the weakest backend; the note now names the real routes.
+    expect(note).not.toContain("DAILIES_WHISPER_MODEL");
+    expect(note).toContain("no transcriber found");
+    expect(note).toContain("whisperx");
+    expect(note).toContain("$DAILIES_TRANSCRIBE_URL");
+  });
+
+  it("says so differently when a transcript came back but never matched", () => {
+    const note = planSongTiming({
+      clipCues: [],
+      groups,
+      hasTranscript: true,
+      lineByGroup,
+      lineCount: 2,
+      maxCueSec: 8,
+      region: null,
+      sourceLabel: "",
+      stepCount: 3,
+    }).note;
+    expect(note).toContain("never lined up");
+    expect(note).not.toContain("no transcriber found");
+  });
+
   it("leaves a step whose group got no line at the small default", () => {
     const timing = planSongTiming({
       clipCues: [],
       groups: [[0], [1]],
+      hasTranscript: false,
       lineByGroup: new Map([[1, "only the second group sings"]]),
       lineCount: 1,
       maxCueSec: 8,
@@ -1547,6 +1701,7 @@ describe("planSongTiming — vocal region", () => {
         { start: 14, end: 18, text: "second line" },
       ],
       groups,
+      hasTranscript: true,
       lineByGroup,
       lineCount: 2,
       maxCueSec: 8,
@@ -1572,6 +1727,7 @@ describe("planSongTiming — vocal region", () => {
     const timing = planSongTiming({
       clipCues: [{ start: 0, end: 25, text: "first line" }],
       groups: [[0]],
+      hasTranscript: true,
       lineByGroup: new Map([[0, "first line"]]),
       lineCount: 1,
       maxCueSec: 8,
@@ -1591,6 +1747,7 @@ describe("planSongTiming — vocal region", () => {
         { start: 4, end: 9, text: "clamped" },
       ],
       groups: [[0]],
+      hasTranscript: true,
       lineByGroup: new Map([[0, "clamped"]]),
       lineCount: 2,
       maxCueSec: 8,
@@ -1610,6 +1767,7 @@ describe("planSongTiming — vocal region", () => {
     const timing = planSongTiming({
       clipCues: [{ start: 1, end: 2, text: "first line" }],
       groups,
+      hasTranscript: true,
       lineByGroup,
       lineCount: 2,
       maxCueSec: 8,
@@ -1628,6 +1786,7 @@ describe("planSongTiming — vocal region", () => {
     const timing = planSongTiming({
       clipCues: [],
       groups: [[0]],
+      hasTranscript: true,
       lineByGroup,
       lineCount: 1,
       maxCueSec: 8,

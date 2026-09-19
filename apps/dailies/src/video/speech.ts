@@ -256,11 +256,21 @@ export function customSaySynth(command: string, echo?: Echo): SpeechSynth {
 // say path is also taken off-macOS when that's set. Returns the say synth (if
 // usable here), the rate, and a reproducibility voice label — or null when
 // there's NO way to voice it, so cinematic can run anywhere a key/command is set.
+//
+// `label` names whoever is voicing the run (the provider when there is one);
+// `sayLabel` always names the say fallback, empty when there isn't one — the
+// narration pass needs it to say truthfully what picked up a failed provider's
+// lines, which on Linux + a key is nothing at all.
 export async function resolveSpeech(
   providers: MediaProviders,
   notes: string[],
   echo?: Echo
-): Promise<{ say?: SpeechSynth; rate: number; label: string } | null> {
+): Promise<{
+  label: string;
+  rate: number;
+  say?: SpeechSynth;
+  sayLabel: string;
+} | null> {
   const rate = pickRate();
   const command = sayCommand();
   const voiceOverride = process.env.DAILIES_SAY_VOICE?.trim();
@@ -294,7 +304,7 @@ export async function resolveSpeech(
       const fellBackToCompact = !chosen || chosen.quality === "Default";
       if (!(providers.tts || voiceOverride) && fellBackToCompact) {
         notes.push(
-          "no premium/enhanced English voice installed — narration uses the compact (robotic-sounding) voice; download one in System Settings › Accessibility › Spoken Content › System Voice (e.g. Ava, Zoe), or set ELEVENLABS_API_KEY or GEMINI_API_KEY (or GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account) for higher-quality TTS"
+          "no premium/enhanced English voice installed — narration uses the compact (robotic-sounding) voice; download one in System Settings › Accessibility › Spoken Content › System Voice (e.g. Ava, Zoe), or route narration elsewhere: ELEVENLABS_API_KEY, GEMINI_API_KEY (or GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account), $DAILIES_OMLX_URL for a local oMLX server, or $DAILIES_SAY_COMMAND for your own say-compatible binary"
         );
       }
     }
@@ -302,7 +312,7 @@ export async function resolveSpeech(
   if (!(providers.tts || say)) {
     return null;
   }
-  return { say, rate, label: providers.tts?.label ?? sayLabel };
+  return { say, rate, label: providers.tts?.label ?? sayLabel, sayLabel };
 }
 
 // Rewrite narration for the ear before handing it to a TTS engine. macOS `say`

@@ -20,6 +20,7 @@ import { execFile } from "node:child_process";
 import { rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { Logger } from "dailies-logger";
+import { userAgent } from "./http.js";
 import type { MediaProviders, MusicProvider } from "./providers.js";
 
 const execFileAsync = promisify(execFile);
@@ -144,7 +145,10 @@ export function attributionFor(track: ArchiveTrack): string {
 }
 
 async function getJson(url: string, timeoutMs: number): Promise<unknown> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  const res = await fetch(url, {
+    headers: { "user-agent": userAgent() },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
   if (!res.ok) {
     throw new Error(`archive.org GET ${res.status}`);
   }
@@ -157,7 +161,10 @@ async function downloadTo(
   outPath: string,
   timeoutMs: number
 ): Promise<void> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  const res = await fetch(url, {
+    headers: { "user-agent": userAgent() },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
   if (!res.ok) {
     throw new Error(`archive.org download ${res.status}`);
   }

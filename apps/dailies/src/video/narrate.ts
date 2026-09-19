@@ -827,21 +827,54 @@ async function renderTitleBackground(args: {
   }
 }
 
-// Push music tracks past the opening title card: the score is timed against the
-// body, but it's mixed onto the title-prefixed final video, so add the title
-// offset to each track's delay and its fade envelope. Pure.
-function shiftMusic(tracks: MusicTrack[], leadSec: number): MusicTrack[] {
-  if (leadSec <= 0) {
-    return tracks;
+// Lay out the score's tracks on the FINAL video's timeline. Everything here is
+// absolute: `total` is the finished body (title card + steps + credits), so the
+// credits open at `total - creditsLen` and the fades sit where they sound. The
+// only offset is the bed's start — it waits out the title card, because a score
+// swelling under the opening card steps on it. Pure → unit-tested.
+export function planMusicTracks(args: {
+  bedPath: string;
+  // The credits swell clip (the bed seeked to its loudest window), or undefined
+  // when there are no credits or the trim failed — then the quiet bed carries
+  // the credits too, with no fade-out so it doesn't cut to silence.
+  creditsClip: string | undefined;
+  creditsLen: number;
+  titleOffsetSec: number;
+  total: number;
+}): MusicTrack[] {
+  const { bedPath, creditsClip, creditsLen, titleOffsetSec, total } = args;
+  const lead = Math.max(0, titleOffsetSec);
+  const quietBed: MusicTrack = {
+    path: bedPath,
+    delaySec: lead,
+    volume: NARRATION_MUSIC_GAIN,
+  };
+  // A credits roll shorter than a second isn't a region to score.
+  if (creditsLen <= 1 || !creditsClip) {
+    return [quietBed];
   }
-  const add = (v: number | undefined): number | undefined =>
-    v === undefined ? undefined : v + leadSec;
-  return tracks.map((t) => ({
-    ...t,
-    delaySec: t.delaySec + leadSec,
-    fadeInAtSec: add(t.fadeInAtSec),
-    fadeOutAtSec: add(t.fadeOutAtSec),
-  }));
+  // Where the credits open: the roll is the tail of the final body.
+  const cs = Math.max(lead, total - creditsLen);
+  const ramp = MUSIC_SWELL_RAMP_SEC;
+  return [
+    // Narration bed: quiet, faded out just before the credits so it doesn't
+    // stack with the swell below it.
+    {
+      ...quietBed,
+      fadeOutAtSec: Math.max(lead, cs - ramp),
+      fadeOutDurSec: ramp,
+    },
+    // Credits swell: the SAME song, seeked to its loudest (≈ highest-energy)
+    // window so the credits open on a strong section, at full volume, fading in
+    // at the credits start. One download → quiet bed + a full-energy swell.
+    {
+      path: creditsClip,
+      delaySec: cs,
+      volume: CREDITS_MUSIC_GAIN,
+      fadeInAtSec: cs,
+      fadeInDurSec: ramp,
+    },
+  ];
 }
 
 // Generate music tracks for the mix: a low instrumental bed under the whole
@@ -858,6 +891,9 @@ async function generateMusic(args: {
   // value for a computed one.
   creditsPath: string | undefined;
   finalBodyPath: string;
+  // How long the title card runs at the head of finalBodyPath. The bed starts
+  // after it (no score under the opening card), so that much less is requested.
+  titleOffsetSec: number;
   videoPath: string;
   temps: string[];
   notes: string[];
@@ -870,6 +906,7 @@ async function generateMusic(args: {
     directionText,
     creditsPath,
     finalBodyPath,
+    titleOffsetSec,
     videoPath,
     temps,
     notes,
@@ -878,6 +915,8 @@ async function generateMusic(args: {
   if (!provider) {
     return [];
   }
+  // The final body ALREADY includes the title card, so every time computed from
+  // it is absolute — see planMusicTracks.
   const total = await audioDurationSec(ffmpeg, finalBodyPath);
   if (!total) {
     return [];
@@ -887,8 +926,9 @@ async function generateMusic(args: {
   // it quietly UNDER the narration, then swell to full volume for the credits.
   const bedPath = `${videoPath}.bed.wav`;
   temps.push(bedPath);
+  const lead = Math.max(0, titleOffsetSec);
   try {
-    await provider.bed(directionText, total, bedPath);
+    await provider.bed(directionText, Math.max(1, total - lead), bedPath);
   } catch (err) {
     log.debug({ err }, "cinematic: instrumental score unavailable");
     notes.push("instrumental score unavailable");
@@ -897,52 +937,32 @@ async function generateMusic(args: {
   const creditsLen = creditsPath
     ? ((await audioDurationSec(ffmpeg, creditsPath)) ?? 0)
     : 0;
-  if (creditsLen <= 1) {
-    // No credits region — just the quiet bed under the whole thing.
-    return [{ path: bedPath, delaySec: 0, volume: NARRATION_MUSIC_GAIN }];
+  let creditsClip: string | undefined;
+  if (creditsLen > 1) {
+    try {
+      const loudOff = await pickLoudestOffset(ffmpeg, bedPath, creditsLen);
+      const clipPath = `${videoPath}.credits.wav`;
+      temps.push(clipPath);
+      await trimAudio({
+        ffmpeg,
+        src: bedPath,
+        startSec: loudOff,
+        outPath: clipPath,
+        echo: args.progress,
+      });
+      creditsClip = clipPath;
+    } catch (err) {
+      // Couldn't make the swell — the quiet bed carries the credits instead.
+      log.debug({ err }, "cinematic: credits swell unavailable; bed continues");
+    }
   }
-  // Where the credits open: the roll is the tail of the final body.
-  const cs = Math.max(0, total - creditsLen);
-  const ramp = MUSIC_SWELL_RAMP_SEC;
-  // Narration bed: quiet, faded out just before the credits so it doesn't stack
-  // with the swell below it.
-  const tracks: MusicTrack[] = [
-    {
-      path: bedPath,
-      delaySec: 0,
-      volume: NARRATION_MUSIC_GAIN,
-      fadeOutAtSec: Math.max(0, cs - ramp),
-      fadeOutDurSec: ramp,
-    },
-  ];
-  // Credits swell: the SAME song, seeked to its loudest (≈ highest-energy)
-  // window so the credits open on a strong section, at full volume, fading in at
-  // the credits start. One download → quiet bed + a full-energy credits swell.
-  try {
-    const loudOff = await pickLoudestOffset(ffmpeg, bedPath, creditsLen);
-    const creditsClip = `${videoPath}.credits.wav`;
-    temps.push(creditsClip);
-    await trimAudio({
-      ffmpeg,
-      src: bedPath,
-      startSec: loudOff,
-      outPath: creditsClip,
-      echo: args.progress,
-    });
-    tracks.push({
-      path: creditsClip,
-      delaySec: cs,
-      volume: CREDITS_MUSIC_GAIN,
-      fadeInAtSec: cs,
-      fadeInDurSec: ramp,
-    });
-  } catch (err) {
-    // Couldn't make the swell — let the quiet bed carry the credits too (drop
-    // its fade-out so it doesn't cut to silence).
-    log.debug({ err }, "cinematic: credits swell unavailable; bed continues");
-    tracks[0] = { path: bedPath, delaySec: 0, volume: NARRATION_MUSIC_GAIN };
-  }
-  return tracks;
+  return planMusicTracks({
+    bedPath,
+    creditsClip,
+    creditsLen,
+    titleOffsetSec: lead,
+    total,
+  });
 }
 
 // The credits roll's non-footage inputs: the branch contributors (a `git log`)
@@ -1140,6 +1160,7 @@ async function assembleVideo(args: {
     directionText,
     creditsPath,
     finalBodyPath: finalBody,
+    titleOffsetSec,
     videoPath,
     temps,
     notes,
@@ -1409,7 +1430,7 @@ interface RenderedClip {
 
 // A generated music input for the final mix: an audio file, when it starts, and
 // its (low) gain under the narration.
-interface MusicTrack {
+export interface MusicTrack {
   delaySec: number;
   // Optional cross-fade envelope (see AudioTrack), on the global timeline.
   fadeInAtSec?: number;
@@ -1518,10 +1539,14 @@ export function narrationJobs(
 // `say` instead of each paying another failing call/timeout — then a second pass
 // voices everything the provider didn't with `say`. A `say` failure is NOT caught
 // (as before): it throws through to cinematicProcess, which skips the pass.
-// Returns clips in step order, so the caller's cue/offset arrays stay in lockstep.
+// Returns clips in step order, so the caller's cue/offset arrays stay in lockstep,
+// plus the provider's first failure so the caller can say WHY nothing was voiced.
 async function synthesizeClips(args: {
   ffmpeg: string;
   say?: SpeechSynth;
+  // What actually picks up the lines when the provider fails, named for the note
+  // ("macOS `say`" is a lie on Linux with a key set, where nothing does).
+  fallbackLabel?: string;
   tts?: TtsProvider;
   steps: CinematicStep[];
   byIndex: Map<number, string>;
@@ -1530,10 +1555,11 @@ async function synthesizeClips(args: {
   notes: string[];
   log: Logger;
   echo?: Echo;
-}): Promise<RenderedClip[]> {
+}): Promise<{ clips: RenderedClip[]; ttsError?: string }> {
   const {
     ffmpeg,
     say,
+    fallbackLabel,
     tts,
     steps,
     byIndex,
@@ -1559,34 +1585,42 @@ async function synthesizeClips(args: {
     echo,
   });
 
-  // Pass 1: the TTS provider. `down` latches on the first failure so queued lines
-  // skip the provider entirely rather than each paying its own failing call.
+  // Pass 1: the TTS provider. The latch trips on the first failure so queued
+  // lines skip the provider entirely rather than each paying its own failing call.
   const rendered: (RenderedClip | null)[] = jobs.map(() => null);
+  let ttsError: string | undefined;
   if (tts) {
     const synth: SpeechSynth = {
       ext: "wav",
       run: (t, o) => tts.synthesize(t, o),
       tempo: ttsTempo(process.env, tts.tempo),
     };
-    let down = false;
+    // The latch keeps the first failure's message: it is the only account of why
+    // the provider dropped out, and a debug-only log left the run notes (and a
+    // no-fallback run's bare "nothing could be synthesized") saying nothing.
+    let firstErr: string | undefined;
     const voiced = await mapLimit(jobs, limit, async (job) => {
-      if (down) {
+      if (firstErr) {
         return null;
       }
       try {
         return await renderClip({ ...clipArgs(job), synth });
       } catch (err) {
-        down = true;
-        log.debug({ err }, "cinematic: TTS provider failed; using `say`");
+        firstErr =
+          (err instanceof Error ? err.message : String(err)) || "unknown error";
+        log.debug({ err }, "cinematic: TTS provider failed");
         return null;
       }
     });
     voiced.forEach((clip, slot) => {
       rendered[slot] = clip;
     });
-    if (down) {
+    if (firstErr) {
+      ttsError = firstErr;
       notes.push(
-        `narration voiced by macOS \`say\` — the TTS provider (${tts.id}) failed`
+        fallbackLabel
+          ? `narration voiced by ${fallbackLabel} — the TTS provider (${tts.id}) failed: ${firstErr}`
+          : `narration has no fallback voice — the TTS provider (${tts.id}) failed: ${firstErr}`
       );
     }
   }
@@ -1603,7 +1637,10 @@ async function synthesizeClips(args: {
       rendered[p.slot] = spoken[k] ?? null;
     });
   }
-  return rendered.filter((clip): clip is RenderedClip => clip !== null);
+  return {
+    clips: rendered.filter((clip): clip is RenderedClip => clip !== null),
+    ttsError,
+  };
 }
 
 // Render a 2.5s title card matching the source geometry, encoded to webm
@@ -1820,6 +1857,34 @@ export function planRetime(args: {
   return { starts, footage, holds, speeds, leadSec };
 }
 
+// The least footage a lead slice may carry. encodeSlice freezes by CLONING a
+// frame, so even an all-freeze intro needs a frame or two of real footage to
+// clone from.
+const MIN_LEAD_FOOTAGE_SEC = 0.1;
+
+// Split the opening lead into footage + freeze. `plan.leadSec` is an OUTPUT
+// length, and the two modes mean different things by it:
+//
+//   - narration: leadSec === the first step's source time, so the lead IS the
+//     footage before that step — all footage, no freeze (unchanged behaviour).
+//   - song: leadSec is the instrumental run before the first sung line (≈ the
+//     title card plus a beat) and says nothing about the source clock. Cutting
+//     leadSec of source there replays step 0's own footage — condense puts step
+//     0 at ~0 — and then step 0 plays it again.
+//
+// So take only the footage that genuinely precedes step 0 and freeze the rest:
+// the intro holds a still while the intro plays. Pure → unit-tested.
+export function planLead(args: { firstStepSrcSec: number; leadSec: number }): {
+  footageSec: number;
+  holdSec: number;
+} {
+  const footageSec = Math.min(
+    args.leadSec,
+    Math.max(MIN_LEAD_FOOTAGE_SEC, args.firstStepSrcSec)
+  );
+  return { footageSec, holdSec: Math.max(0, args.leadSec - footageSec) };
+}
+
 // Leading still pad before each step's action. DISABLED (0): freezing the first
 // frame of a step froze a mid-typing frame ("one character, then a pause"), since
 // a step's window often opens partway into its own keystrokes. End-freeze only —
@@ -1963,12 +2028,16 @@ async function retimeSegments(args: {
   if (plan.leadSec > 0.01) {
     const leadPath = `${videoPath}.lead.webm`;
     temps.push(leadPath);
+    const lead = planLead({
+      firstStepSrcSec: steps[0]?.videoTime ?? 0,
+      leadSec: plan.leadSec,
+    });
     await encodeSlice({
       ffmpeg,
       src: videoPath,
       startSec: 0,
-      durSec: plan.leadSec,
-      holdSec: 0,
+      durSec: lead.footageSec,
+      holdSec: lead.holdSec,
       frameRate,
       outPath: leadPath,
     });
@@ -2150,10 +2219,11 @@ async function mixAudioAndCaptions(args: {
     ? ["-c:v", "libvpx", "-b:v", "1M"]
     : ["-c:v", "copy"];
 
-  // Bound the output to the video's length. amix uses duration=longest, and a
-  // music provider may return a track far longer than the video (e.g. ACE-Step
-  // ignores the requested duration and returns minutes of audio) — without this
-  // cap that music keeps playing for minutes after the credits end.
+  // Bound the output to the video's length. amix uses duration=longest, so the
+  // mix runs as long as its LONGEST input: the credits swell is delayed to the
+  // credits and can outlast the picture, and a stock track (archive.org) is
+  // whatever length it happened to be. Without this cap the music keeps playing
+  // over a frozen last frame after the credits end.
   const videoDurSec = await audioDurationSec(ffmpeg, videoPath);
   const durationCap = videoDurSec ? ["-t", videoDurSec.toFixed(3)] : [];
 
@@ -2343,9 +2413,10 @@ function srtPathFor(videoPath: string): string {
   return `${videoPath.slice(0, videoPath.length - ext.length)}.srt`;
 }
 
-// Sidecar path for the song-mode lyrics, beside the video. In song mode the
-// generated vocals carry no alignment data, so rather than fake time-synced
-// captions we write the lyrics here as the honest text artifact.
+// Sidecar path for the song-mode lyrics, beside the video. This is the lyrics AS
+// WRITTEN, in full — it sits beside the time-aligned .srt, whose cues cover only
+// the lines the model actually sang (it may skip, repeat or mumble some), so the
+// two artifacts answer different questions.
 export function lyricsPathFor(videoPath: string): string {
   const ext = path.extname(videoPath);
   return `${videoPath.slice(0, videoPath.length - ext.length)}.lyrics.txt`;
@@ -3026,9 +3097,12 @@ async function runNarrationPass(
     s.narration.trim()
   ).length;
   progress(`voicing ${voicedLineCount} lines (${meta.voice})…`);
-  const clips = await synthesizeClips({
+  const { clips, ttsError } = await synthesizeClips({
     ffmpeg,
     say: speech.say,
+    // Only a usable `say` synth is a fallback; on Linux with a key and no
+    // $DAILIES_SAY_COMMAND there is nothing behind the provider.
+    fallbackLabel: speech.say ? speech.sayLabel || "macOS `say`" : undefined,
     tts: providers.tts,
     steps: narratableSteps,
     byIndex: new Map(narration.steps.map((s) => [s.index, s.narration])),
@@ -3039,7 +3113,13 @@ async function runNarrationPass(
     echo,
   });
   if (clips.length === 0) {
-    return notApplied("no narration audio could be synthesized");
+    // Name the provider and its error: "no narration audio" alone sent people
+    // hunting for a missing voice when the answer was an HTTP 401.
+    return notApplied(
+      ttsError && providers.tts
+        ? `no narration audio could be synthesized — ${providers.tts.id} failed: ${ttsError}`
+        : "no narration audio could be synthesized"
+    );
   }
 
   // Re-time the video, prepend the title card (optionally over a generated
@@ -3100,10 +3180,9 @@ async function runNarrationPass(
     finalBody,
     clips,
     offsetsSec: clipOffsetsSec,
-    // The music is timed against the body; shift it past the title card so the
-    // score doesn't play over the opening title (clips/captions are already
-    // offset by titleOffsetSec).
-    music: shiftMusic(music, titleOffsetSec),
+    // Already laid out on the final timeline by planMusicTracks — the bed waits
+    // out the title card there, so nothing is shifted here.
+    music,
     srtPath,
     burnCaptions,
     deliverables: [srtPath],
@@ -3193,6 +3272,11 @@ export function planSongTiming(args: {
   lineByGroup: Map<number, string>;
   // How many lines the model wrote, for the note's "n/total lines sung" tally.
   lineCount: number;
+  // Whether a transcript came back at all. False is the common case and means no
+  // transcriber was found (or it errored); true with a null region means one ran
+  // and its words never lined up with the lyrics we asked the model to sing. The
+  // two want different advice, so they get different notes.
+  hasTranscript: boolean;
   maxCueSec: number;
   region: { start: number; end: number } | null;
   sourceLabel: string;
@@ -3201,6 +3285,7 @@ export function planSongTiming(args: {
   const {
     clipCues,
     groups,
+    hasTranscript,
     lineByGroup,
     lineCount,
     maxCueSec,
@@ -3224,7 +3309,13 @@ export function planSongTiming(args: {
       alignedCues: [],
       holdDurSec,
       trimStartSec: 0,
-      note: "vocal timing not detected (no whisper model) — captions placed at step times; set $DAILIES_WHISPER_MODEL to align them to the singing",
+      // Naming a whisper model here was the wrong diagnosis (and $DAILIES_WHISPER_MODEL
+      // would pin the whisper-cpp backend): what's usually missing is a
+      // transcriber of any kind — transcribe.ts autodetects whisperx →
+      // mlx_whisper → whisper-cli, or talks to $DAILIES_TRANSCRIBE_URL.
+      note: hasTranscript
+        ? "vocal timing not detected — the transcript never lined up with the written lyrics; captions placed at step times"
+        : "vocal timing not detected — no transcriber found, or it produced nothing usable (install whisperx, mlx_whisper or whisper.cpp's whisper-cli, or set $DAILIES_TRANSCRIBE_URL to an OpenAI-compatible /v1/audio/transcriptions server); captions placed at step times",
     };
   }
 
@@ -3508,6 +3599,7 @@ async function runSongPass(ctx: CinematicContext): Promise<CinematicResult> {
   const timing = planSongTiming({
     clipCues,
     groups,
+    hasTranscript: transcript !== null,
     lineByGroup,
     lineCount: orderedTexts.length,
     maxCueSec: MAX_CUE_SEC,
