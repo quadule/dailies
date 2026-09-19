@@ -45,6 +45,8 @@ interface SessionState {
   artifactsDir: string;
   // page.showCaption() calls in order, mirrored to captions.json.
   captions: CaptionEvent[];
+  // Serializes the whole-file writes of captions.json (see recordCaption).
+  captionWrite: Promise<void>;
   capture: CaptureOptions;
   consolePath: string;
   consoleStream?: WriteStream;
@@ -53,6 +55,9 @@ interface SessionState {
   // The step currently open, so endStep can name it without being told again.
   currentStep?: string;
   endedAt?: number;
+  // The in-flight end(), set for the life of the teardown. A second end() on
+  // the same session joins it instead of tearing down (and collecting) twice.
+  ending?: Promise<SessionEndResult>;
   entry: BrowserEntry;
   errorDisposers: Array<() => void>;
   harPath: string;
@@ -229,6 +234,7 @@ export class SessionManager {
       artifactsDir,
       capture: req.capture,
       captions: [],
+      captionWrite: Promise.resolve(),
       consolePath,
       entry,
       errorDisposers: [],
@@ -331,20 +337,34 @@ export class SessionManager {
   // captions.json on every call rather than flushed at session end: `session
   // end` can be re-run on an ended session (to re-cut a video), and a crash
   // must not lose the captions a completed run already showed.
-  async recordCaption(sessionId: string, event: CaptionEvent): Promise<void> {
+  //
+  // The writes are chained rather than issued in parallel: the caller fires
+  // this and forgets it (`void manager.recordCaption(...)`), so two captions
+  // shown back to back would otherwise have two O_TRUNC whole-file writes of
+  // the same growing array in flight at once — which can interleave into a
+  // truncated, unparseable captions.json. Each write already carries the full
+  // array, so serializing them costs nothing and the last one still wins.
+  recordCaption(sessionId: string, event: CaptionEvent): Promise<void> {
     const state = this.sessions.get(sessionId);
     if (!state) {
-      return;
+      return Promise.resolve();
     }
     state.captions.push(event);
-    await writeFile(
-      path.join(state.artifactsDir, SESSION_CAPTIONS_FILE),
-      `${JSON.stringify(state.captions, null, 2)}\n`,
-      "utf8"
-    ).catch(() => {
-      // A caption is presentation, never the point of the run — losing one must
-      // not fail the step that showed it.
-    });
+    const captionsPath = path.join(state.artifactsDir, SESSION_CAPTIONS_FILE);
+    state.captionWrite = state.captionWrite
+      .then(() =>
+        writeFile(
+          captionsPath,
+          `${JSON.stringify(state.captions, null, 2)}\n`,
+          "utf8"
+        )
+      )
+      .catch(() => {
+        // A caption is presentation, never the point of the run — losing one
+        // must not fail the step that showed it, nor poison the chain for the
+        // captions after it.
+      });
+    return state.captionWrite;
   }
 
   async beginStep(sessionId: string, step: string): Promise<void> {
@@ -493,27 +513,53 @@ export class SessionManager {
     };
   }
 
-  // Strict teardown ordering: stop tracing (writes trace.zip) -> close context
-  // (flushes *.webm + finalizes HAR) -> detach listeners + flush console stream
-  // -> enumerate artifacts + write manifest.json -> drop the session browser.
+  // Finalize a session exactly once: the guards here decide whether this call
+  // runs the teardown (runEnd) or joins one already in flight.
   async end(sessionId: string, reason: EndReason): Promise<SessionEndResult> {
     const state = this.sessions.get(sessionId);
     if (!state) {
       throw new Error(`Session "${sessionId}" not found`);
     }
-    // Re-entry on an already-terminal session (e.g. a retry after a crash, or
-    // endAll() reaching a session that crashed). Still stop the browser and drop
-    // the registry entry in a finally so a collect() failure can't leak the
-    // session browser.
+    // Re-entry while a teardown is already running. The session-end RPC holds
+    // the per-session browser lock, but daemon shutdown calls endAll() outside
+    // it — so a `stop` or SIGTERM lands here mid-teardown. Join the in-flight
+    // end instead of tearing down a second time: two collect() passes write
+    // manifest.json concurrently, and the one that wins is whichever finished
+    // last, not whichever saw the more complete context.
+    if (state.ending) {
+      return await state.ending;
+    }
+    // Terminal but still registered. Not reachable today — a crashed session is
+    // dropped by handleBrowserDisconnect, and a completed one deletes itself in
+    // the finally below — so this is the defensive path for a teardown that was
+    // interrupted before it could clean up: collect whatever landed on disk,
+    // then make sure the browser and the registry entry go with it.
     if (state.phase !== "active") {
       try {
         return await this.collect(state, reason);
       } finally {
-        await this.swallow(() => this.manager.stopBrowser(state.entry.name));
+        await this.best(
+          () => this.manager.stopBrowser(state.entry.name),
+          "session browser stop"
+        );
         this.sessions.delete(sessionId);
       }
     }
 
+    // Recorded before the first await, so a re-entrant end() in the same tick
+    // finds it (the branch above) rather than starting its own teardown.
+    state.ending = this.runEnd(state, sessionId, reason);
+    return await state.ending;
+  }
+
+  // Strict teardown ordering: stop tracing (writes trace.zip) -> close context
+  // (flushes *.webm + finalizes HAR) -> detach listeners + flush console stream
+  // -> enumerate artifacts + write manifest.json -> drop the session browser.
+  private async runEnd(
+    state: SessionState,
+    sessionId: string,
+    reason: EndReason
+  ): Promise<SessionEndResult> {
     state.phase = "ending";
     const ctx = state.entry.context;
 
@@ -572,7 +618,15 @@ export class SessionManager {
       this.log.info({ sessionId, reason }, "session ended");
       return result;
     } finally {
-      await this.swallow(() => this.manager.stopBrowser(state.entry.name));
+      // Bounded for the same reason ctx.close() is: stopBrowser awaits
+      // browser.close(), which goes over the same CDP transport and hangs with
+      // it — and this one runs in a finally, so an unbounded wait here strands
+      // `session end` (and daemon shutdown behind it) after the artifacts are
+      // already safely on disk.
+      await this.best(
+        () => this.manager.stopBrowser(state.entry.name),
+        "session browser stop"
+      );
       // Drop the session: frees the registry and closes the execute guard hole
       // (a later execute on this name is rejected instead of launching a fake
       // non-session browser under the reserved __session__ prefix).
@@ -659,8 +713,12 @@ export class SessionManager {
   // Ask the pages themselves: scripts name them (`newPage("checkout")`), and that
   // name is what a person or an agent can pass to `session end --video`.
   //
-  // Safe here and nowhere earlier: Playwright resolves a video's path when its
-  // context closes, which the caller has already done before collecting.
+  // Must run BEFORE the context closes, which is the whole hazard: closing a
+  // context fires page.on("close") for every page and BrowserManager
+  // unregisters each one from entry.pages, so afterwards there is nothing left
+  // to ask and every recording lands unlabelled. Reading the path this early is
+  // safe — for a local browser Playwright knows the file name as soon as the
+  // page exists; it does not wait for the recording to finish.
   private async videoPageNames(
     state: SessionState
   ): Promise<Map<string, string>> {
@@ -711,8 +769,10 @@ export class SessionManager {
       await add("console", state.consolePath);
     }
     if (state.capture.video) {
-      // Captured before the context closed; a re-entered end() on an
-      // already-terminal session has no live pages left, so fall back.
+      // Normally captured by end() while the pages were still open. Only the
+      // interrupted-teardown branch of end() reaches collect() without that
+      // step, and its pages are long gone — the fallback will usually come back
+      // empty, which leaves those recordings unlabelled rather than missing.
       const namesByPath =
         state.videoNamesByPath ?? (await this.videoPageNames(state));
       const files = await readdir(state.videoDir).catch(() => [] as string[]);

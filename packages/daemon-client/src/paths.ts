@@ -5,6 +5,7 @@ import { daemonPipeName } from "./ipc/pipename.js";
 const DIR_NAME = ".dailies";
 const DAEMON_SOCKET = "daemon.sock";
 const DAEMON_PID = "daemon.pid";
+const DAEMON_STDERR_LOG = "daemon.stderr.log";
 const DAEMON_BUNDLE = "daemon.mjs";
 const SANDBOX_CLIENT = "sandbox-client.js";
 const PACKAGE_JSON = "package.json";
@@ -33,6 +34,13 @@ export function daemonSocketPath(): string {
 
 export function daemonPidPath(): string {
   return join(dailiesDir(), DAEMON_PID);
+}
+
+// Where the spawned daemon's raw stderr lands. The daemon's own pino log
+// (daemon.log) only exists once its module body has run, so a crash BEFORE that
+// — an import-time throw from a half-installed runtime — can only be seen here.
+export function daemonStderrLogPath(): string {
+  return join(dailiesDir(), DAEMON_STDERR_LOG);
 }
 
 export function daemonBundlePath(): string {

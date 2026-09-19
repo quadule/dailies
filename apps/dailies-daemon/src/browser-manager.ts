@@ -600,7 +600,11 @@ export class BrowserManager {
       return;
     }
 
-    const last = this.getContextPages(entry).at(-1);
+    // The page the step actually drove, by the same rule the step screenshot
+    // and activePageName use — not the newest tab. A step that returns to an
+    // earlier page would otherwise settle the tab it left, and the page the
+    // NEXT step reads (and the screenshot shows) would go unsettled.
+    const last = this.activePage(entry);
     if (!last) {
       return;
     }
@@ -868,30 +872,55 @@ export class BrowserManager {
             "DevToolsActivePort"
           ),
         ];
-      case "linux":
+      case "linux": {
+        // ~/.config is only the DEFAULT config root: Chrome and Chromium honor
+        // $XDG_CONFIG_HOME, and packaged builds leave that tree entirely —
+        // Ubuntu ships Chromium as a snap, and Flatpak confines each app to its
+        // own ~/.var/app/<app-id>/config. Auto-discovery that only reads
+        // ~/.config silently misses the browser the user is actually running.
+        const configHome =
+          process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME.length > 0
+            ? process.env.XDG_CONFIG_HOME
+            : path.join(homeDir, ".config");
         return [
-          path.join(homeDir, ".config", "google-chrome", "DevToolsActivePort"),
-          path.join(homeDir, ".config", "chromium", "DevToolsActivePort"),
+          path.join(configHome, "google-chrome", "DevToolsActivePort"),
+          path.join(configHome, "chromium", "DevToolsActivePort"),
+          path.join(configHome, "google-chrome-beta", "DevToolsActivePort"),
+          path.join(configHome, "google-chrome-unstable", "DevToolsActivePort"),
           path.join(
-            homeDir,
-            ".config",
-            "google-chrome-beta",
-            "DevToolsActivePort"
-          ),
-          path.join(
-            homeDir,
-            ".config",
-            "google-chrome-unstable",
-            "DevToolsActivePort"
-          ),
-          path.join(
-            homeDir,
-            ".config",
+            configHome,
             "BraveSoftware",
             "Brave-Browser",
             "DevToolsActivePort"
           ),
+          path.join(
+            homeDir,
+            "snap",
+            "chromium",
+            "common",
+            "chromium",
+            "DevToolsActivePort"
+          ),
+          path.join(
+            homeDir,
+            ".var",
+            "app",
+            "com.google.Chrome",
+            "config",
+            "google-chrome",
+            "DevToolsActivePort"
+          ),
+          path.join(
+            homeDir,
+            ".var",
+            "app",
+            "org.chromium.Chromium",
+            "config",
+            "chromium",
+            "DevToolsActivePort"
+          ),
         ];
+      }
       case "win32":
         return [
           path.join(
@@ -1032,7 +1061,11 @@ export class BrowserManager {
   }
 
   private buildAutoConnectError(lastError?: unknown): string {
-    let launchCommand = "google-chrome --remote-debugging-port=9222";
+    // Chromium is as common as Chrome on Linux (it is what Ubuntu's snap and
+    // most distro packages install), so name both rather than sending half the
+    // platform's users off to find a binary they don't have.
+    let launchCommand =
+      "google-chrome --remote-debugging-port=9222 (or chromium --remote-debugging-port=9222)";
     if (this.dependencies.platform === "darwin") {
       launchCommand =
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222";

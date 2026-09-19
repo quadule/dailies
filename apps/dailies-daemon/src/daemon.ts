@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, unlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { createLogger } from "dailies-logger";
@@ -32,6 +32,13 @@ const PID_PATH = getPidPath();
 const BROWSERS_DIR = getBrowsersDir();
 const DEFAULT_SCRIPT_TIMEOUT_MS = 15_000;
 const SOCKET_CLOSE_TIMEOUT_MS = 500;
+// Cap a shutdown step that talks to a browser, matching SessionManager's own
+// teardown budget.
+const SHUTDOWN_STEP_TIMEOUT_MS = 5000;
+// The daemon is unauthenticated and drives logged-in browsers, so its state
+// directory and socket are owner-only on POSIX (no-ops on Windows named pipes).
+const BASE_DIR_MODE = 0o700;
+const SOCKET_MODE = 0o600;
 
 const LOG_PATH = path.join(BASE_DIR, "daemon.log");
 const log = createLogger({
@@ -91,6 +98,33 @@ async function unlinkIfExists(filePath: string): Promise<void> {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
+  }
+}
+
+// Bound a shutdown step so a wedged CDP transport can't strand the daemon
+// before it releases the pid file and socket. A rejection that arrives after
+// the timeout is still consumed by the race, so it never lands as an unhandled
+// rejection.
+async function bounded(
+  fn: () => Promise<unknown>,
+  label: string
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      fn(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          log.warn({ label }, "shutdown step timed out; continuing");
+          resolve();
+        }, SHUTDOWN_STEP_TIMEOUT_MS);
+        timer.unref();
+      }),
+    ]);
+  } catch (error) {
+    log.debug({ err: error, label }, "shutdown step failed");
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -257,7 +291,8 @@ async function handleExecute(
     const timeoutMs = request.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS;
 
     // A session run is bracketed by a trace group named after the step so the
-    // trace timeline is segmented; on success the active page is screenshotted.
+    // trace timeline is segmented; when the step finishes — success or failure
+    // alike — the page it ended on is screenshotted (see the finally below).
     if (targetSession && request.step) {
       await sessions.beginStep(targetSession, request.step);
     }
@@ -747,7 +782,7 @@ function shutdown(exitCode = 0): Promise<void> {
     // Flush trace/video/HAR for any active sessions before tearing down their
     // browsers (stopAll would close contexts without finalizing artifacts).
     await sessions.endAll();
-    await manager.stopAll();
+    await bounded(() => manager.stopAll(), "browser stopAll");
     await Promise.allSettled(
       Array.from(clients, (socket) => closeClientSocket(socket))
     );
@@ -767,7 +802,10 @@ function shutdown(exitCode = 0): Promise<void> {
 }
 
 async function start(): Promise<void> {
-  await mkdir(BASE_DIR, { recursive: true });
+  // 0700: ~/.dailies holds browser profiles with live cookies, session HARs and
+  // traces. `recursive: true` leaves an existing directory's mode alone, so this
+  // only tightens a fresh install.
+  await mkdir(BASE_DIR, { recursive: true, mode: BASE_DIR_MODE });
   await ensureDailiesTempDir();
   if (requiresDaemonEndpointCleanup()) {
     await unlinkIfExists(SOCKET_PATH);
@@ -833,6 +871,14 @@ async function start(): Promise<void> {
       resolve();
     });
   });
+
+  if (requiresDaemonEndpointCleanup()) {
+    // Anyone who can open this socket can drive the user's logged-in browsers —
+    // the daemon asks for no credentials. The socket only exists once listen()
+    // has resolved, so it is narrowed here rather than at creation. Same guard
+    // as the unlink above: on Windows the endpoint is a named pipe, not a file.
+    await chmod(SOCKET_PATH, SOCKET_MODE);
+  }
 
   log.info({ socket: SOCKET_PATH, pid: process.pid }, "daemon ready");
 }

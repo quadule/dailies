@@ -19,7 +19,11 @@ const PACKAGE_JSON_TEXT: string = EMBEDDED_PACKAGE_JSON;
 // template into ~/.dailies/ if missing or stale. Returns the daemon bundle path.
 export async function ensureDaemonExtracted(): Promise<string> {
   const dir = dailiesDir();
-  await mkdir(dir, { recursive: true });
+  // 0700: ~/.dailies goes on to hold browser profiles with live cookies plus
+  // every session's HAR and trace, and the daemon socket next to them is
+  // unauthenticated. `recursive: true` leaves an existing directory's mode
+  // alone, so this only tightens a fresh install. Mode is ignored on Windows.
+  await mkdir(dir, { recursive: true, mode: 0o700 });
 
   const daemonPath = daemonBundlePath();
   const sandboxPath = sandboxClientPath();

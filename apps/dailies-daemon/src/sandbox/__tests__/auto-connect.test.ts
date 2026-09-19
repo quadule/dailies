@@ -350,6 +350,73 @@ describe("BrowserManager auto-connect", () => {
     );
   });
 
+  it("checks the snap Chromium DevToolsActivePort location on Linux", async () => {
+    // Ubuntu ships Chromium as a snap, which keeps its profile outside the
+    // config root entirely — a user following the auto-connect hint on the
+    // most common Linux desktop lands here.
+    const homeDir = "/home/tester";
+    const snapPath = path.join(
+      homeDir,
+      "snap",
+      "chromium",
+      "common",
+      "chromium",
+      "DevToolsActivePort"
+    );
+    const readFile = vi.fn(async (filePath: string) => {
+      if (filePath === snapPath) {
+        return "9444\n/devtools/browser/from-snap\n";
+      }
+
+      throw createEnoentError(filePath);
+    });
+    const { manager } = createManager({
+      homedir: () => homeDir,
+      platform: "linux",
+      readFile,
+    });
+
+    await expect(getInternals(manager).readDevToolsActivePort()).resolves.toBe(
+      "ws://127.0.0.1:9444/devtools/browser/from-snap"
+    );
+  });
+
+  it("honors $XDG_CONFIG_HOME when looking for a Linux profile", async () => {
+    const homeDir = "/home/tester";
+    const configHome = "/home/tester/xdg-config";
+    const devToolsPath = path.join(
+      configHome,
+      "google-chrome",
+      "DevToolsActivePort"
+    );
+    const readFile = vi.fn(async (filePath: string) => {
+      if (filePath === devToolsPath) {
+        return "9555\n/devtools/browser/from-xdg\n";
+      }
+
+      throw createEnoentError(filePath);
+    });
+    const previous = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = configHome;
+    try {
+      const { manager } = createManager({
+        homedir: () => homeDir,
+        platform: "linux",
+        readFile,
+      });
+
+      await expect(
+        getInternals(manager).readDevToolsActivePort()
+      ).resolves.toBe("ws://127.0.0.1:9555/devtools/browser/from-xdg");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = previous;
+      }
+    }
+  });
+
   it("returns null when DevToolsActivePort is missing", async () => {
     const { manager } = createManager();
 

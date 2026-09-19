@@ -3,9 +3,7 @@ import { createInterface } from "node:readline";
 import type { Request, Response } from "dailies-protocol";
 import { daemonEndpoint } from "../paths.js";
 
-// 5s write timeout on the socket.
-const WRITE_TIMEOUT_MS = 5000;
-// Generous frame ceiling so large screenshots / result payloads don't truncate.
+// Generous per-frame ceiling so large screenshots / result payloads don't truncate.
 const MAX_LINE_BYTES = 64 * 1024 * 1024;
 
 export class DaemonConnectionClosed extends Error {
@@ -38,7 +36,6 @@ export async function connectToDaemon(): Promise<DaemonConnection> {
   });
 
   socket.setNoDelay(true);
-  socket.setTimeout(WRITE_TIMEOUT_MS);
 
   return { socket, reader: readLines(socket) };
 }
@@ -80,11 +77,12 @@ async function* readLines(socket: net.Socket): AsyncIterableIterator<string> {
     input: socket,
     crlfDelay: Number.POSITIVE_INFINITY,
   });
-  let bytes = 0;
   try {
     for await (const line of rl) {
-      bytes += line.length;
-      if (bytes > MAX_LINE_BYTES) {
+      // Per FRAME, not per connection: a long `exec` streams thousands of
+      // stdout frames down one socket, and a running total would abort it
+      // partway through for no reason.
+      if (Buffer.byteLength(line) > MAX_LINE_BYTES) {
         throw new Error(`Daemon message exceeds ${MAX_LINE_BYTES} bytes`);
       }
       yield line;

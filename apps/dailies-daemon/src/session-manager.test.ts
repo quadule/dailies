@@ -334,6 +334,93 @@ describe("SessionManager", () => {
     }
   });
 
+  it("does not hang forever if stopping the session browser never resolves", async () => {
+    // The same wedged-CDP failure one step later: stopBrowser awaits
+    // browser.close() over that transport, and it runs in end()'s finally —
+    // so an unbounded wait strands `session end` after every artifact is
+    // already safely on disk.
+    vi.useFakeTimers();
+    try {
+      const { entry, calls } = makeSession();
+      const manager = makeManager(entry, calls, []);
+      manager.stopBrowser = () => new Promise<void>(() => undefined);
+      const sessions = new SessionManager(manager, log);
+      await sessions.start(startReq());
+
+      let pending = true;
+      const resultPromise = sessions.end("s1", "end").finally(() => {
+        pending = false;
+      });
+      // collect() does real file I/O before the stop, so the stop's timeout
+      // timer only exists a few event-loop turns in — keep advancing until
+      // end() returns rather than guessing at the turn count.
+      let turns = 0;
+      while (pending) {
+        // Several bounded stages run back to back (each up to 5 s of fake
+        // time), so allow well past their sum — but stay finite, so a
+        // regression fails here instead of hanging the suite.
+        if (turns++ > 120) {
+          expect.fail("end() never returned — the browser-stop bound is gone");
+        }
+        await vi.advanceTimersByTimeAsync(1000);
+      }
+      const result = await resultPromise;
+
+      expect(result.session.phase).toBe("ended");
+      expect(sessions.has("s1")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("joins an end already in flight instead of tearing down twice", async () => {
+    // Daemon shutdown calls endAll() without the per-session browser lock the
+    // session-end RPC holds, so a `stop` can re-enter end() mid-teardown. Two
+    // collect() passes then race on manifest.json and the last writer wins.
+    const { entry, calls } = makeSession();
+    const sessions = new SessionManager(makeManager(entry, calls, []), log);
+    await sessions.start(startReq());
+
+    const [first, second] = await Promise.all([
+      sessions.end("s1", "end"),
+      sessions.end("s1", "abort"),
+    ]);
+
+    expect(second).toBe(first);
+    expect(calls.filter((call) => call === "context.close")).toHaveLength(1);
+    expect(calls.filter((call) => call === "stopBrowser")).toHaveLength(1);
+    const manifest = JSON.parse(
+      await readFile(join(getSessionDir("s1"), "manifest.json"), "utf8")
+    );
+    // The reason the first (real) teardown ran with, not the joiner's.
+    expect(manifest.reason).toBe("end");
+    expect(sessions.has("s1")).toBe(false);
+  });
+
+  it("serializes captions.json writes", async () => {
+    // recordCaption is fired and forgotten by the daemon, so two captions in a
+    // row would otherwise have two whole-file O_TRUNC writes in flight at once.
+    const { entry, calls } = makeSession();
+    const sessions = new SessionManager(makeManager(entry, calls, []), log);
+    await sessions.start(startReq());
+
+    await Promise.all(
+      ["one", "two", "three"].map((text) =>
+        sessions.recordCaption("s1", { at: "0:01", durationMs: 1000, text })
+      )
+    );
+
+    const captions = JSON.parse(
+      await readFile(join(getSessionDir("s1"), "captions.json"), "utf8")
+    );
+    expect(captions).toHaveLength(3);
+    expect(captions.map((c: { text: string }) => c.text)).toEqual([
+      "one",
+      "two",
+      "three",
+    ]);
+  });
+
   it("captures console events as newline-delimited JSON", async () => {
     const { entry, calls, emit } = makeSession();
     const sessions = new SessionManager(makeManager(entry, calls, []), log);

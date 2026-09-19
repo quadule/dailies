@@ -2,6 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import type { Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { BrowserManager } from "./browser-manager.js";
@@ -11,6 +12,19 @@ const browserName = "browser-manager-pages";
 
 function createDataUrl(title: string, body: string): string {
   return `data:text/html,${encodeURIComponent(`<title>${title}</title>${body}`)}`;
+}
+
+// Record which page the settle barrier waited on. An own property shadows the
+// prototype method, so the real wait still runs underneath.
+function spyOnSettle(page: Page, label: string, seen: string[]): void {
+  const original = page.waitForLoadState.bind(page);
+  page.waitForLoadState = ((
+    state?: Parameters<Page["waitForLoadState"]>[0],
+    options?: Parameters<Page["waitForLoadState"]>[1]
+  ) => {
+    seen.push(label);
+    return original(state, options);
+  }) as Page["waitForLoadState"];
 }
 
 describe.sequential("BrowserManager page discovery", () => {
@@ -59,6 +73,27 @@ describe.sequential("BrowserManager page discovery", () => {
 
     const info = await manager.getActivePageInfo(browserName);
     expect(info?.title).toBe("Alpha");
+  }, 180_000);
+
+  it("settles the page the step drove, not the newest tab", async () => {
+    await ensureBrowser();
+
+    const alpha = await manager.getPage(browserName, "alpha");
+    await alpha.goto(createDataUrl("Alpha", "<main>alpha</main>"));
+    const beta = await manager.getPage(browserName, "beta");
+    await beta.goto(createDataUrl("Beta", "<main>beta</main>"));
+    // The step ends back on alpha; beta stays the newest tab.
+    await manager.getPage(browserName, "alpha");
+
+    const settled: string[] = [];
+    spyOnSettle(alpha, "alpha", settled);
+    spyOnSettle(beta, "beta", settled);
+
+    await manager.settleActivePage(browserName);
+
+    // Settling beta would wait out the tab the step left and leave alpha — the
+    // page the screenshot shows and the next step reads — uncommitted.
+    expect([...new Set(settled)]).toEqual(["alpha"]);
   }, 180_000);
 
   it("falls back to the newest tab when the page it last drove is gone", async () => {
