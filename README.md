@@ -54,6 +54,7 @@ and the script.
 - **Nightly demos of your pull requests.** Label a PR and wake up to a video on it. A model reads the diff and decides whether the change is even worth filming.
 - **Teach it your app once.** Commit a `.dailies/flows.md` and every run starts knowing how to sign in and where things are, instead of rediscovering it.
 - **Bring your own model.** The `claude` CLI by default, any OpenAI-compatible endpoint, or Apple Intelligence fully on-device.
+- **Bring your own voice, score and title art.** Narration, music and the title card come from whatever you have — a local oMLX or ACE-Step server, an ElevenLabs or Gemini key, free Creative-Commons stock — picked automatically, or pinned per slot with `--narrator` / `--music` / `--image`.
 - **Built for agents.** Drop-in plugins for Claude Code, Cursor, and Codex.
 - **Sandboxed.** Scripts run in a QuickJS WASM sandbox with the full Playwright `Page` API — no Node, no host access.
 
@@ -356,7 +357,8 @@ language-agnostic and your instrumentation stays where someone can maintain it.
 ### Nightly demos of your pull requests
 
 Copy [`.github/workflows/dailies-demo.yml`](.github/workflows/dailies-demo.yml) into your repo, add
-`ANTHROPIC_API_KEY` and `GEMINI_API_KEY` as repo secrets, and label a PR **`dailies`**. Each night
+`ANTHROPIC_API_KEY` plus a voice key (`ELEVENLABS_API_KEY` or `GEMINI_API_KEY`) as repo secrets, and label a
+PR **`dailies`**. Each night
 it records a demo of every labeled PR whose head has moved since its last demo and whose change a
 model (or `demo.paths`) judges worth filming, then posts the video and the full report back to the
 PR. Want one now? Comment **`/dailies`** on the PR — anything after it steers the run
@@ -391,6 +393,38 @@ Dailies warns in the log when the demo decision was made on-device.
 
 The Anthropic Messages API isn't a fourth provider — the `claude` CLI already covers Claude, and
 this package deliberately ships no runtime dependencies. It would slot in behind the same interface.
+
+## Voices, music and title art
+
+The text provider writes the words; three more slots turn them into a film — a **narrator** to
+read them, **music** under the narration (or, with `--song`, the model that sings the lyrics),
+and a **title-card image**. Each slot is filled by the first thing that's configured, local
+first, then hosted keys, then free stock sources, so a bare install still produces a complete cut:
+
+| Slot | Order | Needs |
+| --- | --- | --- |
+| **Narrator** | oMLX → ElevenLabs → Gemini → macOS `say` | `$DAILIES_OMLX_URL` (+ key) · `$ELEVENLABS_API_KEY` · `$GEMINI_API_KEY` or `$GOOGLE_APPLICATION_CREDENTIALS` · a Mac (or `$DAILIES_SAY_COMMAND`) |
+| **Music** | ACE-Step → ElevenLabs → Gemini (Lyria) → archive.org | `$DAILIES_ACESTEP_URL` · `$ELEVENLABS_API_KEY` · a Gemini key · nothing (free, Creative Commons, attribution in the credits) |
+| **Title art** | local image server → Gemini (Nano Banana) → Wikimedia Commons → themed gradient | `$DAILIES_IMAGE_URL` · a Gemini key · nothing · nothing |
+
+**ElevenLabs** switches on narration and music with one key; its image flow (`--image elevenlabs`,
+any of the models it relays such as `gemini-3.1-flash-image`) is opt-in because it needs a Pro
+plan. `$DAILIES_ELEVENLABS_VOICE` pins a voice by name or id — otherwise one of your voices is
+drawn per run, like the theme. `$DAILIES_ELEVENLABS_MODEL`, `_MUSIC_MODEL` and `_IMAGE_MODEL`
+override the models (`eleven_multilingual_v2`, `music_v2_5`, `gemini-3.1-flash-image`).
+
+**Pin a slot** when you want a specific one — on the command line, or in a prompt to your agent
+("narrate it with ElevenLabs, no music"), which passes it through:
+
+```bash
+dailies session end "$id" --cinematic --narrator elevenlabs --music none
+dailies session end "$id" --song --music gemini            # Lyria sings the lyrics
+DAILIES_NARRATOR=say dailies session end "$id" --cinematic  # the same pins, from the environment
+```
+
+A pin is exact, like `$DAILIES_LLM`: the named provider is used, or the slot degrades with a note
+— and the narrator (or the singer, with `--song`) skips the pass rather than being quietly voiced
+by something else. `dailies session end --help` lists every provider's variables.
 
 ## One CLI, one runtime
 

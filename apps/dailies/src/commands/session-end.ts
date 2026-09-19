@@ -36,6 +36,7 @@ import {
   type Segment,
 } from "../video/condense.js";
 import { probeDurationSec, probeVideo } from "../video/ffmpeg.js";
+import type { MediaPreferences } from "../video/media-preferences.js";
 import {
   burnCaptionBand,
   type CinematicStep,
@@ -54,6 +55,9 @@ interface SessionEndOpts {
   captions?: boolean;
   cinematic?: boolean;
   condense?: boolean;
+  // Pinned narrator / music / title-art providers for the cinematic pass
+  // (--narrator/--music/--image); see video/media-preferences.ts.
+  media?: MediaPreferences;
   // `name=value` measurements this run produced, recorded verbatim. Dailies
   // never interprets them — see session/metrics.ts.
   metric?: string[];
@@ -640,6 +644,8 @@ async function burnPlainCaptions(
 
 interface CinematicOpts {
   captions: boolean;
+  // Pinned narrator / music / title-art providers (see media-preferences.ts).
+  media?: MediaPreferences;
   prompt?: string;
   // Song mode: replace narration with one sung song (see narrate.ts).
   song?: boolean;
@@ -702,6 +708,7 @@ async function cinematizeSessionVideo(
     prompt: opts.prompt,
     captions: opts.captions,
     song: opts.song,
+    media: opts.media,
     log: logger,
     onProgress: (message) => process.stderr.write(`  · ${message}\n`),
   });
@@ -949,6 +956,7 @@ export async function sessionEnd(
       prompt: opts.prompt,
       captions: opts.captions !== false,
       song: opts.song,
+      media: opts.media,
     });
     // Persist the step timings the cinematic pass stamped — notably
     // precinematicVideoTime (the condensed source positions). Step times are

@@ -1,16 +1,22 @@
 // Cinematic post-processing for session videos (opt-in via `dailies session end
 // --cinematic`). After condensing, this turns a silent screen recording into a
-// narrated short: an LLM (`claude -p`) writes themed narration for each step,
-// macOS `say` reads it aloud, and ffmpeg re-times the video so each step holds
-// its frame long enough for its narration (clips never overlap), prepends an
-// opening title card, mixes the narration in, and (optionally) burns matching
-// captions. A sibling `.srt` is always written for soft-sub players.
+// narrated short: a text provider (the `claude` CLI, an OpenAI-compatible
+// endpoint, or Apple Intelligence — see ../llm) writes themed narration for each
+// step, a voice reads it (a TTS provider — oMLX, ElevenLabs, Gemini — or macOS
+// `say`), and ffmpeg re-times the video so each step holds its frame long
+// enough for its narration (clips never overlap), prepends an opening title
+// card, mixes the narration in, and (optionally) burns matching captions. A
+// sibling `.srt` is always written for soft-sub players.
 //
-// Everything here is best-effort and gated: the pipeline only runs on macOS
-// (it needs `say`), only when `claude` and `say` are on PATH, and any failure
-// — a missing binary, an ffmpeg error, malformed LLM output — leaves the
-// original video untouched and returns { applied:false }. Non-cinematic output
-// is therefore byte-identical to before.
+// Everything here is best-effort and gated: the pipeline needs ffmpeg, some
+// text provider, and some way to voice the lines (a TTS provider on any
+// platform, or `say` on macOS), and any failure — a missing binary, an ffmpeg
+// error, malformed LLM output — leaves the original video untouched and returns
+// { applied:false }. Non-cinematic output is therefore byte-identical to before.
+//
+// Which provider fills each slot (narrator / music / title art) is resolved in
+// resolveMedia below: local servers first, then hosted keys, then the free stock
+// fallbacks — unless the user pinned a slot (see media-preferences.ts).
 //
 // Subprocess style mirrors condense.ts: a single promisified `execFile`
 // (`node:child_process`, NOT execa — not a dependency) with a bumped maxBuffer
@@ -29,6 +35,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import type { Logger } from "dailies-logger";
+import { noProviderReason, resolveProviders } from "../llm/index.js";
 import { resolveAceStepMusic } from "./acestep.js";
 import { songStepOnsets } from "./align.js";
 import { pickLoudestOffset, resolveArchiveMusic } from "./archive.js";
@@ -39,6 +46,7 @@ import {
   type Contributor,
   type CreditSection,
 } from "./credits.js";
+import { resolveElevenLabsProviders } from "./elevenlabs.js";
 import {
   audioDurationSec,
   availableFilters,
@@ -47,7 +55,6 @@ import {
   ENCODE_TIMEOUT_MS,
   encodeSlice,
   FFMPEG_BASE_ARGS,
-  isOnPath,
   mapLimit,
   type ProbedVideo,
   probeVideo,
@@ -56,6 +63,10 @@ import {
 } from "./ffmpeg.js";
 import { createLocalTitleBackground } from "./local-background.js";
 import { resolveLocalImage } from "./local-image.js";
+import {
+  describeMediaPreferences,
+  type MediaPreferences,
+} from "./media-preferences.js";
 import { resolveOmlxProviders } from "./omlx.js";
 import {
   type MediaProviders,
@@ -196,6 +207,10 @@ export interface CinematicOptions {
   captions: boolean;
   ffmpegPath: string;
   log: Logger;
+  // Which provider voices / scores / paints the cut, when the user pinned one
+  // (--narrator/--music/--image or $DAILIES_NARRATOR/…). Unset slots take the
+  // default chain in resolveMedia.
+  media?: MediaPreferences;
   // Called as each stage starts so the caller can show the user live progress
   // (this pass takes a while — LLM call, TTS, several encodes).
   onProgress?: (message: string) => void;
@@ -209,7 +224,7 @@ export interface CinematicOptions {
   // themed lyrics performed by a singing music model over the whole video). No TTS;
   // the video is re-timed so each step's footage lands while its lyric line is sung,
   // and captions (timed to the vocals) are burned in. Needs a lyrics-capable music
-  // provider (ACE-Step or Gemini Lyria).
+  // provider (ACE-Step, ElevenLabs Music, or Gemini Lyria).
   song?: boolean;
 }
 
@@ -626,6 +641,8 @@ function musicToolName(id: string | undefined): string | undefined {
       return "Music — archive.org (Creative Commons)";
     case "acestep-music":
       return "Music — ACE-Step 1.5 (local)";
+    case "elevenlabs-music":
+      return "Music — Eleven Music (ElevenLabs)";
     case "gemini-music":
       return "Music — Lyria (Google Gemini)";
     default:
@@ -646,6 +663,9 @@ export function voiceCredit(
   }
   if (ttsId === "gemini-tts") {
     return `Voice — ${label.replace(/^gemini:/, "")} (Google Gemini)`;
+  }
+  if (ttsId === "elevenlabs-tts") {
+    return `Voice — ${label.replace(/^elevenlabs:/, "")} (ElevenLabs)`;
   }
   // macOS `say` (or a $DAILIES_SAY_COMMAND override): the label is the voice/command.
   return label ? `Voice — ${label}` : "Voice — system speech";
@@ -704,6 +724,8 @@ export function titleArtToolName(id: string | undefined): string | undefined {
   switch (id) {
     case "gemini-image":
       return "Title art — Nano Banana (Google Gemini)";
+    case "elevenlabs-image":
+      return "Title art — ElevenLabs Image";
     case "local-image":
       return "Title art — local image model";
     case "wikimedia-image":
@@ -1516,7 +1538,7 @@ async function synthesizeClips(args: {
     const synth: SpeechSynth = {
       ext: "wav",
       run: (t, o) => tts.synthesize(t, o),
-      tempo: ttsTempo(),
+      tempo: ttsTempo(process.env, tts.tempo),
     };
     let down = false;
     const voiced = await mapLimit(jobs, limit, async (job) => {
@@ -2340,15 +2362,18 @@ interface CinematicContext {
   input: string;
   log: Logger;
   narratableSteps: CinematicStep[];
+  // `--image none`: no title background at all (a solid card), not even the
+  // always-available local gradient.
+  noTitleBackground: boolean;
   // Degradation notes, appended to by reference all the way down (providers push
   // per-track attribution into it at fetch time).
   notes: string[];
   options: CinematicOptions;
   progress: (message: string) => void;
   providers: MediaProviders;
-  // A music model that actually SINGS supplied lyrics (ACE-Step / Lyria) — song
-  // mode's requirement. Undefined when none is configured; stock music
-  // (archive.org) is never eligible even when it won the normal chain.
+  // A music model that actually SINGS supplied lyrics (ACE-Step / ElevenLabs /
+  // Lyria) — song mode's requirement. Undefined when none is configured; stock
+  // music (archive.org) is never eligible even when it won the normal chain.
   singingMusic: MusicProvider | undefined;
   // Sibling temp files, removed by cinematicProcess's finally even on a partial
   // failure. Every stage appends to this SAME array by reference.
@@ -2372,80 +2397,319 @@ async function resolvePrecinematicSource(videoPath: string): Promise<string> {
   }
 }
 
-// Resolve the media providers, preferred local-first: oMLX (on-machine MLX
-// models) wins per capability, then Gemini (if a key is set), then the local
-// say/drawtext fallbacks. Each is best-effort — a failure degrades to the next.
-// oMLX is probed (it lists its loaded models) only when it's configured.
+// The providers each slot COULD use this run, gathered from the environment
+// (local servers probed, keys read) before any preference is applied. Kept
+// apart from the selection below so the selection is pure and unit-tested.
+export interface MediaCandidates {
+  archiveExplicit: boolean;
+  image: {
+    elevenlabs?: TitleBackgroundProvider;
+    gemini?: TitleBackgroundProvider;
+    local?: TitleBackgroundProvider;
+    wikimedia?: TitleBackgroundProvider;
+  };
+  music: {
+    acestep?: MusicProvider;
+    // Present when switched on explicitly (a pin or $DAILIES_ARCHIVE_MUSIC=1)
+    // OR auto-enabled as the no-model fallback; `archiveExplicit` says which.
+    archive?: MusicProvider;
+    elevenlabs?: MusicProvider;
+    gemini?: MusicProvider;
+  };
+  tts: {
+    elevenlabs?: TtsProvider;
+    gemini?: TtsProvider;
+    omlx?: TtsProvider;
+  };
+}
+
+export interface MediaSelection {
+  // `--image none`: a solid card, not even the local gradient.
+  noTitleBackground: boolean;
+  // Degradation/selection notes for the user (a pin that couldn't be honored).
+  notes: string[];
+  providers: MediaProviders;
+  singingMusic: MusicProvider | undefined;
+  // A pin that can't be honored for what the cut cannot do without (the
+  // narrator in narration mode, the singer in song mode). The pass is skipped
+  // with this reason rather than quietly voiced by something else — the same
+  // rule $DAILIES_LLM applies to the text provider.
+  skip?: string;
+}
+
+// The fix for a pinned provider that isn't available, by provider name.
+const UNAVAILABLE_HINT: Record<string, string> = {
+  acestep:
+    "start the ACE-Step server (DAILIES_ACESTEP_URL for a non-default port)",
+  archive: "archive.org music needs ffmpeg and network access",
+  elevenlabs: "set ELEVENLABS_API_KEY",
+  gemini:
+    "set GEMINI_API_KEY (or GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account)",
+  local: "set DAILIES_IMAGE_URL to an OpenAI-images-compatible server",
+  omlx: "run an oMLX server with a TTS model loaded (DAILIES_OMLX_URL / DAILIES_OMLX_API_KEY)",
+  wikimedia: "Wikimedia Commons needs network access",
+};
+
+function unavailable(name: string): string {
+  return `${name} is not available — ${UNAVAILABLE_HINT[name] ?? "not configured"}`;
+}
+
+// Pick ONE provider per slot from the candidates. Without a preference the
+// order is local-first, then hosted keys, then the free/stock fallbacks:
+//   narrator    oMLX → ElevenLabs → Gemini → (macOS `say`, chosen later)
+//   music       archive.org when forced on → ACE-Step → ElevenLabs → Gemini
+//               → archive.org as the no-model fallback
+//   title art   local image server → Gemini → Wikimedia → (local gradient,
+//               added later once the theme is known); the ElevenLabs image flow
+//               is opt-in only, so it is never chosen unpinned
+// A pinned slot takes exactly the named provider or degrades loudly (a note, or
+// a skip when the cut can't proceed without it) — never a silent switch.
+// Pure → unit-tested.
+export function selectMediaProviders(args: {
+  candidates: MediaCandidates;
+  preferences?: MediaPreferences;
+  song?: boolean;
+}): MediaSelection {
+  const { candidates, preferences = {}, song = false } = args;
+  const narrator = selectNarrator(candidates, preferences, song);
+  const score = selectMusic(candidates, preferences);
+  const singer = song ? selectSinger(candidates, preferences, score.music) : {};
+  const art = selectTitleArt(candidates, preferences);
+  const notes = [narrator.note, score.note, art.note].filter((n): n is string =>
+    Boolean(n)
+  );
+  return {
+    noTitleBackground: art.noTitleBackground,
+    notes,
+    providers: {
+      tts: narrator.tts,
+      music: score.music,
+      titleBackground: art.titleBackground,
+      notes: [],
+    },
+    singingMusic: singer.singingMusic,
+    skip: narrator.skip ?? singer.skip,
+  };
+}
+
+// Narrator slot. Song mode has no spoken narration, so a narrator pin is moot
+// there; `say` is expressed as an EMPTY slot (resolveSpeech then takes the
+// `say` path).
+function selectNarrator(
+  c: MediaCandidates,
+  p: MediaPreferences,
+  song: boolean
+): { tts?: TtsProvider; note?: string; skip?: string } {
+  if (song) {
+    return p.narrator
+      ? {
+          note: `narrator "${p.narrator}" ignored — a song has no spoken narration`,
+        }
+      : {};
+  }
+  if (p.narrator === "say") {
+    return {};
+  }
+  if (p.narrator) {
+    const tts = c.tts[p.narrator];
+    return tts
+      ? { tts }
+      : {
+          skip: `narrator pinned to ${p.narrator} but ${unavailable(p.narrator)}`,
+        };
+  }
+  return { tts: c.tts.omlx ?? c.tts.elevenlabs ?? c.tts.gemini };
+}
+
+// Music slot (the score under narration; the credits swell).
+function selectMusic(
+  c: MediaCandidates,
+  p: MediaPreferences
+): { music?: MusicProvider; note?: string } {
+  if (p.music === "none") {
+    return { note: "no music (pinned to none)" };
+  }
+  if (p.music) {
+    const music = c.music[p.music];
+    return music
+      ? { music }
+      : {
+          note: `music pinned to ${p.music} but ${unavailable(p.music)}; no score`,
+        };
+  }
+  return {
+    music:
+      (c.archiveExplicit ? c.music.archive : undefined) ??
+      c.music.acestep ??
+      c.music.elevenlabs ??
+      c.music.gemini ??
+      c.music.archive,
+  };
+}
+
+// Song mode's singer: a model that sings OUR words. Stock music can't, so it is
+// excluded even when it won the music slot; a pin that can't sing skips the
+// pass rather than being quietly replaced.
+function selectSinger(
+  c: MediaCandidates,
+  p: MediaPreferences,
+  music: MusicProvider | undefined
+): { singingMusic?: MusicProvider; skip?: string } {
+  if (p.music === "none") {
+    return {
+      skip: "song mode needs a music model, but music is pinned to none",
+    };
+  }
+  if (p.music) {
+    if (music?.singsLyrics) {
+      return { singingMusic: music };
+    }
+    return {
+      skip: music
+        ? `song mode needs a model that sings the lyrics — ${p.music} can't (pin elevenlabs, gemini or acestep instead)`
+        : `music pinned to ${p.music} but ${unavailable(p.music)}`,
+    };
+  }
+  return {
+    singingMusic: [c.music.acestep, c.music.elevenlabs, c.music.gemini].find(
+      (m) => m?.singsLyrics
+    ),
+  };
+}
+
+// Title-art slot. `gradient` and an unpinned miss both leave the slot EMPTY —
+// the local gradient is the default that fills it later, once the theme is
+// known; `none` asks for a solid card instead.
+function selectTitleArt(
+  c: MediaCandidates,
+  p: MediaPreferences
+): {
+  titleBackground?: TitleBackgroundProvider;
+  noTitleBackground: boolean;
+  note?: string;
+} {
+  if (p.image === "none") {
+    return { noTitleBackground: true };
+  }
+  if (p.image === "gradient") {
+    return { noTitleBackground: false };
+  }
+  if (p.image) {
+    const titleBackground = c.image[p.image];
+    return titleBackground
+      ? { titleBackground, noTitleBackground: false }
+      : {
+          noTitleBackground: false,
+          note: `title art pinned to ${p.image} but ${unavailable(p.image)}; using the local gradient`,
+        };
+  }
+  return {
+    titleBackground: c.image.local ?? c.image.gemini ?? c.image.wikimedia,
+    noTitleBackground: false,
+  };
+}
+
+// Resolve the media providers for this run: gather what's configured (local
+// servers are probed, keys read), then select per slot — see
+// selectMediaProviders for the order and how a pinned slot behaves. Each
+// provider is best-effort at render time: a failure degrades to the next local
+// fallback and is noted.
 async function resolveMedia(args: {
   ffmpeg: string;
   log: Logger;
   echo: Echo;
   notes: string[];
+  preferences?: MediaPreferences;
   // Song mode has no spoken narration, so oMLX (TTS-only) is neither used nor
   // relevant — skip it so its "no TTS model / using fallback narration" notes
   // don't surface on a cut that has no voice-over. Song's vocals come from the
-  // singing music model (ACE-Step / Lyria) resolved below.
+  // singing music model (ACE-Step / ElevenLabs / Lyria) resolved below.
   song?: boolean;
-}): Promise<{
-  providers: MediaProviders;
-  singingMusic: MusicProvider | undefined;
-}> {
-  const { ffmpeg, log, echo, notes, song = false } = args;
-  const omlx = song
-    ? { tts: undefined, notes: [] as string[] }
-    : await resolveOmlxProviders({ env: process.env, log, echo });
-  const acestep = await resolveAceStepMusic({ env: process.env, log, echo });
-  const gemini = resolveMediaProviders({ env: process.env, log });
-  // Title-background sources: a configured local image server ($DAILIES_IMAGE_URL)
-  // wins (explicit user config), then Gemini (Nano Banana), then Wikimedia
-  // Commons real imagery; the always-available local gradient is added later
-  // (once the theme is known) as the final fallback.
-  const localImage = resolveLocalImage({ env: process.env, log, echo });
+}): Promise<MediaSelection> {
+  const { ffmpeg, log, echo, notes, preferences, song = false } = args;
+  const env = process.env;
+  const pinned = describeMediaPreferences(preferences);
+  if (pinned) {
+    log.info({ preferences }, `media providers pinned: ${pinned}`);
+  }
+  const musicPin = preferences?.music;
+  const imagePin = preferences?.image;
+  const [omlx, acestep, elevenlabs] = await Promise.all([
+    song
+      ? Promise.resolve({ tts: undefined, notes: [] as string[] })
+      : resolveOmlxProviders({ env, log, echo }),
+    resolveAceStepMusic({ env, log, echo }),
+    // The ElevenLabs image flow is opt-in (Pro plan, async job) — only built
+    // when the user asked for it by name.
+    resolveElevenLabsProviders({
+      env,
+      log,
+      echo,
+      image: imagePin === "elevenlabs",
+    }),
+  ]);
+  const gemini = resolveMediaProviders({ env, log });
+  const localImage = resolveLocalImage({ env, log, echo });
   // Stock/free fallbacks: archive.org music and Wikimedia images turn ON
-  // automatically when no corresponding AI MODEL is configured, so a plain
-  // `--cinematic` run still gets a score + real title imagery with no key/GPU.
-  // An explicit $DAILIES_ARCHIVE_MUSIC/$DAILIES_WIKIMEDIA_IMAGES=1 forces them on
-  // (and, for music, takes precedence over the models); =0 forces them off.
-  // Both push per-track attribution into `notes` at fetch time by reference.
+  // automatically when no corresponding AI MODEL is configured (and no slot is
+  // pinned elsewhere), so a plain `--cinematic` run still gets a score + real
+  // title imagery with no key/GPU. A pin to them, or an explicit
+  // $DAILIES_ARCHIVE_MUSIC/$DAILIES_WIKIMEDIA_IMAGES=1, forces them on; =0
+  // forces them off. Both push per-track attribution into `notes` at fetch
+  // time by reference.
+  const hasMusicModel = Boolean(
+    acestep.music || elevenlabs.music || gemini.music
+  );
   const archive = resolveArchiveMusic({
-    env: process.env,
+    env,
     ffmpeg,
     log,
     notes,
     echo,
-    allowFallback: !(acestep.music || gemini.music),
+    force: musicPin === "archive",
+    allowFallback: !(musicPin || hasMusicModel),
   });
+  const hasImageModel = Boolean(
+    localImage.titleBackground || gemini.titleBackground
+  );
   const wikimedia = resolveWikimediaImage({
-    env: process.env,
+    env,
     notes,
     log,
     echo,
-    allowFallback: !(localImage.titleBackground || gemini.titleBackground),
+    force: imagePin === "wikimedia",
+    allowFallback: !(imagePin || hasImageModel),
   });
-  const providers: MediaProviders = {
-    tts: omlx.tts ?? gemini.tts,
-    // Prefer stock (archive.org) when opted in, then generated (ACE-Step),
-    // then Gemini Lyria.
-    music: archive.music ?? acestep.music ?? gemini.music,
-    titleBackground:
-      localImage.titleBackground ??
-      gemini.titleBackground ??
-      wikimedia.titleBackground,
-    notes: [],
-  };
-  notes.push(...omlx.notes, ...acestep.notes);
+  const selection = selectMediaProviders({
+    candidates: {
+      tts: { omlx: omlx.tts, elevenlabs: elevenlabs.tts, gemini: gemini.tts },
+      music: {
+        archive: archive.music,
+        acestep: acestep.music,
+        elevenlabs: elevenlabs.music,
+        gemini: gemini.music,
+      },
+      archiveExplicit: archive.explicit,
+      image: {
+        local: localImage.titleBackground,
+        gemini: gemini.titleBackground,
+        elevenlabs: elevenlabs.titleBackground,
+        wikimedia: wikimedia.titleBackground,
+      },
+    },
+    preferences,
+    song,
+  });
+  notes.push(...omlx.notes, ...acestep.notes, ...elevenlabs.notes);
   // Surface Gemini's notes only when Gemini is actually active, or when there's
-  // genuinely no local alternative — otherwise its "no key → using say … and no
-  // music" note contradicts the oMLX/ACE-Step/archive providers above.
-  if (gemini.tts || !(omlx.tts || providers.music)) {
+  // genuinely no hosted/local alternative — otherwise its "no key → using say"
+  // note contradicts the oMLX/ElevenLabs/ACE-Step/archive providers above.
+  const anyTts = Boolean(omlx.tts || elevenlabs.tts || gemini.tts);
+  if (gemini.tts || !(anyTts || selection.providers.music)) {
     notes.push(...gemini.notes);
   }
-  return {
-    providers,
-    // Song mode needs a model that sings OUR words; stock music can't, so it's
-    // excluded here even though it may have won `providers.music` above.
-    singingMusic: [acestep.music, gemini.music].find((m) => m?.singsLyrics),
-  };
+  notes.push(...selection.notes);
+  return selection;
 }
 
 // Check every precondition and resolve the shared context, or hand back the
@@ -2467,8 +2731,12 @@ async function prepareCinematic(args: {
   }
   await access(videoPath);
   const input = await resolvePrecinematicSource(videoPath);
-  if (!(await isOnPath("claude", ["--version"]))) {
-    return { skip: "`claude` CLI not found on PATH" };
+  // Some text provider has to write the narration or lyrics — the `claude`
+  // CLI, an OpenAI-compatible endpoint, or Apple Intelligence (see ../llm).
+  // Checked up front, before any encode, and worded the same way generateJson
+  // would fail, so the skip reason names the actual fix.
+  if ((await resolveProviders(process.env)).length === 0) {
+    return { skip: noProviderReason(process.env) };
   }
   // Narration mixing is the irreducible core; the title card and burned captions
   // degrade gracefully when this build lacks their filters.
@@ -2488,8 +2756,12 @@ async function prepareCinematic(args: {
     log,
     echo,
     notes,
+    preferences: options.media,
     song: options.song,
   });
+  if (media.skip) {
+    return { skip: media.skip };
+  }
   return {
     echo,
     ffmpeg: ffmpegPath,
@@ -2498,6 +2770,7 @@ async function prepareCinematic(args: {
     input,
     log,
     narratableSteps,
+    noTitleBackground: media.noTitleBackground,
     notes,
     options,
     progress,
@@ -2653,7 +2926,7 @@ async function runNarrationPass(
   const speech = await resolveSpeech(providers, notes, echo);
   if (!speech) {
     return notApplied(
-      "cinematic narration needs macOS `say` or a TTS provider (set GEMINI_API_KEY, or GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account)"
+      "cinematic narration needs macOS `say` or a TTS provider — set ELEVENLABS_API_KEY or GEMINI_API_KEY (GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account), run an oMLX TTS server, or point DAILIES_SAY_COMMAND at a say-compatible tool"
     );
   }
 
@@ -2666,13 +2939,16 @@ async function runNarrationPass(
   const { direction, narration, repoDir, base } = planned;
 
   // Default the title-card background to a local themed gradient when no
-  // generated-image provider (Gemini) is configured — network-free and always
+  // generated-image provider is configured — network-free and always
   // available, so a plain install still gets an intentional card. The palette
   // follows the resolved theme, so this waits until `direction` is known.
-  providers.titleBackground ??= createLocalTitleBackground(
-    ffmpeg,
-    direction.category
-  );
+  // `--image none` asks for a plain solid card instead.
+  if (!ctx.noTitleBackground) {
+    providers.titleBackground ??= createLocalTitleBackground(
+      ffmpeg,
+      direction.category
+    );
+  }
 
   // Voice + TTS: one clip per step that got narration text. The provider voices
   // it when available (else macOS `say`). Surface the chosen direction/voice/rate
@@ -3092,7 +3368,7 @@ async function runSongPass(ctx: CinematicContext): Promise<CinematicResult> {
   } = ctx;
   if (!singingMusic) {
     return notApplied(
-      "song mode needs a lyrics-capable music model — start the ACE-Step server (set DAILIES_ACESTEP_URL for a non-default port) or set GEMINI_API_KEY (or GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account)"
+      "song mode needs a lyrics-capable music model — set ELEVENLABS_API_KEY (Eleven Music) or GEMINI_API_KEY (Lyria; GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account), or start the ACE-Step server (DAILIES_ACESTEP_URL for a non-default port)"
     );
   }
 
@@ -3186,11 +3462,13 @@ async function runSongPass(ctx: CinematicContext): Promise<CinematicResult> {
   }
 
   // Build the (silent) video around the song: re-time, title, credits. Same
-  // local-gradient default as the narration path.
-  providers.titleBackground ??= createLocalTitleBackground(
-    ffmpeg,
-    direction.category
-  );
+  // local-gradient default (and `--image none` opt-out) as the narration path.
+  if (!ctx.noTitleBackground) {
+    providers.titleBackground ??= createLocalTitleBackground(
+      ffmpeg,
+      direction.category
+    );
+  }
   const assembled = await assembleSongVideo({
     ffmpeg,
     videoPath: input,

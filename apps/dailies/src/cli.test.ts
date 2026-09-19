@@ -70,3 +70,37 @@ describe("unknown flag errors", () => {
     expect(err).not.toContain("help: valid flags");
   });
 });
+
+describe("media provider pins", () => {
+  it("rejects an unknown provider in one turn, listing the valid ones", async () => {
+    const { code, err } = await run([
+      "session",
+      "end",
+      "some-session-id",
+      "--narrator",
+      "polly",
+    ]);
+
+    expect(code).toBe(2);
+    expect(err).toContain(
+      '--narrator "polly" is not a narration voice provider'
+    );
+    expect(err).toContain("elevenlabs, gemini, omlx, say");
+  });
+
+  it("checks every slot, naming the one that is wrong", async () => {
+    const { code, err } = await run([
+      "session",
+      "end",
+      "some-session-id",
+      "--narrator",
+      "elevenlabs",
+      "--image",
+      "dalle",
+    ]);
+
+    expect(code).toBe(2);
+    expect(err).toContain('--image "dalle"');
+    expect(err).toContain("gradient, none");
+  });
+});

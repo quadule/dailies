@@ -166,12 +166,14 @@ CINEMATIC MODE (--cinematic): turn the silent recording into a narrated short.
 An LLM writes themed narration per step, a voice reads it, and each step's frame is held just
 long enough for its line; an opening title card and burned-in captions are added, plus a sibling
 .srt. A single background song plays quietly under the narration and swells to full for the
-credits. Requires the 'claude' CLI; voicing uses a local oMLX TTS model if available, else macOS
-'say', else a Gemini key (so it can run off macOS with oMLX or a key). The title card needs an
-ffmpeg built with drawtext and burned captions need the subtitles filter (otherwise it writes a
-soft-sub .srt and tells you). Every generation command (say/ffmpeg/claude, and a redacted curl
-for HTTP TTS) is printed so a run is easy to reproduce and tweak. Re-running --cinematic on an
-already-condensed session reuses the preserved pre-cinematic cut (it won't re-condense).
+credits. Needs a text provider (the 'claude' CLI by default — see $DAILIES_LLM) and a voice: a
+local oMLX TTS model if one is running, else an ElevenLabs or Gemini key, else macOS 'say' (so it
+runs off macOS with oMLX or a key). Pin any of those with --narrator/--music/--image, below. The
+title card needs an ffmpeg built with drawtext and burned captions need the subtitles filter
+(otherwise it writes a soft-sub .srt and tells you). Every generation command (say/ffmpeg/claude,
+and a redacted curl for HTTP providers) is printed so a run is easy to reproduce and tweak.
+Re-running --cinematic on an already-condensed session reuses the preserved pre-cinematic cut (it
+won't re-condense).
 
 SONG MODE (--song): score the whole video with ONE original song instead of spoken narration.
 An LLM writes ONE short, singable lyric line per SECTION (consecutive short steps are grouped so a
@@ -183,10 +185,11 @@ on PATH (autodetected, English-only, in order: whisperx → mlx_whisper → whis
 models are pulled from the HuggingFace cache), the song is transcribed and the captions are timed to
 the ACTUAL singing — the instrumental intro is trimmed off and the clean lyric lines are placed at
 the vocals (only the lines the model actually sang). Without one, captions fall back to step times.
-Use --no-captions to skip them. Needs the
-'claude' CLI plus a lyrics-capable music model: the local ACE-Step server (see $DAILIES_ACESTEP_URL)
-or a Gemini key (Lyria). Combine with --prompt to steer the genre — that override is yours to ask
-for; an agent running the session should leave it off and let the theme be drawn.
+Use --no-captions to skip them. Needs a
+text provider plus a lyrics-capable music model: the local ACE-Step server (see $DAILIES_ACESTEP_URL),
+an ElevenLabs key (Eleven Music), or a Gemini key (Lyria) — pick one with --music. Combine with
+--prompt to steer the genre — that override is yours to ask for; an agent running the session
+should leave it off and let the theme be drawn.
 
   --song              score the video with a sung song instead of narration (implies --cinematic)
   --prompt "<text>"   steer theme/tone/style in your own words (implies --cinematic);
@@ -194,6 +197,20 @@ for; an agent running the session should leave it off and let the theme be drawn
                       Re-run --cinematic with a new --prompt anytime: the pre-cinematic cut is
                       preserved beside the video, so a re-theme is fast and needs no re-recording.
   --no-captions       skip burning subtitles into the video (the .srt is still written)
+
+PROVIDERS: each slot of the cut is filled by the first configured provider, local first —
+  narration   oMLX → ElevenLabs → Gemini → macOS say
+  music       ACE-Step → ElevenLabs → Gemini (Lyria) → archive.org (free, Creative Commons)
+  title art   local image server → Gemini (Nano Banana) → Wikimedia Commons → a themed gradient
+Pin a slot when the person asked for a specific one. A pin is exact: the named provider is used,
+or the slot degrades with a note — the narrator (or the singer, with --song) skips the pass
+rather than being quietly voiced by something else.
+  --narrator <p>      who voices the narration: elevenlabs | gemini | omlx | say
+  --music <p>         who composes the score, and sings with --song: elevenlabs | gemini | acestep |
+                      archive | none
+  --image <p>         who paints the title-card background: elevenlabs | gemini | local | wikimedia |
+                      gradient | none   (elevenlabs is opt-in only — it needs a Pro plan)
+  $DAILIES_NARRATOR / $DAILIES_MUSIC / $DAILIES_IMAGE   the same pins from the environment
   $DAILIES_LLM        pin the text provider: claude (default, needs the claude CLI),
                       openai (needs $DAILIES_LLM_URL), or apple (Apple Intelligence,
                       on-device, macOS 26+). Unset tries each in that order and skips
@@ -212,6 +229,17 @@ for; an agent running the session should leave it off and let the theme be drawn
   $DAILIES_TTS_CONCURRENCY   how many narration lines to voice at once (default 4, capped by your
                         core count). Set 1 to voice them one at a time, or raise it if your TTS
                         server is happy being pushed harder
+  $DAILIES_TTS_TEMPO    speed-up applied to hosted-TTS narration, pitch-preserving (default 1.2 for
+                        Gemini, 1.1 for ElevenLabs; 1 disables it)
+  $ELEVENLABS_API_KEY   ElevenLabs: narration (text-to-speech) and music (Eleven Music) switch on
+                        with the key; the title image (--image elevenlabs) needs a Pro plan.
+                        $DAILIES_ELEVENLABS_VOICE pins a voice (id or name; one of your voices is
+                        drawn per run otherwise), $DAILIES_ELEVENLABS_MODEL / _MUSIC_MODEL /
+                        _IMAGE_MODEL the models (eleven_multilingual_v2 / music_v2_5 /
+                        gemini-3.1-flash-image)
+  $GEMINI_API_KEY / $GOOGLE_APPLICATION_CREDENTIALS   Google: narration (Gemini TTS), music (Lyria)
+                        and the title image (Nano Banana), via an AI Studio key or a Vertex service
+                        account. $DAILIES_TTS_VOICE pins the Gemini voice
   $DAILIES_OMLX_URL / $DAILIES_OMLX_API_KEY / $DAILIES_OMLX_TTS_MODEL   use a local oMLX server for
                         TTS (narration stays on your machine); key also read from ~/.omlx
   $DAILIES_ARCHIVE_MUSIC   free Creative-Commons music from archive.org (attribution added to the
@@ -237,8 +265,9 @@ for; an agent running the session should leave it off and let the theme be drawn
 
   dailies session end "$id"
   dailies session end "$id" --cinematic
+  dailies session end "$id" --cinematic --narrator elevenlabs --music none
   dailies session end "$id" --song
-  dailies session end "$id" --song --prompt "80s power ballad"`;
+  dailies session end "$id" --song --music gemini --prompt "80s power ballad"`;
 
 export const STOP_LONG_ABOUT = `Stop the background daemon and everything it is running (all browsers and sessions).
 

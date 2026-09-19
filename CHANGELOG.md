@@ -36,6 +36,22 @@
 
 ### Added
 
+- **ElevenLabs as a media provider.** Set `ELEVENLABS_API_KEY` and the cinematic cut is narrated
+  by an ElevenLabs voice (`eleven_multilingual_v2`; one of your voices is drawn per run, or pin one
+  with `$DAILIES_ELEVENLABS_VOICE`) and scored by Eleven Music (`music_v2_5`), which also sings the
+  lyrics in `--song` mode. The key is validated once up front — a rejected key disables the provider
+  with a note instead of failing every clip — and every call is echoed as a redacted curl. Its image
+  flow (`--image elevenlabs`) is opt-in because it needs a Pro plan. Between hosted keys ElevenLabs
+  is tried before Gemini; local servers (oMLX, ACE-Step) still come first.
+- **Pin the narrator, the music, or the title art.** `session end --narrator <elevenlabs|gemini|
+  omlx|say>`, `--music <elevenlabs|gemini|acestep|archive|none>` and `--image <elevenlabs|gemini|
+  local|wikimedia|gradient|none>` (or `$DAILIES_NARRATOR` / `$DAILIES_MUSIC` / `$DAILIES_IMAGE`)
+  choose the provider for one slot when several are configured. A pin follows the `$DAILIES_LLM`
+  rule — the named provider or a loud degradation, never a silent switch: a pinned narrator (or
+  singer) that isn't set up skips the pass with the reason; pinned music or title art falls back
+  with a note. Common spellings ("Lyria", "ACE-Step", "archive.org", "off") are accepted, and the
+  skills tell an agent to pass a user's named provider through rather than pick one for them.
+
 - **`session end --attach <file>` and `--metric name=value`.** Attach copies any external file into
   the session's `attachments/`, which surfaces in `results.json` and the report next to the trace
   and video — a coverage report, a Lighthouse score, an accessibility audit. It copies *before* the
@@ -149,6 +165,10 @@
 
 ### Fixed
 
+- **`--cinematic` no longer demands the `claude` binary.** The pass gated on `claude --version`
+  even though narration can come from an OpenAI-compatible endpoint or Apple Intelligence
+  (`$DAILIES_LLM`), so a Linux box with only `$DAILIES_LLM_URL` set was told the CLI was missing. It
+  now checks for any usable text provider and names the same fix `generateJson` would.
 - Releases publish from a **manual workflow run** instead of on any `v*` tag push, so tagging a
   release and publishing it are separate decisions and an accidental `git push --tags` can't reach
   the registry. The run refuses to continue unless the version typed matches the workspace.

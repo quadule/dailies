@@ -32,9 +32,12 @@
 #
 # REQUIRED REPO SECRETS:
 #   ANTHROPIC_API_KEY  — the Claude Code agent + `claude -p` narration
-#   GEMINI_API_KEY     — TTS / title image / music. CI is Linux, so there is no
-#                        macOS `say`: without this key a cinematic run has no
-#                        voice-over. Effectively required for narration.
+#   plus ONE voice key. CI is Linux, so there is no macOS `say`: without one a
+#   cinematic run has no voice-over.
+#   ELEVENLABS_API_KEY — narration (ElevenLabs TTS) + music (Eleven Music)
+#   GEMINI_API_KEY     — narration (Gemini TTS) + title image + music (Lyria)
+#   Both set: ElevenLabs voices and scores, Gemini paints the title card. Pin a
+#   slot with DAILIES_NARRATOR / DAILIES_MUSIC / DAILIES_IMAGE in the env below.
 #
 # The video is attached to the PR comment with `gh pr comment --attach`, so it
 # plays inline. That flag shipped in gh 2.99.0 (2026-09-01) and runners' preinstalled
@@ -323,6 +326,7 @@ jobs:
         timeout-minutes: 12
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GH_TOKEN: ${{ github.token }}
           TARGET: ${{ matrix.target }}
@@ -419,6 +423,7 @@ jobs:
         id: finalize
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MODE: ${{ matrix.mode }}
           PROMPT: ${{ matrix.prompt }}

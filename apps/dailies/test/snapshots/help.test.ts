@@ -106,3 +106,26 @@ describe("--help content", () => {
     expect(out.stdout).not.toContain("--connect");
   });
 });
+
+describe("session end --help: providers", () => {
+  it("documents the provider pins and what each provider needs", async () => {
+    const out = await runCli(["session", "end", "--help"]);
+    expect(out.code).toBe(0);
+
+    for (const flag of [
+      "--narrator <provider>",
+      "--music <provider>",
+      "--image <provider>",
+    ]) {
+      expect(out.stdout).toContain(flag);
+    }
+    expect(out.stdout).toContain("PROVIDERS:");
+    expect(out.stdout).toContain("$ELEVENLABS_API_KEY");
+    expect(out.stdout).toContain(
+      "$DAILIES_NARRATOR / $DAILIES_MUSIC / $DAILIES_IMAGE"
+    );
+    // The stale macOS-only / claude-only framing is gone.
+    expect(out.stdout).not.toContain("macOS only; needs `claude` and `say`");
+    expect(out.stdout).not.toContain("Requires the 'claude' CLI");
+  });
+});

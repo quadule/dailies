@@ -39,6 +39,12 @@ import { sessionTakeover } from "./commands/session-takeover.js";
 import { sessionUrl } from "./commands/session-url.js";
 import { statusCommand } from "./commands/status.js";
 import { logger } from "./logger.js";
+import {
+  IMAGE_CHOICES,
+  MUSIC_CHOICES,
+  NARRATOR_CHOICES,
+  parseMediaPreferences,
+} from "./video/media-preferences.js";
 
 // Injected at build time by scripts/build.mjs (esbuild `define`); falls back to
 // a dev sentinel when run unbundled via tsx/vitest.
@@ -154,7 +160,6 @@ async function readScriptFromStdin(): Promise<string> {
 }
 
 interface SessionStartOpts {
-  cinematic?: boolean;
   console: boolean;
   cursor: boolean;
   har: boolean;
@@ -179,7 +184,10 @@ interface SessionEndOpts {
   cinematic?: boolean;
   condense?: boolean;
   fail?: boolean | string;
+  image?: string;
   metric?: string[];
+  music?: string;
+  narrator?: string;
   open?: boolean;
   pass?: boolean;
   prompt?: string;
@@ -312,11 +320,23 @@ export function buildProgram(): CommandType {
     )
     .option(
       "--cinematic",
-      "Add LLM narration, a macOS voice-over, captions, and a title card (macOS only; needs `claude` and `say`)"
+      "Add LLM narration, a voice-over, captions, and a title card (needs ffmpeg, a text provider such as the `claude` CLI, and a voice: macOS `say` or a TTS key like ELEVENLABS_API_KEY / GEMINI_API_KEY)"
     )
     .option(
       "--song",
-      "Score the whole video with ONE sung song (LLM-written themed lyrics performed by a local/AI music model) instead of spoken narration; needs ACE-Step or GEMINI_API_KEY/GOOGLE_APPLICATION_CREDENTIALS (a flavor of --cinematic)"
+      "Score the whole video with ONE sung song (LLM-written themed lyrics performed by a local/AI music model) instead of spoken narration; needs ACE-Step, ELEVENLABS_API_KEY, or GEMINI_API_KEY/GOOGLE_APPLICATION_CREDENTIALS (a flavor of --cinematic)"
+    )
+    .option(
+      "--narrator <provider>",
+      `Who voices the narration: ${NARRATOR_CHOICES.join(" | ")}. Pins that slot — no silent fallback to another voice (implies --cinematic; default: the first configured, local first)`
+    )
+    .option(
+      "--music <provider>",
+      `Who composes the score, and sings in --song mode: ${MUSIC_CHOICES.join(" | ")}. Pins that slot; "none" means no music (implies --cinematic)`
+    )
+    .option(
+      "--image <provider>",
+      `Who paints the title-card background: ${IMAGE_CHOICES.join(" | ")}. Pins that slot; "gradient" is the built-in themed card, "none" a solid one (implies --cinematic)`
     )
     .option(
       "--video <page>",
@@ -341,17 +361,36 @@ export function buildProgram(): CommandType {
         process.stderr.write("Pass --pass or --fail, not both.\n");
         throw new ExitCodeError(2);
       }
+      // A bad provider name fails here, in one turn, rather than silently
+      // falling through to the default chain inside the cinematic pass.
+      const media = parseMediaPreferences({
+        narrator: opts.narrator,
+        music: opts.music,
+        image: opts.image,
+      });
+      if ("error" in media) {
+        process.stderr.write(`${media.error}\n`);
+        throw new ExitCodeError(2);
+      }
+      // Steering the cut (a prompt, or a provider named on the command line)
+      // only means anything for a cut, so each implies --cinematic. An env-var
+      // pin ($DAILIES_NARRATOR, …) does NOT: it configures the cut without
+      // asking for one.
+      const steered =
+        typeof opts.prompt === "string" ||
+        Boolean(opts.narrator || opts.music || opts.image);
       const code = await sessionEnd(id, isJson(program), {
         stopDaemon: opts.stopDaemon === true,
         attach: opts.attach,
         condense: opts.condense,
         metric: opts.metric,
         scrubHar: opts.scrubHar,
-        cinematic: opts.cinematic === true || typeof opts.prompt === "string",
+        cinematic: opts.cinematic === true || steered,
         song: opts.song === true,
         video: opts.video,
         prompt: opts.prompt,
         captions: opts.captions,
+        media: media.preferences,
         open: opts.open === true,
         verdict: resolveVerdict(opts),
       });

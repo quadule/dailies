@@ -427,23 +427,27 @@ export function resolveArchiveMusic(opts: {
   notes: string[];
   echo?: Echo;
   allowFallback?: boolean;
-}): Pick<MediaProviders, "music"> & { enabled: boolean } {
-  const { env, ffmpeg, log, notes, echo, allowFallback } = opts;
+  // The user pinned archive.org (`--music archive` / $DAILIES_MUSIC=archive):
+  // on regardless of the env flag or any configured model.
+  force?: boolean;
+}): Pick<MediaProviders, "music"> & { enabled: boolean; explicit: boolean } {
+  const { env, ffmpeg, log, notes, echo, allowFallback, force } = opts;
   const flag = env.DAILIES_ARCHIVE_MUSIC?.trim();
-  const explicit = flag === "1";
+  const explicit = force === true || flag === "1";
   // "0" is a hard off switch that also blocks the no-model fallback.
   const auto = allowFallback === true && flag !== "0";
   if (!(explicit || auto)) {
-    return { enabled: false };
+    return { enabled: false, explicit: false };
   }
-  log.debug({ auto }, "archive.org music provider enabled");
-  if (auto) {
+  log.debug({ auto, explicit }, "archive.org music provider enabled");
+  if (!explicit) {
     notes.push(
       "no music model configured — scoring with free Creative-Commons music from archive.org (reaches out to the network; set DAILIES_ARCHIVE_MUSIC=0 to disable)"
     );
   }
   return {
     enabled: true,
+    explicit,
     music: createMusicProvider({ ffmpeg, echo, log, notes }),
   };
 }

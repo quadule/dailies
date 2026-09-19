@@ -63,6 +63,17 @@ export async function resolveProviders(
   return available;
 }
 
+// Why there is nothing to generate with, worded as a fix the user can act on.
+// Shared by generateJson's error and the cinematic pass's precondition check so
+// both surfaces name the same remedy (and neither hardcodes the `claude` CLI as
+// the only option).
+export function noProviderReason(env: NodeJS.ProcessEnv = process.env): string {
+  const pinned = env.DAILIES_LLM?.trim();
+  return pinned
+    ? `no text provider named "${pinned}" ($DAILIES_LLM must be claude, openai or apple)`
+    : "no text provider available — install the `claude` CLI, set $DAILIES_LLM_URL for an OpenAI-compatible endpoint, or enable Apple Intelligence";
+}
+
 export type GenerateResult<T> =
   | { model: string; provider: ProviderId; value: T }
   | { error: string };
@@ -140,12 +151,7 @@ export async function generateJson<T>(args: {
 
   const providers = injected ?? (await resolveProviders(env));
   if (providers.length === 0) {
-    const pinned = env.DAILIES_LLM?.trim();
-    return {
-      error: pinned
-        ? `no text provider named "${pinned}" ($DAILIES_LLM must be claude, openai or apple)`
-        : "no text provider available — install the `claude` CLI, set $DAILIES_LLM_URL for an OpenAI-compatible endpoint, or enable Apple Intelligence",
-    };
+    return { error: noProviderReason(env) };
   }
 
   const declined: string[] = [];

@@ -334,17 +334,23 @@ export function resolveWikimediaImage(opts: {
   log: Logger;
   echo?: Echo;
   allowFallback?: boolean;
+  // The user pinned Wikimedia (`--image wikimedia` / $DAILIES_IMAGE=wikimedia):
+  // on regardless of the env flag or any configured image model.
+  force?: boolean;
 }): Pick<MediaProviders, "titleBackground"> & { enabled: boolean } {
-  const { env, notes, log, echo, allowFallback } = opts;
+  const { env, notes, log, echo, allowFallback, force } = opts;
   const flag = env.DAILIES_WIKIMEDIA_IMAGES?.trim();
-  const explicit = flag === "1";
+  const explicit = force === true || flag === "1";
   // "0" is a hard off switch that also blocks the no-model fallback.
   const auto = allowFallback === true && flag !== "0";
   if (!(explicit || auto)) {
     return { enabled: false };
   }
-  log.debug({ auto }, "Wikimedia Commons title-image provider enabled");
-  if (auto) {
+  log.debug(
+    { auto, explicit },
+    "Wikimedia Commons title-image provider enabled"
+  );
+  if (!explicit) {
     notes.push(
       "no image model configured — using an openly-licensed Wikimedia Commons photo for the title card (reaches out to the network; set DAILIES_WIKIMEDIA_IMAGES=0 to disable)"
     );

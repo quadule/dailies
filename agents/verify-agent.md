@@ -144,15 +144,26 @@ You turn a code change into a prioritized Dailies QA plan, then — on approval 
   point, so do NOT pass `--prompt` on your own initiative — omit it and let it draw. Pass
   `--prompt "<their words>"` only when the user asked for a specific genre or vibe, and pass their
   words through rather than inventing a theme for them. `--no-captions` drops the burned lyric
-  subtitles. Needs the `claude`
-  CLI plus a lyrics-capable music model — a local/remote ACE-Step server (`$DAILIES_ACESTEP_URL`) or
-  a Gemini key. Captions are timed to the actual vocals when a transcriber is found on PATH
+  subtitles. Needs a text provider (the `claude` CLI by default) plus a lyrics-capable music model —
+  a local/remote ACE-Step server (`$DAILIES_ACESTEP_URL`), an ElevenLabs key (`$ELEVENLABS_API_KEY`,
+  Eleven Music), or a Gemini key (Lyria). Captions are timed to the actual vocals when a transcriber
+  is found on PATH
   (autodetected, English-only: `whisperx` → `mlx_whisper` → whisper.cpp `whisper-cli`; models come
   from the HuggingFace cache); override with `$DAILIES_TRANSCRIBER`, `$DAILIES_WHISPER_CLI`,
   `$DAILIES_WHISPER_MODEL`. For the tightest timing, point `$DAILIES_TRANSCRIBE_URL` at an
   OpenAI-compatible server (e.g. a local Whisper-Large-v3-Turbo; `$DAILIES_TRANSCRIBE_MODEL` /
   `$DAILIES_TRANSCRIBE_API_KEY`) — it wins over the CLI backends. `$DAILIES_SONG_FILE` reuses a generated song. The voice/music env vars ($DAILIES_SAY_COMMAND, $DAILIES_OMLX_URL, …) are listed in
   `dailies session end --help`.
+- Who voices, scores and paints the cut is chosen automatically from what's configured (local
+  servers first, then hosted keys — ElevenLabs, Gemini — then free stock sources). When the user
+  names a provider for one of those slots, pass it through on `session end` rather than choosing
+  for them: `--narrator <elevenlabs|gemini|omlx|say>` for the narration voice,
+  `--music <elevenlabs|gemini|acestep|archive|none>` for the score (and the singer, with `--song`),
+  `--image <elevenlabs|gemini|local|wikimedia|gradient|none>` for the title-card background. Each
+  flag pins that slot exactly (their words like "Lyria" or "ACE-Step" are accepted as aliases), and
+  each implies `--cinematic`. Say nothing about providers the user didn't mention — leave those
+  flags off and let Dailies pick; a pinned provider that isn't set up fails loudly instead of
+  quietly switching, and `session end --help` lists what each one needs.
 <!-- dailies:end rule-caption -->
 
 <!-- dailies:snippet rule-effects -->

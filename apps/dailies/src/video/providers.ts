@@ -53,6 +53,13 @@ export interface TtsProvider {
   // Write spoken audio for `text` to `outPath` (any ffmpeg-decodable file).
   // Throws on failure.
   synthesize(text: string, outPath: string): Promise<void>;
+  // Optional: the playback speed-up the clip renderer should apply to this
+  // provider's audio (pitch-preserving atempo). Hosted TTS models read at
+  // different paces — Gemini needs a nudge toward voiceover pace, ElevenLabs
+  // barely any — and none expose a rate parameter, so each names its own.
+  // Unset means the shared hosted-TTS default; $DAILIES_TTS_TEMPO overrides
+  // either (see ttsTempo in speech.ts).
+  tempo?: number;
 }
 
 export interface TitleBackgroundProvider {
@@ -1057,7 +1064,7 @@ export function resolveMediaProviders(opts: {
 
   return {
     notes: [
-      "No GEMINI_API_KEY/GOOGLE_GENAI_API_KEY or GOOGLE_APPLICATION_CREDENTIALS set — using local narration (say), drawtext title card, and no music.",
+      "No hosted media key set (ELEVENLABS_API_KEY, GEMINI_API_KEY/GOOGLE_GENAI_API_KEY, or GOOGLE_APPLICATION_CREDENTIALS) — using local narration (say), a local title card, and stock music when available.",
     ],
   };
 }

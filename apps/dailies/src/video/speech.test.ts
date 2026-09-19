@@ -25,3 +25,21 @@ describe("ttsTempo", () => {
     expect(ttsTempo({ DAILIES_TTS_TEMPO: "" })).toBeCloseTo(1.2);
   });
 });
+
+describe("ttsTempo (provider hint)", () => {
+  it("takes the provider's own tempo when the env doesn't override it", () => {
+    // ElevenLabs reads at a voiceover pace already, so it asks for a milder
+    // nudge than the Gemini-tuned default.
+    expect(ttsTempo({}, 1.1)).toBeCloseTo(1.1);
+    expect(ttsTempo({}, 1)).toBe(1);
+  });
+
+  it("lets $DAILIES_TTS_TEMPO beat the provider hint", () => {
+    expect(ttsTempo({ DAILIES_TTS_TEMPO: "1.5" }, 1.1)).toBe(1.5);
+  });
+
+  it("ignores an out-of-range hint", () => {
+    expect(ttsTempo({}, 4)).toBeCloseTo(1.2);
+    expect(ttsTempo({}, Number.NaN)).toBeCloseTo(1.2);
+  });
+});

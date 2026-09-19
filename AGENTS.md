@@ -131,6 +131,32 @@ decision. One contract: return an object matching a JSON schema.
   `claude` CLI got 12/12 across the same suite. The resolve order puts Apple last for this reason,
   and `decideDemoWithAgent` warns when it was the decider. Don't reorder that without re-measuring.
 
+## Media providers (`apps/dailies/src/video/`)
+
+The cinematic cut has three media slots beside the text provider — the **narrator** (TTS), the
+**music** (the score; in `--song` mode, the singer), and the **title-card image**. Each provider is
+one module with the same contract (`providers.ts`: write a finished, ffmpeg-decodable file to
+`outPath` or throw), and the caller wraps every call so a failure degrades to the next local
+fallback with a note instead of failing the run:
+
+- `omlx.ts` (local TTS), `acestep.ts` (local music), `local-image.ts` (a local image server) —
+  probed, on when reachable.
+- `elevenlabs.ts` (TTS + Eleven Music; the image flow is opt-in) and `providers.ts` (Gemini via an
+  AI Studio key or a Vertex service account) — on when their key is set.
+- `archive.ts` (Creative-Commons music) and `wikimedia.ts` (openly-licensed photos) — free stock
+  fallbacks that switch on automatically when no model covers the slot; `local-background.ts` is
+  the always-available themed gradient.
+
+`narrate.ts` gathers the candidates and `selectMediaProviders` (pure, unit-tested) picks per slot:
+local first, then hosted keys, then stock. A user can **pin** a slot — `session end
+--narrator/--music/--image <provider>` or `$DAILIES_NARRATOR/$DAILIES_MUSIC/$DAILIES_IMAGE`, parsed
+in `media-preferences.ts` — and a pin follows the same rule as `$DAILIES_LLM`: the named provider
+or a loud degradation, never a silent switch (the narrator, or the singer in song mode, skips the
+pass; music and title art fall back with a note). The skills tell the agent to pass a user's named
+provider through and otherwise leave the flags off. Adding a provider means: a module with the
+contract above, a candidate entry in `resolveMedia`, a choice in `media-preferences.ts`, a credit
+line in `narrate.ts` (`voiceCredit` / `musicToolName` / `titleArtToolName`), and the help text.
+
 ## Artifact sensitivity
 
 A recorded session runs against a logged-in app, so its artifacts are not uniformly shareable:

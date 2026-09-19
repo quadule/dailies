@@ -51,8 +51,13 @@ const DEFAULT_TTS_TEMPO = 1.2;
 const MIN_TTS_TEMPO = 0.5;
 const MAX_TTS_TEMPO = 2;
 
-// Resolve the hosted-TTS speed-up. Pure → unit-tested.
-export function ttsTempo(env: NodeJS.ProcessEnv = process.env): number {
+// Resolve the hosted-TTS speed-up: an in-range $DAILIES_TTS_TEMPO wins, else the
+// provider's own `tempo` hint (`fallback`, see TtsProvider.tempo), else the
+// Gemini-tuned default above. Pure → unit-tested.
+export function ttsTempo(
+  env: NodeJS.ProcessEnv = process.env,
+  fallback: number = DEFAULT_TTS_TEMPO
+): number {
   const override = Number(env.DAILIES_TTS_TEMPO);
   if (
     Number.isFinite(override) &&
@@ -60,6 +65,14 @@ export function ttsTempo(env: NodeJS.ProcessEnv = process.env): number {
     override <= MAX_TTS_TEMPO
   ) {
     return override;
+  }
+  const hinted = Number(fallback);
+  if (
+    Number.isFinite(hinted) &&
+    hinted >= MIN_TTS_TEMPO &&
+    hinted <= MAX_TTS_TEMPO
+  ) {
+    return hinted;
   }
   return DEFAULT_TTS_TEMPO;
 }
@@ -281,7 +294,7 @@ export async function resolveSpeech(
       const fellBackToCompact = !chosen || chosen.quality === "Default";
       if (!(providers.tts || voiceOverride) && fellBackToCompact) {
         notes.push(
-          "no premium/enhanced English voice installed — narration uses the compact (robotic-sounding) voice; download one in System Settings › Accessibility › Spoken Content › System Voice (e.g. Ava, Zoe), or set GEMINI_API_KEY (or GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account) for higher-quality TTS"
+          "no premium/enhanced English voice installed — narration uses the compact (robotic-sounding) voice; download one in System Settings › Accessibility › Spoken Content › System Voice (e.g. Ava, Zoe), or set ELEVENLABS_API_KEY or GEMINI_API_KEY (or GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account) for higher-quality TTS"
         );
       }
     }
