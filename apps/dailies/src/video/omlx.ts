@@ -18,14 +18,16 @@
 // PRIVACY: the API key comes from env, or from the local oMLX config when (and
 // only when) the server is this machine; it is never logged, echoed (the curl
 // preview uses a $DAILIES_OMLX_API_KEY placeholder), or written to disk.
+
 import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Logger } from "dailies-logger";
+import { singleQuote } from "../util/shell.js";
 import { isLocalUrl } from "./acestep.js";
+import { listModelIds } from "./http.js";
 import { writeFileAtomic } from "./media-files.js";
 import type { MediaProviders, TtsProvider } from "./providers.js";
-import { singleQuote } from "./shell.js";
 
 const DEFAULT_URL = "http://127.0.0.1:8000";
 const MODELS_TIMEOUT_MS = 4000;
@@ -143,28 +145,6 @@ export function describeSpeechCurl(args: {
   ].join(" ");
 }
 
-// List the model ids the oMLX server has loaded, or null if it's unreachable /
-// errors (so the caller treats oMLX as unavailable and falls back). The key
-// travels in the header only.
-async function listModelIds(config: OmlxConfig): Promise<string[] | null> {
-  try {
-    const res = await fetch(`${config.baseUrl}/v1/models`, {
-      headers: { Authorization: `Bearer ${config.apiKey}` },
-      signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      return null;
-    }
-    const body = (await res.json()) as { data?: Array<{ id?: unknown }> };
-    const ids = (body.data ?? [])
-      .map((m) => m.id)
-      .filter((id): id is string => typeof id === "string");
-    return ids;
-  } catch {
-    return null;
-  }
-}
-
 // POST one speech request and write the returned audio bytes to `outPath`.
 // Throws a clean Error (no key, no request text) on a non-2xx or transport
 // failure — a JSON error body (oMLX returns one) is detected via content-type.
@@ -247,7 +227,10 @@ export async function resolveOmlxProviders(opts: {
     return { notes: [] };
   }
   const config: OmlxConfig = { apiKey, baseUrl: omlxBaseUrl(env) };
-  const modelIds = await listModelIds(config);
+  const modelIds = await listModelIds(config.baseUrl, {
+    headers: { Authorization: `Bearer ${config.apiKey}` },
+    timeoutMs: MODELS_TIMEOUT_MS,
+  });
   if (!modelIds) {
     log.debug({ url: config.baseUrl }, "oMLX configured but not reachable");
     return { notes: [] };

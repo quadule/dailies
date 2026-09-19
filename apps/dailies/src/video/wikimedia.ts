@@ -12,9 +12,8 @@
 // forces it on and =0 turns it off, but it now also switches on by itself when
 // no image MODEL covers the title-card slot (announced in the notes) — it is the
 // stock fallback, mirroring archive.org for music. Only public GETs are made.
-import { writeFile } from "node:fs/promises";
 import type { Logger } from "dailies-logger";
-import { userAgent } from "./http.js";
+import { downloadTo, getJson } from "./http.js";
 import type { MediaProviders, TitleBackgroundProvider } from "./providers.js";
 
 const API_URL = "https://commons.wikimedia.org/w/api.php";
@@ -256,32 +255,6 @@ export function creditFor(image: CommonsImage): string {
 // I/O.
 // ---------------------------------------------------------------------------
 
-async function getJson(url: string): Promise<unknown> {
-  const res = await fetch(url, {
-    headers: { "user-agent": userAgent() },
-    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    throw new Error(`Wikimedia GET ${res.status}`);
-  }
-  return res.json();
-}
-
-async function downloadTo(url: string, outPath: string): Promise<void> {
-  const res = await fetch(url, {
-    headers: { "user-agent": userAgent() },
-    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    throw new Error(`Wikimedia download ${res.status}`);
-  }
-  const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.length === 0) {
-    throw new Error("Wikimedia returned 0 bytes");
-  }
-  await writeFile(outPath, bytes);
-}
-
 function createProvider(notes: string[], echo?: Echo): TitleBackgroundProvider {
   // The image this run actually used, so credit() can name its author.
   let used: CommonsImage | null = null;
@@ -304,13 +277,21 @@ function createProvider(notes: string[], echo?: Echo): TitleBackgroundProvider {
           width
         );
         echo?.(`$ curl -s ${searchUrl}`);
-        image = pickCommonsImage(await getJson(searchUrl));
+        image = pickCommonsImage(
+          await getJson(searchUrl, {
+            service: "Wikimedia",
+            timeoutMs: SEARCH_TIMEOUT_MS,
+          })
+        );
       }
       if (!image) {
         throw new Error("no permissively-licensed Wikimedia image matched");
       }
       echo?.(`$ curl -sL '${image.imageUrl}' -o '${outPath}'`);
-      await downloadTo(image.imageUrl, outPath);
+      await downloadTo(image.imageUrl, outPath, {
+        service: "Wikimedia",
+        timeoutMs: DOWNLOAD_TIMEOUT_MS,
+      });
       // CC-BY/BY-SA require attribution — record it in the run notes AND keep
       // the image so the credits roll can name the author too.
       used = image;

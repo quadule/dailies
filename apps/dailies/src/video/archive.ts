@@ -17,12 +17,13 @@
 // this provider trims it to the requested duration with ffmpeg (with a short
 // fade-out) — otherwise an over-long bed would extend the final video.
 import { execFile } from "node:child_process";
-import { rm, writeFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { Logger } from "dailies-logger";
-import { userAgent } from "./http.js";
+import { singleQuote } from "../util/shell.js";
+import { probeDurationSec } from "./ffmpeg.js";
+import { downloadTo, getJson } from "./http.js";
 import type { MediaProviders, MusicProvider } from "./providers.js";
-import { singleQuote } from "./shell.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -145,37 +146,6 @@ export function attributionFor(track: ArchiveTrack): string {
   return `music: "${track.title}"${who}${lic} — https://archive.org/details/${track.identifier}`;
 }
 
-async function getJson(url: string, timeoutMs: number): Promise<unknown> {
-  const res = await fetch(url, {
-    headers: { "user-agent": userAgent() },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) {
-    throw new Error(`archive.org GET ${res.status}`);
-  }
-  return res.json();
-}
-
-// Download a URL to a path (streamed to a Buffer; tracks are a few MB).
-async function downloadTo(
-  url: string,
-  outPath: string,
-  timeoutMs: number
-): Promise<void> {
-  const res = await fetch(url, {
-    headers: { "user-agent": userAgent() },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) {
-    throw new Error(`archive.org download ${res.status}`);
-  }
-  const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.length === 0) {
-    throw new Error("archive.org returned 0 bytes");
-  }
-  await writeFile(outPath, bytes);
-}
-
 export interface ArchiveDeps {
   echo?: Echo;
   ffmpeg: string;
@@ -183,39 +153,6 @@ export interface ArchiveDeps {
   notes: string[];
   // Injectable for tests; defaults to Math.random.
   random?: () => number;
-}
-
-// ffprobe usually sits beside ffmpeg with the same name suffix (mirrors narrate's
-// ffprobeFor). Used to learn a downloaded track's length so a window can be picked.
-function ffprobeFor(ffmpeg: string): string {
-  const slash = Math.max(ffmpeg.lastIndexOf("/"), ffmpeg.lastIndexOf("\\"));
-  const dir = slash >= 0 ? ffmpeg.slice(0, slash + 1) : "";
-  const base = slash >= 0 ? ffmpeg.slice(slash + 1) : ffmpeg;
-  return base.startsWith("ffmpeg")
-    ? dir + base.replace("ffmpeg", "ffprobe")
-    : "ffprobe";
-}
-
-async function probeDurationSec(ffmpeg: string, src: string): Promise<number> {
-  try {
-    const { stdout } = await execFileAsync(
-      ffprobeFor(ffmpeg),
-      [
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        src,
-      ],
-      { timeout: TRIM_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 }
-    );
-    const v = Number(stdout.trim());
-    return Number.isFinite(v) && v > 0 ? v : 0;
-  } catch {
-    return 0;
-  }
 }
 
 // Mean volume (dBFS) of a [startSec, startSec+seconds) slice via volumedetect.
@@ -294,7 +231,8 @@ export async function pickLoudestOffset(
   src: string,
   wantSec: number
 ): Promise<number> {
-  const dur = await probeDurationSec(ffmpeg, src);
+  const dur =
+    (await probeDurationSec(ffmpeg, src, { timeoutMs: TRIM_TIMEOUT_MS })) ?? 0;
   const maxStart = dur - wantSec;
   if (!(dur > 0) || maxStart <= 1) {
     return 0;
@@ -356,7 +294,12 @@ async function selectTrack(
 ): Promise<ArchiveTrack> {
   const searchUrl = buildSearchUrl(directionText, instrumental);
   deps.echo?.(`$ curl -s ${singleQuote(searchUrl)}`);
-  const tracks = parseSearchDocs(await getJson(searchUrl, SEARCH_TIMEOUT_MS));
+  const tracks = parseSearchDocs(
+    await getJson(searchUrl, {
+      service: "archive.org",
+      timeoutMs: SEARCH_TIMEOUT_MS,
+    })
+  );
   if (tracks.length === 0) {
     throw new Error("no archive.org tracks matched");
   }
@@ -378,7 +321,12 @@ async function downloadAndTrim(
   outPath: string
 ): Promise<void> {
   const metaUrl = `${META_BASE}/${track.identifier}`;
-  const file = pickAudioFile(await getJson(metaUrl, SEARCH_TIMEOUT_MS));
+  const file = pickAudioFile(
+    await getJson(metaUrl, {
+      service: "archive.org",
+      timeoutMs: SEARCH_TIMEOUT_MS,
+    })
+  );
   if (!file) {
     throw new Error(`no audio file in ${track.identifier}`);
   }
@@ -386,7 +334,10 @@ async function downloadAndTrim(
   const raw = `${outPath}.src`;
   deps.echo?.(`$ curl -sL ${singleQuote(dlUrl)} -o ${singleQuote(raw)}`);
   try {
-    await downloadTo(dlUrl, raw, DOWNLOAD_TIMEOUT_MS);
+    await downloadTo(dlUrl, raw, {
+      service: "archive.org",
+      timeoutMs: DOWNLOAD_TIMEOUT_MS,
+    });
     // Smarter section selection: play the loudest (fullest) window of the track,
     // not always its (often quiet) intro.
     const startSec = await pickLoudestOffset(deps.ffmpeg, raw, seconds);

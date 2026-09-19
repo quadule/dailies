@@ -13,10 +13,12 @@
 // PRIVACY: directionText is sent only to the configured (local by default) ACE-
 // Step server. Any API key is read from env, never logged or echoed (the curl
 // preview uses a $DAILIES_ACESTEP_API_KEY placeholder).
+
 import type { Logger } from "dailies-logger";
+import { singleQuote } from "../util/shell.js";
+import { listModelIds } from "./http.js";
 import { writeFileAtomic } from "./media-files.js";
 import type { MediaProviders, MusicProvider } from "./providers.js";
-import { singleQuote } from "./shell.js";
 
 const DEFAULT_URL = "http://127.0.0.1:8001";
 const MODELS_TIMEOUT_MS = 4000;
@@ -181,25 +183,6 @@ function authHeaders(config: AceStepConfig): Record<string, string> {
   return config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {};
 }
 
-// Probe reachability + list model ids, or null if unreachable.
-async function listModelIds(config: AceStepConfig): Promise<string[] | null> {
-  try {
-    const res = await fetch(`${config.baseUrl}/v1/models`, {
-      headers: authHeaders(config),
-      signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      return null;
-    }
-    const body = (await res.json()) as { data?: Array<{ id?: unknown }> };
-    return (body.data ?? [])
-      .map((m) => m.id)
-      .filter((id): id is string => typeof id === "string");
-  } catch {
-    return null;
-  }
-}
-
 async function generate(args: {
   config: AceStepConfig;
   directionText: string;
@@ -308,7 +291,10 @@ export async function resolveAceStepMusic(opts: {
     apiKey: env.DAILIES_ACESTEP_API_KEY?.trim() || undefined,
     model: env.DAILIES_ACESTEP_MODEL?.trim() || undefined,
   };
-  const models = await listModelIds(config);
+  const models = await listModelIds(config.baseUrl, {
+    headers: authHeaders(config),
+    timeoutMs: MODELS_TIMEOUT_MS,
+  });
   if (!models) {
     // Server not running — silent (it's an optional, heavy local service).
     return { notes: [] };
