@@ -1,11 +1,13 @@
 import { Command, InvalidArgumentError, Option } from "commander";
 import { isMainModule } from "dailies-cli-kit";
 import { ciDecide, ciMetrics, ciPreviousMetrics } from "./commands/ci.js";
+import { cutRender } from "./commands/cut-render.js";
 import { daemonStop } from "./commands/daemon-stop.js";
 import { execScript } from "./commands/exec.js";
 import {
   CI_LONG_ABOUT,
   CLI_LONG_ABOUT,
+  CUT_LONG_ABOUT,
   EXEC_LONG_ABOUT,
   EXEC_SCRIPTING_GUIDE,
   INIT_LONG_ABOUT,
@@ -622,6 +624,23 @@ export function buildProgram(): Command {
         sessionId: opts.session,
         json: isJson(program),
       });
+      throw new ExitCodeError(code);
+    });
+
+  const cut = program
+    .command("cut")
+    .description(
+      "Edit a finished recording: captions, cuts, holds, and voice-over"
+    )
+    .addHelpText("before", `${CUT_LONG_ABOUT}\n`);
+  cut
+    .command("render")
+    .description(
+      "Rebuild a session's video and report from its cut.json (prints the new video path)"
+    )
+    .argument("<id>", "Session id")
+    .action(async (id: string) => {
+      const code = await cutRender(id, isJson(program));
       throw new ExitCodeError(code);
     });
 

@@ -7,6 +7,7 @@ import {
   buildScriptingGuide,
   execExample,
   indent,
+  RULE_CUT_EDITING,
   RULE_DATA_PASSING,
   RULE_FAIL_FAST,
   RULE_SCREENSHOT,
@@ -322,3 +323,8 @@ next command starts the new one (a daemon with an open session or browser is lef
 
 export const INIT_LONG_ABOUT = `One-shot setup: install the browser runtime, then print next steps (where reports
 land, how to add the agent plugin). Run it once before your first session.`;
+
+export const CUT_LONG_ABOUT = `Edit a finished recording and re-render it — captions, cuts, holds, and a
+voice-over — without re-recording.
+
+${RULE_CUT_EDITING}`;

@@ -47,6 +47,7 @@ and the script.
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/145916b9-80ed-4154-858f-256d84783d19" />
 
 - **A film, not a log.** `--cinematic` turns a silent recording into a narrated short: an LLM writes the voice-over, a voice reads it, each step holds long enough to follow, with a title card, burned-in captions and credits. `--song` scores the whole thing with one original sung track instead.
+- **Edit it without re-recording.** Every recording comes with a `cut.json`: change a caption, cut a stretch, hold on a frame, add a voice-over (text-to-speech or your own recording), then `dailies cut render <id>`. Ask your agent to make the change and it edits the file for you.
 - **A different theme every time.** Omit `--prompt` and each cut draws from 300+ themes and styles, so a repetitive review job stays worth opening. `--prompt "1970s heist film, as a limerick"` when you want to choose.
 - **See exactly what happened.** Trace, video, network, console, and a screenshot of every step — captured automatically, with an on-screen cursor so you can see where the agent actually clicked.
 - **Reproducible by default.** Dailies turns each run into a real Playwright script. Let your agent discover a flow once; re-run it forever.

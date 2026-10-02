@@ -16,6 +16,8 @@ import {
   type SessionEndRequest,
   type SessionEndResult,
 } from "dailies-protocol";
+import { seedCut } from "../edit/cut.js";
+import { cutPath, writeCut } from "../edit/cut-file.js";
 import { logger } from "../logger.js";
 import { writeSessionReport } from "../report/load-and-render.js";
 import { endResultFromDisk } from "../session/artifacts.js";
@@ -945,6 +947,34 @@ export async function sessionEnd(
   // every path, including the re-finalize above that skips condensing — that is
   // the path where picking the wrong page would otherwise be permanent.
   await promotePrimaryVideo(endResult, opts.video);
+
+  // Seed the edit file on the run that condensed: only this run knows the
+  // captions in condensed time, and the step times are still the condensed ones
+  // (the cinematic pass below moves them). A re-finalize keeps the cut it has.
+  const primary = endResult.artifacts.find((a) => a.kind === "video");
+  if (
+    primary &&
+    opts.condense !== false &&
+    !alreadyCondensed &&
+    !existsSync(cutPath(id))
+  ) {
+    await writeCut(
+      id,
+      seedCut({
+        video: path.basename(primary.path),
+        steps: record.steps,
+        captions: cues,
+      })
+    )
+      .then((file) =>
+        process.stderr.write(
+          `  ✎ edit captions, trims and narration in ${file}, then run \`dailies cut render ${id}\`\n`
+        )
+      )
+      .catch((err) =>
+        logger.warn({ err, sessionId: id }, "could not write cut.json")
+      );
+  }
 
   // Cinematic narration (or a cinematic song) is opt-in and runs after condensing
   // (it keys off the stamped step.videoTime and the trimmed video). Default output

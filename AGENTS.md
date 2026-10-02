@@ -174,6 +174,29 @@ provider through and otherwise leave the flags off. Adding a provider means: a m
 contract above, a candidate entry in `resolveMedia`, a choice in `media-preferences.ts`, a credit
 line in `narrate.ts` (`voiceCredit` / `musicToolName` / `titleArtToolName`), and the help text.
 
+## Editing a finished recording (`apps/dailies/src/edit/`)
+
+A plain `session end` writes `cut.json` beside the session — an edit decision list seeded with the
+run's captions and step positions — and `dailies cut render <id>` rebuilds the video from it.
+
+- **Every time in a cut is source time**: seconds into the clean condensed cut (the
+  `*.precinematic.webm` sidecar). Cuts and holds move everything after them in the output, so
+  edits stored in output time would drift. `planCut`/`mapTime` (pure, `cut.ts`) map source →
+  output on each render; the edits never move.
+- **The seed is written only by the `session end` that condensed.** Caption cues exist in
+  condensed time only inside the condense pass; a re-finalize has none, so it keeps the existing
+  cut rather than writing an empty one. No cut file means the session can't be edited — there is
+  no back-fill for older sessions.
+- **`precinematicVideoTime` means "position in the clean source" everywhere.** A render stamps it
+  before overwriting `videoTime` with the output position, so re-renders and a later cinematic
+  pass still find each step.
+- **Generation is cached, assembly is not.** Voiced lines live in the session's `cut/` folder,
+  keyed by text + voice + speed (recordings by file size + mtime); the first render pins the
+  resolved voice into `cut.json` so later lines can't come out in a different voice. There is no
+  silent fallback to a second voice.
+- Spoken lines are loudness-normalized (−16 LUFS) so TTS and a laptop-mic recording match. A line
+  that runs past the picture extends the last frame; lines that overlap only warn.
+
 ## Artifact sensitivity
 
 A recorded session runs against a logged-in app, so its artifacts are not uniformly shareable:

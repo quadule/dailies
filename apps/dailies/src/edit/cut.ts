@@ -1,0 +1,594 @@
+// The edit file for a finished recording: `cut.json` in the session directory.
+//
+// A plain `session end` writes a seed cut (the run's own captions and step
+// markers) beside the condensed recording. Editing the cut — by hand, through an
+// agent, or later through an editor UI — and running `dailies cut render`
+// rebuilds the session video from the clean condensed source plus these edits.
+//
+// Every time in a cut is SOURCE time: seconds into the clean condensed cut (the
+// `*.precinematic.webm` sidecar), never into the rendered output. A cut range or
+// a hold moves everything after it in the output, so edits stored in output time
+// would drift the moment another edit landed before them. The renderer maps
+// source → output on every render; the edits themselves never move.
+//
+// This module is pure: parsing, validation, the seed, and the timeline plan.
+// Rendering (ffmpeg, TTS) lives in render.ts.
+
+import { mergeWindows, subtractSpans } from "../video/condense.js";
+import {
+  NARRATOR_CHOICES,
+  type NarratorChoice,
+} from "../video/media-preferences.js";
+
+export const CUT_FILE = "cut.json";
+export const CUT_VERSION = 1;
+
+// A recorded step's position, for orientation only. The renderer re-times steps
+// from the session record, so editing these changes nothing.
+export interface CutStep {
+  at: number;
+  name: string;
+}
+
+// A range of source footage to remove.
+export interface CutRange {
+  end: number;
+  start: number;
+}
+
+// Freeze the frame at `at` for `seconds`. Everything after it plays later.
+export interface CutHold {
+  at: number;
+  seconds: number;
+}
+
+// Text in the caption band, with no voice.
+export interface CutCaption {
+  end: number;
+  start: number;
+  text: string;
+}
+
+// A spoken line starting at `at`. Voiced by TTS unless `audio` names a recorded
+// file (relative to the session directory). The caption shows the spoken text
+// while it plays; `caption` replaces that text, and "" shows no caption.
+export interface CutLine {
+  at: number;
+  audio?: string;
+  caption?: string;
+  text: string;
+}
+
+// Who voices the TTS lines. `speed` scales the speaking pace (1 = normal).
+export interface CutVoice {
+  name?: string;
+  narrator?: NarratorChoice;
+  speed?: number;
+}
+
+export interface Cut {
+  captions: CutCaption[];
+  cuts: CutRange[];
+  holds: CutHold[];
+  narration: CutLine[];
+  steps: CutStep[];
+  version: typeof CUT_VERSION;
+  // The recording this cut finishes: its filename in the session's video/ dir.
+  video: string;
+  voice: CutVoice;
+}
+
+// ---------------------------------------------------------------------------
+// Parsing. Hand-rolled rather than a schema library: the CLI has no zod
+// dependency, and the errors need to read well to someone editing by hand.
+// ---------------------------------------------------------------------------
+
+type Obj = Record<string, unknown>;
+
+function isObj(value: unknown): value is Obj {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+class CutError extends Error {}
+
+function num(o: Obj, key: string, where: string, min = 0): number {
+  const value = o[key];
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min) {
+    throw new CutError(
+      `${where}.${key} must be a number${min === 0 ? " ≥ 0" : ` ≥ ${min}`} (seconds)`
+    );
+  }
+  return value;
+}
+
+function str(o: Obj, key: string, where: string): string {
+  const value = o[key];
+  if (typeof value !== "string") {
+    throw new CutError(`${where}.${key} must be a string`);
+  }
+  return value;
+}
+
+function optStr(o: Obj, key: string, where: string): string | undefined {
+  return o[key] === undefined ? undefined : str(o, key, where);
+}
+
+// Refuse keys the renderer doesn't read. A misspelled key ("hold" for "holds",
+// a per-line "voice") would otherwise parse cleanly and silently do nothing —
+// exactly the mistake an editor, human or agent, can't see in the output.
+function onlyKeys(o: Obj, allowed: readonly string[], where: string): void {
+  for (const key of Object.keys(o)) {
+    if (allowed.includes(key)) {
+      continue;
+    }
+    const guess = allowed.find(
+      (a) => a === `${key}s` || `${a}s` === key || a === key.toLowerCase()
+    );
+    const prefix = where ? `${where}: ` : "";
+    throw new CutError(
+      `${prefix}unknown key "${key}"${guess ? ` — did you mean "${guess}"?` : ` (expected ${allowed.join(", ")})`}`
+    );
+  }
+}
+
+function list<T>(
+  o: Obj,
+  key: string,
+  keys: readonly string[],
+  each: (item: Obj, where: string) => T
+): T[] {
+  const value = o[key];
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new CutError(`${key} must be a list`);
+  }
+  return value.map((item, i) => {
+    const where = `${key}[${i}]`;
+    if (!isObj(item)) {
+      throw new CutError(`${where} must be an object`);
+    }
+    onlyKeys(item, keys, where);
+    return each(item, where);
+  });
+}
+
+function parseVoice(value: unknown): CutVoice {
+  if (value === undefined) {
+    return {};
+  }
+  if (!isObj(value)) {
+    throw new CutError("voice must be an object");
+  }
+  onlyKeys(value, ["narrator", "name", "speed"], "voice");
+  const voice: CutVoice = {};
+  if (value.narrator !== undefined) {
+    const narrator = str(value, "narrator", "voice");
+    if (!(NARRATOR_CHOICES as readonly string[]).includes(narrator)) {
+      throw new CutError(
+        `voice.narrator must be one of ${NARRATOR_CHOICES.join(", ")}`
+      );
+    }
+    voice.narrator = narrator as NarratorChoice;
+  }
+  voice.name = optStr(value, "name", "voice");
+  if (voice.name !== undefined && voice.narrator === undefined) {
+    // A voice name only means something to one provider ("Ava (Premium)" is a
+    // macOS voice, "Charon" a Gemini one), so it can't stand alone.
+    throw new CutError(
+      "voice.name needs voice.narrator to say whose voice it is"
+    );
+  }
+  if (value.speed !== undefined) {
+    const speed = num(value, "speed", "voice");
+    if (speed < 0.5 || speed > 2) {
+      throw new CutError("voice.speed must be between 0.5 and 2");
+    }
+    voice.speed = speed;
+  }
+  return voice;
+}
+
+// Parse a cut.json document. Returns a readable error instead of throwing.
+export function parseCut(raw: unknown): { cut: Cut } | { error: string } {
+  try {
+    if (!isObj(raw)) {
+      throw new CutError("the cut must be a JSON object");
+    }
+    onlyKeys(
+      raw,
+      [
+        "version",
+        "video",
+        "voice",
+        "steps",
+        "cuts",
+        "holds",
+        "captions",
+        "narration",
+      ],
+      ""
+    );
+    if (raw.version !== CUT_VERSION) {
+      throw new CutError(`version must be ${CUT_VERSION}`);
+    }
+    const cut: Cut = {
+      version: CUT_VERSION,
+      video: str(raw, "video", "cut"),
+      steps: list(raw, "steps", ["name", "at"], (o, w) => ({
+        name: str(o, "name", w),
+        at: num(o, "at", w),
+      })),
+      cuts: list(raw, "cuts", ["start", "end"], (o, w) => {
+        const range = { start: num(o, "start", w), end: num(o, "end", w) };
+        if (range.end <= range.start) {
+          throw new CutError(`${w}.end must be after its start`);
+        }
+        return range;
+      }),
+      holds: list(raw, "holds", ["at", "seconds"], (o, w) => ({
+        at: num(o, "at", w),
+        seconds: num(o, "seconds", w),
+      })),
+      captions: list(raw, "captions", ["start", "end", "text"], (o, w) => {
+        const caption = {
+          start: num(o, "start", w),
+          end: num(o, "end", w),
+          text: str(o, "text", w),
+        };
+        if (caption.end <= caption.start) {
+          throw new CutError(`${w}.end must be after its start`);
+        }
+        return caption;
+      }),
+      narration: list(
+        raw,
+        "narration",
+        ["at", "text", "audio", "caption"],
+        (o, w) => {
+          const line: CutLine = {
+            at: num(o, "at", w),
+            text: str(o, "text", w),
+          };
+          const audio = optStr(o, "audio", w);
+          const caption = optStr(o, "caption", w);
+          if (audio !== undefined) {
+            line.audio = audio;
+          }
+          if (caption !== undefined) {
+            line.caption = caption;
+          }
+          if (!(line.text.trim() || line.audio)) {
+            throw new CutError(`${w} needs text to speak or an audio file`);
+          }
+          return line;
+        }
+      ),
+      voice: parseVoice(raw.voice),
+    };
+    return { cut };
+  } catch (err) {
+    if (err instanceof CutError) {
+      return { error: err.message };
+    }
+    throw err;
+  }
+}
+
+// Serialize a cut the way it is written to disk: stable key order, two-space
+// indent, trailing newline — so a hand edit diffs cleanly against a re-write.
+export function formatCut(cut: Cut): string {
+  const round = (n: number) => Math.round(n * 1000) / 1000;
+  const ordered = {
+    version: cut.version,
+    video: cut.video,
+    voice: cut.voice,
+    steps: cut.steps.map((s) => ({ name: s.name, at: round(s.at) })),
+    cuts: cut.cuts.map((c) => ({ start: round(c.start), end: round(c.end) })),
+    holds: cut.holds.map((h) => ({ at: round(h.at), seconds: h.seconds })),
+    captions: cut.captions.map((c) => ({
+      start: round(c.start),
+      end: round(c.end),
+      text: c.text,
+    })),
+    narration: cut.narration.map((l) => ({ ...l, at: round(l.at) })),
+  };
+  return `${JSON.stringify(ordered, null, 2)}\n`;
+}
+
+// The cut `session end` writes: the run's own captions and step markers, and no
+// edits. Rendering it reproduces the plain finalize.
+export function seedCut(args: {
+  video: string;
+  steps: { name: string; videoTime?: number }[];
+  captions: { startSec: number; endSec: number; text: string }[];
+}): Cut {
+  return {
+    version: CUT_VERSION,
+    video: args.video,
+    voice: {},
+    steps: args.steps.flatMap((s) =>
+      s.videoTime === undefined ? [] : [{ name: s.name, at: s.videoTime }]
+    ),
+    cuts: [],
+    holds: [],
+    captions: args.captions.map((c) => ({
+      start: c.startSec,
+      end: c.endSec,
+      text: c.text,
+    })),
+    narration: [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Timeline plan. Pure → unit-tested.
+// ---------------------------------------------------------------------------
+
+// One contiguous stretch of source footage in the output, with optional frozen
+// frames before and after it. `outStart` is where the piece (its start hold
+// included) begins in the output.
+export interface CutPiece {
+  endHoldSec: number;
+  outStart: number;
+  srcEnd: number;
+  srcStart: number;
+  startHoldSec: number;
+}
+
+export interface CutPlan {
+  fps: number;
+  // True when the plan is the source unchanged — nothing cut, nothing held — so
+  // the renderer can skip re-encoding the footage.
+  identity: boolean;
+  outDurationSec: number;
+  pieces: CutPiece[];
+  sourceDurationSec: number;
+  warnings: string[];
+}
+
+// Snap to the frame grid. Every slice boundary is a whole frame, so a slice is
+// either empty or at least one frame long, and the planned output length is the
+// length the encoder actually produces.
+function snapper(fps: number): (t: number) => number {
+  return (t) => Math.round(t * fps) / fps;
+}
+
+function fmt(sec: number): string {
+  return `${sec.toFixed(2)}s`;
+}
+
+function pieceSec(p: CutPiece): number {
+  return p.startHoldSec + (p.srcEnd - p.srcStart) + p.endHoldSec;
+}
+
+function restack(pieces: CutPiece[]): number {
+  let out = 0;
+  for (const piece of pieces) {
+    piece.outStart = out;
+    out += pieceSec(piece);
+  }
+  return out;
+}
+
+export function planCut(
+  cut: Pick<Cut, "cuts" | "holds">,
+  source: { durationSec: number; fps: number }
+): CutPlan {
+  const fps = source.fps > 0 ? source.fps : 30;
+  const snap = snapper(fps);
+  const duration = snap(source.durationSec);
+  const warnings: string[] = [];
+
+  const removed = mergeWindows(
+    cut.cuts.map((c) => ({ start: snap(c.start), end: snap(c.end) })),
+    duration
+  );
+  const keeps = subtractSpans([{ start: 0, end: duration }], removed).filter(
+    (k) => k.end - k.start > 0
+  );
+
+  // Group holds by their snapped frame; drop the ones that land in removed
+  // footage (there is no frame there to freeze).
+  const holdAt = new Map<number, number>();
+  for (const hold of cut.holds) {
+    if (hold.seconds <= 0) {
+      continue;
+    }
+    const at = snap(Math.min(hold.at, duration));
+    const kept = keeps.some((k) => at >= k.start && at <= k.end);
+    if (!kept) {
+      warnings.push(
+        `hold at ${fmt(hold.at)} is inside cut footage and was skipped`
+      );
+      continue;
+    }
+    holdAt.set(at, (holdAt.get(at) ?? 0) + hold.seconds);
+  }
+  // A hold on a boundary shared by two keeps can't happen (mergeWindows joins
+  // touching cuts, so keeps never touch), so each point belongs to one keep.
+  const points = [...holdAt.keys()].sort((a, b) => a - b);
+
+  const pieces: CutPiece[] = [];
+  for (const keep of keeps) {
+    let cursor = keep.start;
+    let startHold = holdAt.get(keep.start) ?? 0;
+    for (const p of points) {
+      if (p <= keep.start || p > keep.end) {
+        continue;
+      }
+      pieces.push({
+        srcStart: cursor,
+        srcEnd: p,
+        startHoldSec: startHold,
+        endHoldSec: holdAt.get(p) ?? 0,
+        outStart: 0,
+      });
+      startHold = 0;
+      cursor = p;
+    }
+    if (cursor < keep.end) {
+      pieces.push({
+        srcStart: cursor,
+        srcEnd: keep.end,
+        startHoldSec: startHold,
+        endHoldSec: 0,
+        outStart: 0,
+      });
+    }
+  }
+  const outDurationSec = restack(pieces);
+  return {
+    fps,
+    identity: removed.length === 0 && points.length === 0,
+    outDurationSec,
+    pieces,
+    sourceDurationSec: duration,
+    warnings,
+  };
+}
+
+// Extend the final frame by `seconds` — used when a spoken line would otherwise
+// run past the end of the picture and be cut off.
+export function extendTail(plan: CutPlan, seconds: number): CutPlan {
+  if (seconds <= 0 || plan.pieces.length === 0) {
+    return plan;
+  }
+  const pieces = plan.pieces.map((p) => ({ ...p }));
+  const last = pieces.at(-1) as CutPiece;
+  last.endHoldSec += seconds;
+  return {
+    ...plan,
+    pieces,
+    identity: false,
+    outDurationSec: restack(pieces),
+  };
+}
+
+// Where a source time lands in the output. A time inside removed footage maps
+// to where the footage after the cut begins, flagged `removed`. A time that is
+// exactly at a hold maps to the START of the freeze, so a caption or line placed
+// on a hold plays over it rather than after it.
+export function mapTime(
+  plan: CutPlan,
+  t: number
+): { out: number; removed: boolean } {
+  const at = snapper(plan.fps)(t);
+  const eps = 1e-6;
+  for (const p of plan.pieces) {
+    if (at < p.srcStart - eps) {
+      return { out: p.outStart, removed: true };
+    }
+    if (Math.abs(at - p.srcStart) <= eps) {
+      return { out: p.outStart, removed: false };
+    }
+    if (at < p.srcEnd - eps) {
+      return {
+        out: p.outStart + p.startHoldSec + (at - p.srcStart),
+        removed: false,
+      };
+    }
+    if (Math.abs(at - p.srcEnd) <= eps && p.endHoldSec > 0) {
+      return {
+        out: p.outStart + p.startHoldSec + (p.srcEnd - p.srcStart),
+        removed: false,
+      };
+    }
+  }
+  const last = plan.pieces.at(-1);
+  return {
+    out: plan.outDurationSec,
+    removed: !last || at > last.srcEnd + eps,
+  };
+}
+
+// Shortest caption worth keeping once cuts have eaten into it.
+const MIN_CAPTION_SEC = 0.3;
+
+export interface OutputCue {
+  end: number;
+  start: number;
+  text: string;
+}
+
+// Captions in output time: the free-standing captions plus each spoken line's
+// caption over its clip. When two overlap, the earlier yields to the next — two
+// cues on screen at once would stack in the band. Pure → unit-tested.
+export function outputCaptions(args: {
+  plan: CutPlan;
+  captions: CutCaption[];
+  lines: { line: CutLine; outStart: number; durationSec: number }[];
+  warnings: string[];
+}): OutputCue[] {
+  const { plan, captions, lines, warnings } = args;
+  const cues: OutputCue[] = [];
+  for (const caption of captions) {
+    const start = mapTime(plan, caption.start);
+    const end = mapTime(plan, caption.end);
+    if (end.out - start.out < MIN_CAPTION_SEC) {
+      warnings.push(
+        `caption "${caption.text}" is inside cut footage and was dropped`
+      );
+      continue;
+    }
+    cues.push({ start: start.out, end: end.out, text: caption.text });
+  }
+  for (const { line, outStart, durationSec } of lines) {
+    const text = line.caption ?? line.text;
+    if (text.trim()) {
+      cues.push({ start: outStart, end: outStart + durationSec, text });
+    }
+  }
+  cues.sort((a, b) => a.start - b.start);
+  for (let i = 0; i < cues.length - 1; i++) {
+    const cue = cues[i] as OutputCue;
+    const next = cues[i + 1] as OutputCue;
+    if (cue.end > next.start) {
+      cue.end = next.start;
+    }
+  }
+  return cues.filter((c) => c.end - c.start > 0);
+}
+
+// Spoken lines in output time, in order, with what's wrong with them: a line in
+// cut footage is dropped; one that runs into the next is flagged with the hold
+// that would fix it. Returns how far the last line runs past the picture, so the
+// caller can extend the tail instead of cutting the voice off. Pure → tested.
+export function layoutLines(args: {
+  plan: CutPlan;
+  lines: { line: CutLine; durationSec: number }[];
+  warnings: string[];
+}): {
+  placed: { line: CutLine; outStart: number; durationSec: number }[];
+  overrunSec: number;
+} {
+  const { plan, warnings } = args;
+  const placed: { line: CutLine; outStart: number; durationSec: number }[] = [];
+  for (const { line, durationSec } of args.lines) {
+    const mapped = mapTime(plan, line.at);
+    if (mapped.removed) {
+      warnings.push(
+        `line at ${fmt(line.at)} ("${line.text}") is inside cut footage and was dropped`
+      );
+      continue;
+    }
+    placed.push({ line, outStart: mapped.out, durationSec });
+  }
+  placed.sort((a, b) => a.outStart - b.outStart);
+  for (let i = 0; i < placed.length - 1; i++) {
+    const cur = placed[i] as (typeof placed)[number];
+    const next = placed[i + 1] as (typeof placed)[number];
+    const overlap = cur.outStart + cur.durationSec - next.outStart;
+    if (overlap > 0.05) {
+      warnings.push(
+        `line at ${fmt(cur.line.at)} runs ${fmt(overlap)} into the line at ${fmt(next.line.at)} — add a hold of about ${Math.ceil(overlap * 10) / 10}s at ${fmt(next.line.at)}, or move a line`
+      );
+    }
+  }
+  const last = placed.at(-1);
+  const overrunSec = last
+    ? Math.max(0, last.outStart + last.durationSec - plan.outDurationSec)
+    : 0;
+  return { placed, overrunSec };
+}

@@ -2041,10 +2041,10 @@ async function renderTitleSegment(args: {
 // Final pass: mix the delayed narration clips onto the concatenated video and
 // optionally burn captions. Captions force a video re-encode (libass), so the
 // no-caption branch can stream-copy the video track.
-async function mixAudioAndCaptions(args: {
+export async function mixAudioAndCaptions(args: {
   ffmpeg: string;
   videoPath: string;
-  clips: RenderedClip[];
+  clips: Pick<RenderedClip, "durationSec" | "m4aPath">[];
   offsetsSec: number[];
   music: MusicTrack[];
   srtPath: string;
@@ -2622,7 +2622,7 @@ function selectTitleArt(
 // selectMediaProviders for the order and how a pinned slot behaves. Each
 // provider is best-effort at render time: a failure degrades to the next local
 // fallback and is noted.
-async function resolveMedia(args: {
+export async function resolveMedia(args: {
   ffmpeg: string;
   log: Logger;
   echo: Echo;
