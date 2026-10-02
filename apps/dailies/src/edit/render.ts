@@ -12,14 +12,12 @@ import { existsSync } from "node:fs";
 import {
   copyFile,
   mkdir,
-  mkdtemp,
   readdir,
   rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { sessionDir } from "dailies-daemon-client";
 import { SESSION_VIDEO_DIR } from "dailies-protocol";
@@ -33,9 +31,7 @@ import { findFfmpeg } from "../video/condense.js";
 import {
   audioDurationSec,
   availableFilters,
-  concatSegments,
   ENCODE_TIMEOUT_MS,
-  encodeSlice,
   FFMPEG_BASE_ARGS,
   type ProbedVideo,
   probeDurationSec,
@@ -44,12 +40,13 @@ import {
 } from "../video/ffmpeg.js";
 import type { NarratorChoice } from "../video/media-preferences.js";
 import {
-  burnCaptionBand,
+  buildAudioMix,
   captionBandPx,
   captionFontPx,
-  mixAudioAndCaptions,
+  escapeSubtitlesPath,
   precinematicVideoPath,
   resolveMedia,
+  subtitleStyle,
   ttsConcurrency,
 } from "../video/narrate.js";
 import {
@@ -64,6 +61,7 @@ import {
   type Cut,
   type CutLine,
   type CutPlan,
+  cutVideoFilter,
   extendTail,
   layoutLines,
   mapTime,
@@ -468,41 +466,6 @@ async function loadCutSource(
   };
 }
 
-// The footage: the source itself when nothing is cut or held, otherwise one
-// encoded slice per piece, joined.
-async function renderBody(args: {
-  ffmpeg: string;
-  source: string;
-  plan: CutPlan;
-  tmp: string;
-  progress: (message: string) => void;
-}): Promise<string> {
-  const { ffmpeg, source, plan, tmp, progress } = args;
-  if (plan.identity) {
-    return source;
-  }
-  const count = plan.pieces.length;
-  progress(`cutting ${count} piece${count === 1 ? "" : "s"}…`);
-  const slices: string[] = [];
-  for (const [i, piece] of plan.pieces.entries()) {
-    const slice = path.join(tmp, `piece${i}.webm`);
-    await encodeSlice({
-      ffmpeg,
-      src: source,
-      startSec: piece.srcStart,
-      durSec: piece.srcEnd - piece.srcStart,
-      startHoldSec: piece.startHoldSec,
-      holdSec: piece.endHoldSec,
-      frameRate: plan.fps,
-      outPath: slice,
-    });
-    slices.push(slice);
-  }
-  const body = path.join(tmp, "body.webm");
-  await concatSegments(ffmpeg, slices, body, path.join(tmp, "list.txt"));
-  return body;
-}
-
 // Write the .srt sidecar (or remove a stale one) and say whether this ffmpeg
 // can burn it.
 async function writeCaptions(args: {
@@ -531,43 +494,64 @@ async function writeCaptions(args: {
   return false;
 }
 
-// Lay the voice and captions over the footage, into `outPath`.
-async function finishVideo(args: {
-  ffmpeg: string;
-  body: string;
-  placed: { line: CutLine; outStart: number; durationSec: number }[];
-  clipFor: Map<CutLine, string>;
-  srtPath: string;
-  burn: boolean;
+// The whole render as one ffmpeg call: the cut/hold filter, the caption band
+// and burn, and the voice mix, encoded once. Returns null when there is nothing
+// to do but copy the source (no edits, no captions, no voice). Pure → tested.
+//
+// One pass matters for speed and quality. Encoding each piece, joining them,
+// then re-encoding to burn captions and mix audio decoded and encoded the
+// footage twice; measured on a 29s 1440x900 cut, that was about 3 minutes
+// against 17s for the same output in one pass.
+export function singlePassArgs(args: {
+  source: string;
+  videoFilter: string;
+  burn?: { srtPath: string; bandPx: number; style: string };
+  clips: { path: string; offsetSec: number }[];
+  durationSec: number;
   outPath: string;
-  echo: Echo;
-  progress: (message: string) => void;
-}): Promise<void> {
-  const { ffmpeg, body, placed, clipFor, srtPath, burn, outPath, echo } = args;
-  if (placed.length > 0) {
-    args.progress(
-      burn ? "mixing audio and burning captions…" : "mixing audio…"
-    );
-    await mixAudioAndCaptions({
-      ffmpeg,
-      videoPath: body,
-      clips: placed.map((p) => ({
-        m4aPath: clipFor.get(p.line) as string,
-        durationSec: p.durationSec,
-      })),
-      offsetsSec: placed.map((p) => p.outStart),
-      music: [],
-      srtPath: burn ? srtPath : "",
-      burnCaptions: burn,
-      outPath,
-      echo,
-    });
-  } else if (burn) {
-    args.progress("burning captions…");
-    await burnCaptionBand({ ffmpeg, videoPath: body, srtPath, outPath, echo });
-  } else {
-    await copyFile(body, outPath);
+}): string[] | null {
+  const { source, videoFilter, burn, clips, durationSec, outPath } = args;
+  const videoChain = [
+    videoFilter,
+    ...(burn
+      ? [
+          `pad=iw:ih+${burn.bandPx}:0:0:color=black`,
+          `subtitles='${escapeSubtitlesPath(burn.srtPath)}':force_style='${burn.style}'`,
+        ]
+      : []),
+  ]
+    .filter(Boolean)
+    .join(",");
+  if (!videoChain && clips.length === 0) {
+    return null;
   }
+  const graph = [
+    ...(videoChain ? [`[0:v]${videoChain}[vout]`] : []),
+    ...(clips.length > 0
+      ? [
+          buildAudioMix(
+            clips.map((c) => ({ delayMs: Math.round(c.offsetSec * 1000) }))
+          ),
+        ]
+      : []),
+  ];
+  return [
+    ...FFMPEG_BASE_ARGS,
+    "-i",
+    source,
+    ...clips.flatMap((c) => ["-i", c.path]),
+    "-filter_complex",
+    graph.join(";"),
+    "-map",
+    videoChain ? "[vout]" : "0:v",
+    ...(videoChain ? ["-c:v", "libvpx", "-b:v", "1M"] : ["-c:v", "copy"]),
+    // WebM takes Opus, not the clips' AAC.
+    ...(clips.length > 0 ? ["-map", "[aout]", "-c:a", "libopus"] : ["-an"]),
+    // amix runs as long as its longest input; the picture sets the length.
+    "-t",
+    durationSec.toFixed(3),
+    outPath,
+  ];
 }
 
 // Re-time the steps and rebuild the report. precinematicVideoTime is the step's
@@ -654,26 +638,40 @@ export async function renderCut(args: {
     warnings,
   });
 
-  const tmp = await mkdtemp(path.join(os.tmpdir(), "dailies-cut-"));
+  const srtPath = `${videoPath}.captions.srt`;
+  const burn = await writeCaptions({ ffmpeg, srtPath, cues, probed, notes });
+  const clipFor = new Map(voicing.voiced.map((v) => [v.line, v.m4aPath]));
+  const bandPx = captionBandPx(probed.height);
+  // Beside the video, not in the OS temp dir, so the rename into place never
+  // crosses filesystems.
+  const rendered = `${videoPath}.cut.webm`;
+  const ffmpegArgs = singlePassArgs({
+    source,
+    videoFilter: cutVideoFilter(plan),
+    burn: burn
+      ? {
+          srtPath,
+          bandPx,
+          style: subtitleStyle(probed.height + bandPx, bandPx, probed.width),
+        }
+      : undefined,
+    clips: placed.map((p) => ({
+      path: clipFor.get(p.line) as string,
+      offsetSec: p.outStart,
+    })),
+    durationSec: plan.outDurationSec,
+    outPath: rendered,
+  });
   try {
-    const body = await renderBody({ ffmpeg, source, plan, tmp, progress });
-    const srtPath = `${videoPath}.captions.srt`;
-    const burn = await writeCaptions({ ffmpeg, srtPath, cues, probed, notes });
-    const final = path.join(tmp, "final.webm");
-    await finishVideo({
-      ffmpeg,
-      body,
-      placed,
-      clipFor: new Map(voicing.voiced.map((v) => [v.line, v.m4aPath])),
-      srtPath,
-      burn,
-      outPath: final,
-      echo,
-      progress,
-    });
-    await rename(final, videoPath);
+    if (ffmpegArgs) {
+      progress("rendering…");
+      await run(ffmpeg, ffmpegArgs, ENCODE_TIMEOUT_MS, echo);
+    } else {
+      await copyFile(source, rendered);
+    }
+    await rename(rendered, videoPath);
   } finally {
-    await rm(tmp, { recursive: true, force: true });
+    await rm(rendered, { force: true });
   }
   await pruneCache(dir, voicing.used);
 

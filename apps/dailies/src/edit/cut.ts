@@ -14,7 +14,11 @@
 // This module is pure: parsing, validation, the seed, and the timeline plan.
 // Rendering (ffmpeg, TTS) lives in render.ts.
 
-import { mergeWindows, subtractSpans } from "../video/condense.js";
+import {
+  MAX_SELECT_TERMS,
+  mergeWindows,
+  subtractSpans,
+} from "../video/condense.js";
 import {
   NARRATOR_CHOICES,
   type NarratorChoice,
@@ -404,7 +408,9 @@ export function planCut(
       );
       continue;
     }
-    holdAt.set(at, (holdAt.get(at) ?? 0) + hold.seconds);
+    // Held in whole frames too: the renderer freezes by repeating frames, so a
+    // hold that isn't a frame multiple would drift the planned times.
+    holdAt.set(at, snap((holdAt.get(at) ?? 0) + hold.seconds));
   }
   // A hold on a boundary shared by two keeps can't happen (mergeWindows joins
   // touching cuts, so keeps never touch), so each point belongs to one keep.
@@ -457,13 +463,74 @@ export function extendTail(plan: CutPlan, seconds: number): CutPlan {
   }
   const pieces = plan.pieces.map((p) => ({ ...p }));
   const last = pieces.at(-1) as CutPiece;
-  last.endHoldSec += seconds;
+  last.endHoldSec = snapper(plan.fps)(last.endHoldSec + seconds);
   return {
     ...plan,
     pieces,
     identity: false,
     outDurationSec: restack(pieces),
   };
+}
+
+// The ffmpeg video filter that turns the source into the planned footage, in
+// one pass: keep the pieces' frames (`select` by frame number on a constant-rate
+// stream), renumber them, then repeat a frame wherever a hold freezes it
+// (`loop` with size=1). Returns "" for the identity plan.
+//
+// One stream, no `split`: trimming each piece separately and concatenating
+// would make ffmpeg buffer decoded frames for every later piece until the
+// earlier ones are consumed. The loops are applied from the last frame back so
+// each one's index is still the post-select index — inserting frames only
+// shifts what comes after. Pure → unit-tested.
+export function cutVideoFilter(plan: CutPlan): string {
+  if (plan.identity) {
+    return "";
+  }
+  const fps = plan.fps;
+  const frame = (sec: number) => Math.round(sec * fps);
+  // Contiguous pieces (split only by a hold) are one kept range of frames.
+  const ranges: { start: number; end: number }[] = [];
+  const loops: { at: number; count: number }[] = [];
+  let out = 0;
+  for (const piece of plan.pieces) {
+    const start = frame(piece.srcStart);
+    const end = frame(piece.srcEnd);
+    const prev = ranges.at(-1);
+    if (prev && prev.end === start) {
+      prev.end = end;
+    } else {
+      ranges.push({ start, end });
+    }
+    const length = end - start;
+    if (piece.startHoldSec > 0) {
+      loops.push({ at: out, count: frame(piece.startHoldSec) });
+    }
+    if (piece.endHoldSec > 0) {
+      loops.push({ at: out + length - 1, count: frame(piece.endHoldSec) });
+    }
+    out += length;
+  }
+  if (ranges.length > MAX_SELECT_TERMS) {
+    throw new Error(
+      `the cut keeps ${ranges.length} separate stretches of footage; the most one render can handle is ${MAX_SELECT_TERMS} — merge some cuts`
+    );
+  }
+  const select = ranges
+    .map((r) => `between(n,${r.start},${r.end - 1})`)
+    .join("+");
+  const chain = [
+    `fps=${fps}`,
+    `select='${select}'`,
+    "setpts=N/FRAME_RATE/TB",
+    ...loops
+      .filter((l) => l.count > 0)
+      .sort((a, b) => b.at - a.at)
+      .map((l) => `loop=loop=${l.count}:size=1:start=${l.at}`),
+  ];
+  if (loops.length > 0) {
+    chain.push("setpts=N/FRAME_RATE/TB");
+  }
+  return chain.join(",");
 }
 
 // Where a source time lands in the output. A time inside removed footage maps

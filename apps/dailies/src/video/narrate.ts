@@ -2041,10 +2041,10 @@ async function renderTitleSegment(args: {
 // Final pass: mix the delayed narration clips onto the concatenated video and
 // optionally burn captions. Captions force a video re-encode (libass), so the
 // no-caption branch can stream-copy the video track.
-export async function mixAudioAndCaptions(args: {
+async function mixAudioAndCaptions(args: {
   ffmpeg: string;
   videoPath: string;
-  clips: Pick<RenderedClip, "durationSec" | "m4aPath">[];
+  clips: RenderedClip[];
   offsetsSec: number[];
   music: MusicTrack[];
   srtPath: string;
@@ -2295,7 +2295,7 @@ export function subtitleStyle(
 // Escape the subtitles path for the filtergraph. The caller wraps it in single
 // quotes, so filtergraph metacharacters (, ; [ ]) are already literal; we escape
 // the quote and libass-significant backslash/colon for safety inside the quotes.
-function escapeSubtitlesPath(srtPath: string): string {
+export function escapeSubtitlesPath(srtPath: string): string {
   return srtPath
     .replace(/\\/g, "\\\\")
     .replace(/:/g, "\\:")

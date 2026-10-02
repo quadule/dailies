@@ -194,6 +194,11 @@ run's captions and step positions — and `dailies cut render <id>` rebuilds the
   keyed by text + voice + speed (recordings by file size + mtime); the first render pins the
   resolved voice into `cut.json` so later lines can't come out in a different voice. There is no
   silent fallback to a second voice.
+- **A render is one ffmpeg pass**: `cutVideoFilter` keeps frames with `select` on frame numbers,
+  freezes with `loop=size=1` (applied last-frame-first so indices stay valid), then the caption
+  burn and voice mix ride in the same filter graph. Don't go back to encoding pieces and
+  concatenating — a separate trim pass plus a burn/mix pass measured ~3 min vs ~17 s for 29 s of
+  1440x900 footage. Holds are snapped to whole frames so the frame-based freeze matches `mapTime`.
 - Spoken lines are loudness-normalized (−16 LUFS) so TTS and a laptop-mic recording match. A line
   that runs past the picture extends the last frame; lines that overlap only warn.
 

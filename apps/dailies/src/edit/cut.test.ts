@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type CutLine,
+  cutVideoFilter,
   extendTail,
   formatCut,
   layoutLines,
@@ -76,13 +77,13 @@ describe("planCut", () => {
         cuts: [{ start: 10, end: 12 }],
         holds: [
           { at: 5, seconds: 1 },
-          { at: 5.01, seconds: 0.5 },
+          { at: 5.01, seconds: 0.6 },
           { at: 11, seconds: 4 },
         ],
       },
       SOURCE
     );
-    expect(plan.pieces[0]?.endHoldSec).toBe(1.5);
+    expect(plan.pieces[0]?.endHoldSec).toBe(1.6);
     expect(plan.warnings).toEqual([
       "hold at 11.00s is inside cut footage and was skipped",
     ]);
@@ -247,5 +248,42 @@ describe("parseCut", () => {
     expect(parseCut({ ...seed, narration: [{ at: 1, text: " " }] })).toEqual({
       error: "narration[0] needs text to speak or an audio file",
     });
+  });
+});
+
+describe("cutVideoFilter", () => {
+  it("is empty for the identity plan", () => {
+    expect(cutVideoFilter(planCut({ cuts: [], holds: [] }, SOURCE))).toBe("");
+  });
+
+  it("keeps frames, renumbers, and repeats a frame for each hold", () => {
+    // The plan the end-to-end render used: a 6s cut, a 2s hold, a tail hold.
+    const plan = extendTail(
+      planCut(
+        { cuts: [{ start: 6, end: 12 }], holds: [{ at: 23.36, seconds: 2 }] },
+        { durationSec: 28.88, fps: 25 }
+      ),
+      1.4
+    );
+    expect(cutVideoFilter(plan)).toBe(
+      "fps=25,select='between(n,0,149)+between(n,300,721)',setpts=N/FRAME_RATE/TB,loop=loop=35:size=1:start=571,loop=loop=50:size=1:start=433,setpts=N/FRAME_RATE/TB"
+    );
+  });
+
+  it("freezes the first frame of a piece for a start hold", () => {
+    const plan = planCut(
+      { cuts: [{ start: 0, end: 2 }], holds: [{ at: 2, seconds: 1 }] },
+      SOURCE
+    );
+    expect(cutVideoFilter(plan)).toBe(
+      "fps=25,select='between(n,50,499)',setpts=N/FRAME_RATE/TB,loop=loop=25:size=1:start=0,setpts=N/FRAME_RATE/TB"
+    );
+  });
+
+  it("does not renumber twice when nothing is held", () => {
+    const plan = planCut({ cuts: [{ start: 2, end: 4 }], holds: [] }, SOURCE);
+    expect(cutVideoFilter(plan)).toBe(
+      "fps=25,select='between(n,0,49)+between(n,100,499)',setpts=N/FRAME_RATE/TB"
+    );
   });
 });
