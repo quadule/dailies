@@ -42,7 +42,7 @@ import { execFile } from "node:child_process";
 import { access, rename, rm, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { Logger } from "dailies-logger";
-import { ENCODE_TIMEOUT_MS } from "./ffmpeg.js";
+import { ENCODE_TIMEOUT_MS, VP8_ENCODE_ARGS } from "./ffmpeg.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -404,10 +404,7 @@ async function encodeKeeps(
       "-vf",
       `select='${selectExpression(keeps)}',setpts=N/FRAME_RATE/TB`,
       "-an",
-      "-c:v",
-      "libvpx",
-      "-b:v",
-      "1M",
+      ...VP8_ENCODE_ARGS,
       output,
     ],
     ENCODE_TIMEOUT_MS

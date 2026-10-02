@@ -199,9 +199,9 @@ run's captions and step positions — and `dailies cut render <id>` rebuilds the
   burn and voice mix ride in the same filter graph. Don't go back to encoding pieces and
   concatenating — a separate trim pass plus a burn/mix pass measured ~3 min vs ~17 s for 29 s of
   1440x900 footage. Holds are snapped to whole frames so the frame-based freeze matches `mapTime`.
-  The encode uses `-cpu-used 3` (measured 1.6–2.5× faster than libvpx's default 1 at matching
-  quality on three recordings); `-cpu-used 2` measured worse than both, so don't "split the
-  difference" without re-measuring.
+  Every encode in the pipeline uses `VP8_ENCODE_ARGS` (`video/ffmpeg.ts`): libvpx at
+  `-cpu-used 3`, measured 1.6–2.5× faster than the default at matching quality. `-cpu-used 2`
+  measured worse than both, so re-measure before changing it.
 - Spoken lines are loudness-normalized (−16 LUFS) so TTS and a laptop-mic recording match. A line
   that runs past the picture extends the last frame; lines that overlap only warn.
 

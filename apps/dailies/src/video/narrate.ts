@@ -61,6 +61,7 @@ import {
   type ProbedVideo,
   probeVideo,
   trimAudio,
+  VP8_ENCODE_ARGS,
 } from "./ffmpeg.js";
 import { createLocalTitleBackground } from "./local-background.js";
 import { resolveLocalImage } from "./local-image.js";
@@ -1621,10 +1622,7 @@ async function buildTitleCard(args: {
       String(geometry.frameRate),
       "-pix_fmt",
       "yuv420p",
-      "-c:v",
-      "libvpx",
-      "-b:v",
-      "1M",
+      ...VP8_ENCODE_ARGS,
       outPath,
     ],
     ENCODE_TIMEOUT_MS
@@ -2109,9 +2107,7 @@ async function mixAudioAndCaptions(args: {
     : filter;
 
   const videoMap = burnCaptions ? "[vout]" : "0:v";
-  const videoCodec = burnCaptions
-    ? ["-c:v", "libvpx", "-b:v", "1M"]
-    : ["-c:v", "copy"];
+  const videoCodec = burnCaptions ? [...VP8_ENCODE_ARGS] : ["-c:v", "copy"];
 
   // Bound the output to the video's length. amix uses duration=longest, so the
   // mix runs as long as its LONGEST input: the credits swell is delayed to the
@@ -2174,10 +2170,7 @@ export async function burnCaptionBand(args: {
       videoPath,
       "-vf",
       `pad=iw:ih+${band}:0:0:color=black,subtitles='${escapeSubtitlesPath(srtPath)}':force_style='${subtitleStyle((probed?.height ?? 720) + band, band, probed?.width ?? 1280)}'`,
-      "-c:v",
-      "libvpx",
-      "-b:v",
-      "1M",
+      ...VP8_ENCODE_ARGS,
       // The recording has no audio track; -an keeps the muxer from waiting on one.
       "-an",
       outPath,

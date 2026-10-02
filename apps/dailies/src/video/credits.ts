@@ -12,7 +12,11 @@
 // stages run inside cinematicProcess's try/catch).
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { ENCODE_TIMEOUT_MS, type ProbedVideo } from "./ffmpeg.js";
+import {
+  ENCODE_TIMEOUT_MS,
+  type ProbedVideo,
+  VP8_ENCODE_ARGS,
+} from "./ffmpeg.js";
 
 export type { ProbedVideo } from "./ffmpeg.js";
 
@@ -310,10 +314,7 @@ export async function buildCreditsRoll(args: {
       "-pix_fmt",
       "yuv420p",
       "-an",
-      "-c:v",
-      "libvpx",
-      "-b:v",
-      "1M",
+      ...VP8_ENCODE_ARGS,
       outPath,
     ],
     // The encode failing is an infrastructure error, not a content one — let it
