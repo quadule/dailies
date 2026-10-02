@@ -61,6 +61,7 @@ describe("singlePassArgs", () => {
     );
     expect(after(args, "-map")).toBe("[vout]");
     expect(after(args, "-c:v")).toBe("libvpx");
+    expect(after(args, "-cpu-used")).toBe("3");
     expect(args.filter((a) => a === "-i")).toHaveLength(2);
   });
 

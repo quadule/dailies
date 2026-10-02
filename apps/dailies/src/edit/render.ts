@@ -544,7 +544,13 @@ export function singlePassArgs(args: {
     graph.join(";"),
     "-map",
     videoChain ? "[vout]" : "0:v",
-    ...(videoChain ? ["-c:v", "libvpx", "-b:v", "1M"] : ["-c:v", "copy"]),
+    // -cpu-used 3, not libvpx's default 1: measured on three recordings it was
+    // 1.6-2.5x faster at matching quality (SSIM within ±1.5 dB of the default
+    // either way, indistinguishable zoomed in on small UI text). 2 was worse
+    // than both and barely faster — VP8's speed levels aren't monotonic.
+    ...(videoChain
+      ? ["-c:v", "libvpx", "-b:v", "1M", "-cpu-used", "3"]
+      : ["-c:v", "copy"]),
     // WebM takes Opus, not the clips' AAC.
     ...(clips.length > 0 ? ["-map", "[aout]", "-c:a", "libopus"] : ["-an"]),
     // amix runs as long as its longest input; the picture sets the length.
