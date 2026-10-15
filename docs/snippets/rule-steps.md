@@ -7,8 +7,11 @@
   worker" — not one step per radio button or field. A step can fill a whole form and submit it.
   Five steps for five answers on one page is five rows a reviewer scrolls past, and five more
   model round trips. Split only where you need to read the result before deciding what to do.
-- After an action, the end of the step can log what the next decision needs (`snapshotForAI({
-  track: "main" })` for just what changed), so the next look is often unnecessary.
+- End a step by logging only what the next decision needs — the URL, a heading, a `{ track }` diff,
+  or a scoped `ariaSnapshot()` of what you will act on next — so the next look is often
+  unnecessary. Don't end steps with a whole-page outline out of habit: after a navigation `{ track
+  }` resets and returns the whole page again, and each outline is tens of thousands of characters
+  you then read.
 - Mark setup and detours with `--skim`: signing in, flipping a setting, finishing unrelated
   onboarding to reach the feature, filling a form only because the flow demands it. The finished
   video fast-forwards through a run of skimmed steps, captions and all. Leave it off the steps

@@ -10,6 +10,10 @@ content between `<!-- dailies:snippet … -->` markers or the generated TypeScri
 
 Conventions:
 
+- Embed a snippet once per load path. An agent reads `dailies-scripting` plus one workflow skill
+  (subagents preload both), so a rule already in `dailies-scripting` stays out of the workflow
+  skills and `agents/`. AGENTS.md ("Shared docs") lists where each group lives.
+
 - Markdown that reads well as plain terminal text: hyphen bullets and inline backticks; no
   tables, no headings, no bold — consumers supply their own headings.
 - `{{cli}}` is substituted per consumer: `dailies` in CLI help (the default), `npx dailies-cli`

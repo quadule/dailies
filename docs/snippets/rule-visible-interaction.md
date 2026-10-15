@@ -1,110 +1,68 @@
-- Every recorded click and text entry goes through the human helpers
-  `page.humanClick(target)` / `page.humanFill(target, text)` (`target` is a selector string or a
-  locator) — this is the default, not an option. Do NOT use raw `page.click` / `locator.click` /
-  `page.fill` for a recorded action. The helpers reveal the element (scroll it into view), glide
-  the on-screen cursor onto it and let it settle, then act through real input — a true click, and
-  for fills a focus-then-type that sends real key events. That cursor-settling beat is the point:
-  a bare `locator.click()` moves and presses in the same instant, so on camera the click lands
-  before the cursor has visibly arrived. (Gestures the helpers don't cover — `hover`, keyboard
-  `press`, `selectOption`, `check`/`uncheck`, drag — use the normal locator methods, still on a
-  revealed element. `selectOption`/`check`/`uncheck`/`dragTo` still settle the page after acting on
-  their own, even called directly on a `Locator` — see the DOM-rebuild note below.)
-- ALWAYS reveal an element before interacting — no exceptions; the recording must show every
-  interaction a viewer is asked to trust. The helpers scroll to the target but cannot reveal an
-  element hidden behind collapsed UI — if
-  it lives inside a closed menu, dropdown, accordion, tab, or unopened modal, open that container
-  first, then interact — in the SAME step. A toggle-opened container (a menu/dropdown) STAYS open
-  across steps, so if you opened it in an earlier step (e.g. to snapshot and find the item), do NOT
-  click the toggle again to "open" it — that CLOSES it; just click the item. Any
-  `scrollIntoViewIfNeeded` / `page.isVisible(sel)` checks fold into the interaction's own script —
-  keep them out of the step list as bookkeeping.
-- To bring something into view just to SHOW it (not act on it), use `page.reveal(target)` — never
-  `window.scrollTo` or `page.evaluate(() => scrollTo(...))`, which move nothing the camera can see.
-  Observing doesn't need scrolling at all: `snapshotForAI` reads the whole page regardless of scroll.
-- Toggle a checkbox or radio with `humanClick` — target it by role/name
-  (`getByRole("checkbox", { name })`) or its label text. Apps routinely hide the real `<input>` and
-  draw a custom control with CSS, so the input is zero-size and a direct click misses; `humanClick`
-  detects that and clicks the input's `<label>` for you (what a real user clicks). You don't need
-  to find the label yourself — just don't reach past `humanClick` to a raw `click` on the input.
-- Before interacting, make sure the target isn't covered by an overlay or modal — a cookie
-  banner, dialog, toast, or loading spinner. A click that fails with "intercepts pointer events" /
-  "not clickable" means something is on top: deal with that overlay first (act within the modal,
-  accept/close the banner, wait for the spinner to clear), then retry — don't `{ force: true }`
-  through it. Right after a navigation, check for such overlays before starting the main flow.
-- When several `<dialog>` elements coexist in the DOM at once (a modal, a drawer, …), don't rely
-  on `isVisible()` / `isHidden()` to pick the active one — frameworks often show/hide a `<dialog>`
-  with CSS while it stays `open` in the DOM, so Playwright's visibility heuristic can report the
-  truly-shown one as `false`. Identify it by content instead: `page.locator("dialog", { hasText:
-  "…" })` / `page.getByRole("dialog", { name: "…" })`, or scope straight to a known descendant
-  inside it — rather than testing `.isVisible()` across every match and trusting the boolean.
-- Cascading-disclosure UI — a menu / split button that opens a list of item buttons, each of which
-  opens something more — does NOT tell you in advance whether an item reveals an INLINE section
-  grafted into the page or a drawer/modal, and that can differ per item and change between releases.
-  So after EACH click in the chain, observe immediately — prefer `snapshotForAI({ track: "main" })`
-  so an empty diff instantly tells you the click did nothing (wrong element, or a menu item whose
-  menu had already closed) versus showing you exactly what appeared. Don't pre-commit to hunting a
-  `<dialog>`: a `dialog`-scoped snapshot after an inline disclosure finds nothing and sends you
-  chasing a modal that never opened. The reveal may need a beat to mount or animate, so then wait on
-  the concrete new element you expect (`getByRole`/`getByText` for its heading or first field), not a
-  fixed sleep.
-- Move between pages the way a user does: click links and buttons, don't `goto` internal URLs.
-  The lone exception is the flow's entry point — the first navigation is a `page.goto(...)`;
-  after that, reach each new page by clicking your way there.
-- Find elements the way a user reads them — `getByRole(role, { name })`, `getByText`,
-  `getByLabel`. CSS selectors and `page.evaluate(...)` are fine for EXAMINING the page, but when
-  a selector is unavoidable in a recorded action prefer a `data-testid` / `data-test-id`
-  attribute; never hardcode presentational class names.
-- Never bypass real input: no `{ force: true }`, no `page.evaluate(el => el.click())`, and for a
-  field the user types into don't set the value with the atomic `page.fill` (it writes in one
-  step with no typing on camera — that's why `humanFill` types key by key instead). If a real
-  user couldn't see and perform the interaction, the run hasn't verified anything and the video
-  shows nothing.
-- Don't submit the instant you finish an interaction — this applies to EVERY input before a
-  submit, not just typing: checking a box, choosing a radio, selecting a dropdown option, and
-  filling a field all commonly trigger async work — inline validation, a newly revealed or
-  required field, a dependent control, the submit button enabling/disabling. After each such
-  interaction wait on the CONCRETE result before moving on — assert or act on the thing that
-  changed (the validation message appearing, the new/required field rendering, the submit button
-  flipping enabled); Playwright auto-waits when you act on it. Re-check the submit control is
-  enabled right before you submit. Firing submit into a mid-validation form records a failure that
-  isn't the app's fault, and a real user wouldn't do it either.
-- Some non-navigating interactions REBUILD part of the DOM — choosing a radio / checkbox / dropdown
-  or typing into a field can trigger a client-side rebuild (a form controller regenerating a
-  dependent section, an inline-validation re-render, an htmx/React/Turbo swap) that DETACHES the
-  elements it replaces, so a handle grabbed a moment earlier throws "Element is not attached to the
-  DOM" when acted on next. This is handled automatically for essentially every recorded gesture:
-  `humanClick`, `humanFill`, and `setInputFiles` settle the page AFTER acting (bounded network-idle
-  + DOM-mutation quiescence — framework-agnostic, NOT attribute-sniffing); and `Locator.check()` /
-  `.uncheck()` / `.selectOption()` / `.dragTo()` settle themselves the same way even when called
-  directly on a `Locator` (not through `humanClick`), since a script can reach these without going
-  through the human-interaction helpers. Either way, a rebuild the interaction triggered has
-  committed before the NEXT interaction resolves its target, so back-to-back interactions no longer
-  stale each other — you do NOT need to detect `data-action` / `data-controller` attributes or
-  hand-split steps for this, it's automatic. Two cases still need care: (a) `hover` and keyboard
-  `press` are NOT auto-settled — they rarely mutate the DOM on their own, but if one does (e.g.
-  `press("Enter")` submitting a form), wait on the concrete result the same way you would after any
-  submit; and (b) the rare rebuild slower than the per-interaction settle ceiling (a long
-  fetch-then-swap) — if a dependent still comes back detached, make the rebuilding interaction the
-  last action of its step and act on the dependents in the NEXT step (the step-end settle has a
-  larger budget). Never reuse a handle grabbed before a rebuild.
-- A form submit that FAILS validation usually returns HTTP 422 and re-renders the form with errors.
-  In Rails/Turbo apps that comes back as a Turbo-stream rebuild, NOT a navigation. A SUCCESSFUL
-  submit navigates, but a submit that MIGHT fail in place shouldn't use `humanClickAndWaitForURL` —
-  it hangs to the timeout on failure. Instead `humanClick` the submit, then wait for EITHER outcome:
-  the URL to change (success) OR an error/flash to appear (failure). Observe the re-rendered page. To
-  FIND the errors, do NOT assume a class name: a `snapshotForAI` outline surfaces ACCESSIBILITY
-  semantics, not CSS classes, and many design systems attach NO ARIA to error markup (no
-  `aria-invalid`, no `role="alert"`), so the error is just an anonymous text node in the outline.
-  Instead (a) search the snapshot for the message TEXT, or (b) read the DOM for the app's real error
-  class — `page.$$eval(".<app-error-class>", els => els.map(e => e.textContent))`, discovering that
-  class once from a failing field's `outerHTML`. Don't reach for `[aria-invalid]` / `.is-invalid` /
-  `.field_with_errors`: those are Bootstrap / Rails-default markers that a design-system app commonly
-  overrides or suppresses, so all three match nothing. Note that some errors attach to an
-  association or the record's base, not a single field, and by design render nowhere inline — a
-  generic flash banner is then the only user-visible signal.
-- Verify through the surfaces a SHIPPED user sees — the on-screen flash and inline field messages.
-  Do NOT click dev-only diagnostics (a "View Submitted Errors" / debug-drawer button, a `?debug=`
-  panel): they don't exist in production, so reading them proves nothing about the real experience
-  and reads wrong in a demo recording.
+- Every recorded click and text entry goes through `page.humanClick(target)` /
+  `page.humanFill(target, text)` (`target` is a selector string or a locator) — the default, not an
+  option. Never raw `page.click` / `locator.click` / `page.fill` for a recorded action. The helpers
+  scroll the element into view, glide the on-screen cursor onto it and let it settle, then act
+  through real input (a fill focuses, then types real key events). A bare `locator.click()` moves
+  and presses in the same instant, so on camera the click lands before the cursor arrives.
+- Gestures the helpers don't cover — `hover`, keyboard `press`, `selectOption`, `check`/`uncheck`,
+  drag — use the normal locator methods, still on a revealed element.
+- ALWAYS reveal an element before interacting. The helpers scroll to it but can't open collapsed UI:
+  if it lives in a closed menu, dropdown, accordion, tab or unopened modal, open that first, in the
+  SAME step. A toggle-opened menu STAYS open across steps — if an earlier step opened it, just click
+  the item; clicking the toggle again closes it. Fold `scrollIntoViewIfNeeded` / `isVisible` checks
+  into the interaction's own script, not separate steps.
+- To bring something into view only to SHOW it, use `page.reveal(target)` — never
+  `window.scrollTo` or `page.evaluate(() => scrollTo(...))`, which the camera can't see. Observing
+  needs no scrolling: `snapshotForAI` reads the whole page.
+- Toggle a checkbox or radio with `humanClick`, targeted by role and name (`getByRole("checkbox",
+  { name })`) or its label text. When the app hides the real `<input>` behind a CSS-drawn control,
+  `humanClick` clicks its `<label>` for you — don't reach past it to a raw click on the input.
+- An overlay — cookie banner, dialog, toast, loading spinner — blocks clicks. "intercepts pointer
+  events" / "not clickable" means something is on top: deal with it (act in the modal, close the
+  banner, wait out the spinner), then retry — never `{ force: true }`. Check for overlays right
+  after a navigation, before starting the main flow.
+- When several `<dialog>` elements coexist, don't trust `isVisible()` / `isHidden()` to find the
+  active one — apps often hide a `<dialog>` with CSS while it stays `open`. Pick it by content
+  (`page.locator("dialog", { hasText: "…" })`, `page.getByRole("dialog", { name: "…" })`) or scope
+  to a known descendant.
+- A menu item can open an INLINE section or a drawer/modal, and that differs per item and between
+  releases. After EACH click in such a chain, observe with `snapshotForAI({ track: "main" })` (an
+  empty diff means the click did nothing) instead of assuming a `<dialog>` opened, then wait on the
+  concrete new element (`getByRole`/`getByText` for its heading or first field), not a fixed sleep.
+- Move between pages the way a user does — click links and buttons. Only the flow's first
+  navigation is a `page.goto(...)`; never `goto` an internal URL after that.
+- Find elements the way a user reads them: `getByRole(role, { name })`, `getByText`, `getByLabel`.
+  CSS selectors and `page.evaluate(...)` are fine for EXAMINING the page; when a recorded action
+  needs a selector, prefer `data-testid` / `data-test-id`, never presentational class names.
+- Never bypass real input: no `{ force: true }`, no `page.evaluate(el => el.click())`, no atomic
+  `page.fill` on a field the user types into (it shows no typing on camera). If a real user couldn't
+  see and do it, the run verified nothing.
+- Don't submit the instant you finish an input. Checking a box, choosing a radio or option, or
+  filling a field can trigger async work — inline validation, a new required field, a dependent
+  control, the submit button enabling. Wait on that concrete result (Playwright auto-waits when you
+  act on it), and re-check the submit control is enabled right before submitting. A submit fired
+  mid-validation records a failure that isn't the app's.
+- Some interactions rebuild part of the DOM and detach the elements they replace ("Element is not
+  attached to the DOM"). `humanClick`, `humanFill`, `setInputFiles` and `Locator` `check` /
+  `uncheck` / `selectOption` / `dragTo` settle the page after acting (bounded network idle plus DOM
+  quiet), so back-to-back interactions are safe — no need to sniff `data-action` /
+  `data-controller` or split steps. Still: `hover` and `press` are NOT settled, so if
+  `press("Enter")` submits, wait on the result; for a rebuild slower than that settle, make it the
+  step's last action and act on its dependents in the next step (the step-end settle waits longer);
+  and never reuse a handle grabbed before a rebuild.
+- A submit that fails validation usually returns 422 and re-renders the form — in Rails/Turbo as a
+  turbo-stream rebuild, not a navigation. For a submit that MIGHT fail, `humanClick` it and wait for
+  EITHER the URL to change or an error/flash to appear; `humanClickAndWaitForURL` would hang to its
+  timeout on failure.
+- To find the errors, don't assume a class name or ARIA: the snapshot shows accessibility, not CSS,
+  and many design systems mark errors with neither `aria-invalid` nor `role="alert"`. Search the
+  snapshot for the message TEXT, or read the app's real error class from the DOM (`page.$$eval(
+  ".<app-error-class>", els => els.map(e => e.textContent))`, found once from a failing field's
+  `outerHTML`). `[aria-invalid]`, `.is-invalid` and `.field_with_errors` usually match nothing. An
+  error on an association or the record's base renders nowhere inline; a flash banner is then the
+  only signal.
+- Verify through what a SHIPPED user sees — the flash and inline messages. Never click dev-only
+  diagnostics (a "View Submitted Errors" button, a debug drawer, a `?debug=` panel); they don't
+  exist in production.
 - A click timeout or `page.isVisible(sel)` returning false usually means hidden, not missing:
-  snapshot, find the toggle/menu/tab that reveals the element, click that, then retry.
+  snapshot, find the toggle, menu or tab that reveals it, click that, then retry.

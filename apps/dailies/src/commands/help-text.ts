@@ -259,6 +259,8 @@ rather than being quietly voiced by something else.
                         captions with an OpenAI-compatible server (POST /v1/audio/transcriptions) —
                         e.g. a local Whisper-Large-v3-Turbo. Wins over the CLI backends and gives the
                         tightest caption timing. URL is the host root; model defaults to whisper-1
+  $DAILIES_SONG_FILE    reuse an already-generated song (and the .json beside it) for --song
+                        instead of generating a new one
   $DAILIES_IMAGE_URL / $DAILIES_IMAGE_API_KEY / $DAILIES_IMAGE_MODEL   generate the title-card background
                         with a local OpenAI-images-compatible server (POST /v1/images/generations)
   $DAILIES_WIKIMEDIA_IMAGES   a real, openly-licensed photo from Wikimedia Commons for the title card

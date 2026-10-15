@@ -61,6 +61,15 @@ workflow rules — is single-sourced in `docs/snippets/` and stitched by `script
 - Edit the snippet, then run `make docs` (`--write`). CI fails on drift via `pnpm check` (`--check`).
 - Never hand-edit `packages/cli-kit/src/snippets.generated.ts` or the content between
   `<!-- dailies:snippet … -->` markers in `skills/`, `agents/`, or `README.md`.
+- Each rule loads once per agent. Every workflow skill tells the agent to read `dailies-scripting`
+  first, so the scripting rules (`rule-observe-first`, `rule-visible-interaction`, `api-snapshot`,
+  `rule-drive-with-dailies`, `rule-project-flows`) live only there, and the workflow skills point to
+  it. `dailies-verify` points to `dailies-session` for the recording rules. The subagents in
+  `agents/` preload their skills through `skills:` frontmatter, so their bodies hold only what is
+  specific to the agent. `references/REFERENCE.md` holds API detail, not the rules in its SKILL.md.
+  Before embedding a snippet, check it isn't already on that load path.
+- Skill text is read in full every session, so it is a token budget: say each instruction once and
+  briefly. CLI help (`dailies run --help`) renders the scripting snippets too.
 - `skills/` is the skill pack consumed verbatim by Claude Code (`.claude-plugin/`), Cursor
   (`.cursor-plugin/`), and Codex (`plugins/dailies/`, whose `skills` is a symlink here) — keep
   SKILL.md frontmatter (`name`, `description`) intact and marker-free.

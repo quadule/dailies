@@ -1181,9 +1181,14 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     const chars = snapshot.length;
     // Suppress on tracked calls — the hint's advice is `track`, and the caller
     // is already taking it.
+    // An unscoped outline also names `selector`: when most of it is chrome
+    // repeated on every page, scoping later snapshots once saves the most.
+    const scopeAdvice = options.selector
+      ? ""
+      : ` If most of it is nav/sidebar chrome repeated on every page, scope later snapshots to the content with \`{ selector: "main" }\` (or the form).`;
     const hint =
       !options.track && chars >= LARGE_SNAPSHOT_CHARS
-        ? `snapshot is ${chars} chars. Read this one whole — don't truncate it. For a targeted re-check, \`locator.ariaSnapshot()\` scoped to one section/dialog costs a fraction of this. After an interaction, \`page.snapshotForAI({ track: "main" })\` returns just the diff — but its FIRST call with a new key re-reads the whole tree to set a baseline, so it only pays off from the second call on.`
+        ? `snapshot is ${chars} chars. Read this one whole — don't truncate it.${scopeAdvice} For a targeted re-check, \`locator.ariaSnapshot()\` scoped to one section/dialog costs a fraction of this. After an interaction, \`page.snapshotForAI({ track: "main" })\` returns just the diff — but its FIRST call with a new key re-reads the whole tree to set a baseline, so it only pays off from the second call on.`
         : undefined;
     // The server returns a single string: with `track` it folds in the diff
     // once a baseline exists (the first tracked call returns the full tree to

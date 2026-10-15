@@ -25,6 +25,10 @@
   available: same pixels, and a 38 MB report is now 16.5 MB.
 - **A shorter `cut render` timeline.** On a long run it lists only the edits, each with the step
   on screen, instead of every step and caption. `--json` still has every one.
+- **Leaner agent instructions.** A session subagent loaded about 100 KB of skill text with the
+  biggest rules three times over; it now loads about 40 KB, each rule once. The skills also steer
+  agents away from ending every step with a whole-page snapshot, which on a real app is tens of
+  thousands of characters per step.
 
 - **Current browser and build dependencies.** Playwright/Chromium move to **1.63.0**,
   with the sandbox bridge adapted to the new protocol. The CLI now requires **Node 22.12.0+**;
