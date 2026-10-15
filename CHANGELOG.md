@@ -4,6 +4,20 @@
 
 ### Changed
 
+- **Lean capture by default.** The trace keeps every Playwright call but no DOM snapshots or
+  screencast frames, and the HAR keeps the app's own requests without static assets or response
+  bodies. A 50-minute session against a dev server had written a 1.5 GB trace and a 780 MB HAR.
+  `session start --full-capture` records both in full.
+- **Failed steps keep their footage.** A step usually fails after it acted (the click landed, the
+  wait timed out), so dropping it cut the cursor out mid-glide. The dead wait is still trimmed.
+- **A plain `session end` renders its cut.** The seeded `cut.json` is rendered in one pass, so a
+  plain finalize matches `dailies cut render` on the untouched seed. Long sessions condense in one
+  decode instead of one per 50 kept segments.
+- **Locator actions fail after 10s**, not 30s, so a wrong selector costs a third as long.
+  Navigation keeps 30s.
+- **Balanced caption lines.** Burned captions wrap like `text-wrap: balance` instead of leaving a
+  word stranded on the second line.
+
 - **Current browser and build dependencies.** Playwright/Chromium move to **1.63.0**,
   with the sandbox bridge adapted to the new protocol. The CLI now requires **Node 22.12.0+**;
   development uses **Node 24 LTS** (minimum **22.22.1**) and **pnpm 12.4.2**. Updated
@@ -39,6 +53,14 @@
   Historical entries below predate the rename and are left as they were written.
 
 ### Added
+
+- **`run --peek`** reads a session's live page without recording a step: snapshots and reads
+  work, while clicks, typing, navigation, tabs, captions and effects are refused.
+- **`run --skim` and cut speed-ups.** `cut.json` takes `speedups` (`{ start, end, rate }`). The
+  seed fast-forwards runs of skimmed steps and, when a run shows captions, uncaptioned stretches of
+  5s or more. Captions over sped-up footage stay up for their full length.
+- **Step errors in the record.** A failed step's error message is saved on the step and shown in
+  the report, and errors thrown by a script now include their message.
 
 - **ElevenLabs as a media provider.** Set `ELEVENLABS_API_KEY` and the cinematic cut is narrated
   by an ElevenLabs voice (`eleven_multilingual_v2`; one of your voices is drawn per run, or pin one
