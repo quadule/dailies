@@ -198,6 +198,9 @@ export interface CinematicStep {
   durationMs: number;
   name: string;
   script?: string;
+  // Recorded with `run --skim`: setup or a detour the film fast-forwards
+  // through, narrated or not (see skimRunSpeed).
+  skim?: boolean;
   // Step position in the CONDENSED video, seconds (before the title card is
   // prepended).
   videoTime: number;
@@ -577,6 +580,7 @@ async function planNarration(args: {
       index,
       name: step.name,
       script: step.script,
+      skim: step.skim,
     })),
   });
   const result = await runLlmJson({
@@ -1008,6 +1012,9 @@ interface AssembledBody {
   finalBody: string;
   // Reused for caption layout rather than probing the same source again.
   geometry: ProbedVideo | undefined;
+  // Where each step's narration line starts: its step time, except inside a
+  // skimmed run, where a line runs on over the steps after it (planRetime).
+  lineTimes: number[];
   stepTimes: number[];
   titleOffsetSec: number;
 }
@@ -1113,6 +1120,7 @@ async function assembleVideoBody(
   const { titleOffsetSec } = titleCard;
 
   const stepTimes = retimed.starts.map((s) => s + titleOffsetSec);
+  const lineTimes = retimed.lineStarts.map((s) => s + titleOffsetSec);
 
   let creditsPath: string | undefined;
   if (extrasGeometry) {
@@ -1149,7 +1157,14 @@ async function assembleVideoBody(
     temps,
   });
 
-  return { finalBody, geometry, stepTimes, titleOffsetSec, creditsPath };
+  return {
+    finalBody,
+    geometry,
+    stepTimes,
+    lineTimes,
+    titleOffsetSec,
+    creditsPath,
+  };
 }
 
 // Narration keeps its own per-line holds, silent-run pacing, clip offsets and
@@ -1196,7 +1211,7 @@ async function assembleVideo(
   }
   const clipOffsetsSec = clips.map((clip) => {
     const index = narratableSteps.indexOf(clip.step);
-    return body.stepTimes[index] ?? body.titleOffsetSec;
+    return body.lineTimes[index] ?? body.titleOffsetSec;
   });
   const music = await generateMusic({
     ffmpeg,
@@ -1413,17 +1428,28 @@ export function ttsConcurrency(env: NodeJS.ProcessEnv = process.env): number {
 
 // The steps the LLM actually wrote narration for, each carrying its ENUMERATED
 // step index — that's the key the narration map uses (the same indexing the prompt
-// used) and the suffix each clip's temp files get. Pure → unit-tested.
+// used) and the suffix each clip's temp files get.
+//
+// A run of skimmed steps keeps only its FIRST line. The run plays fast, and every
+// extra line is time the footage has to wait for, so a second line would undo the
+// fast-forward. The prompt asks for one line at most; this makes sure of it.
+// Pure → unit-tested.
 export function narrationJobs(
   steps: CinematicStep[],
   byIndex: Map<number, string>
 ): { index: number; step: CinematicStep; text: string }[] {
   const jobs: { index: number; step: CinematicStep; text: string }[] = [];
+  let skimRunVoiced = false;
   for (const [index, step] of steps.entries()) {
-    const text = byIndex.get(index)?.trim();
-    if (text) {
-      jobs.push({ index, step, text });
+    if (!step.skim) {
+      skimRunVoiced = false;
     }
+    const text = byIndex.get(index)?.trim();
+    if (!text || (step.skim && skimRunVoiced)) {
+      continue;
+    }
+    skimRunVoiced = Boolean(step.skim);
+    jobs.push({ index, step, text });
   }
   return jobs;
 }
@@ -1645,8 +1671,15 @@ async function buildTitleCard(args: {
 // floors the inter-clip gap at `gapSec` (and adds nothing when the footage already
 // leaves that much slack — `clipDur − f + gapSec` goes ≤ 0, so the hold stays 0
 // and the natural gap already covers it). The last step gets no trailing gap.
+//
+// A run of skimmed steps (`skim`) is laid out as one unit instead: it plays at
+// its skimRunSpeed, its narration line runs on over the fast footage of the
+// steps after it rather than freezing the step it belongs to, and the only hold
+// is on the run's last step, for whatever of the line the fast footage could not
+// cover. `lineStarts` is where each step's line starts; outside a skimmed run it
+// is the step's own start.
 // Pure → unit-tested.
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: per-step hold arithmetic with its documented edge cases (last step, slack already in the footage) kept inline, where the comment above explains them against the formula.
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: per-step hold arithmetic with its documented edge cases (last step, slack already in the footage, a skimmed run's line spanning its steps) kept inline, where the comment above explains them against the formula.
 export function planRetime(args: {
   stepTimes: number[];
   clipDurSec: number[];
@@ -1663,8 +1696,10 @@ export function planRetime(args: {
   onsets?: number[];
   bodyEnd?: number;
   // Target length for an un-narrated stretch — see SILENT_FOOTAGE_TARGET_SEC.
-  // Omitted or 0 leaves every step at real time.
+  // Omitted or 0 leaves every un-skimmed step at real time.
   silentTargetSec?: number;
+  // Per step: recorded with `run --skim`. See stepSpeeds.
+  skim?: boolean[];
   // Output frame rate, used to snap a sped-up step to a WHOLE number of frames.
   // Without it a fractional speed leaves the planned length and the encoded
   // length up to a frame apart, and that error accumulates across the concat —
@@ -1673,6 +1708,8 @@ export function planRetime(args: {
   frameRateHz?: number;
 }): {
   starts: number[];
+  // Where each step's narration line starts in the output.
+  lineStarts: number[];
   footage: number[];
   holds: number[];
   // Playback speed per step. `footage` stays in SOURCE seconds (it is what the
@@ -1680,39 +1717,22 @@ export function planRetime(args: {
   speeds: number[];
   leadSec: number;
 } {
-  const { stepTimes, clipDurSec, totalSec, onsets, bodyEnd } = args;
+  const { stepTimes, clipDurSec, totalSec, onsets } = args;
   const startPad = Math.max(0, args.startPadSec ?? 0);
   const gap = Math.max(0, args.gapSec ?? 0);
-  const silentTarget = Math.max(0, args.silentTargetSec ?? 0);
   const fps = args.frameRateHz && args.frameRateHz > 0 ? args.frameRateHz : 30;
+  const skim = args.skim ?? [];
   const n = stepTimes.length;
+
+  if (onsets && onsets.length === n) {
+    return planOnsetRetime({ ...args, onsets, skim, fps });
+  }
+
   const starts: number[] = [];
+  const lineStarts: number[] = [];
   const footage: number[] = [];
   const holds: number[] = [];
   const speeds: number[] = [];
-
-  if (onsets && onsets.length === n) {
-    // Onset-anchored hard-cut. The lead is the instrumental run before the first
-    // line; each step fills [onset_i, onset_{i+1}) by playing min(footage, window)
-    // then freezing the remainder.
-    const leadSec = Math.max(0, onsets[0] ?? 0);
-    const end = bodyEnd ?? totalSec;
-    for (let i = 0; i < n; i++) {
-      const src = stepTimes[i] ?? 0;
-      const srcNext = i < n - 1 ? (stepTimes[i + 1] ?? totalSec) : totalSec;
-      const natural = Math.max(0.1, srcNext - src);
-      const winStart = onsets[i] ?? 0;
-      const winEnd = i < n - 1 ? (onsets[i + 1] ?? end) : end;
-      const slot = Math.max(0.1, winEnd - winStart);
-      const play = Math.min(natural, slot); // clip the tail on overrun
-      starts.push(winStart);
-      footage.push(play);
-      speeds.push(1); // song sync hard-cuts to its own windows; never sped up
-      holds.push(Math.max(0, slot - play)); // freeze-pad on underrun
-    }
-    return { starts, footage, holds, speeds, leadSec };
-  }
-
   const leadSec = n > 0 ? Math.max(0, stepTimes[0] ?? 0) : 0;
   // The natural footage each step owns, before any speed-up.
   const natural: number[] = [];
@@ -1721,32 +1741,100 @@ export function planRetime(args: {
     const next = i < n - 1 ? (stepTimes[i + 1] ?? totalSec) : totalSec;
     natural.push(Math.max(0.1, next - start));
   }
-  // One speed per run of consecutive un-narrated steps, decided before the
-  // layout so a stretch spread over several short steps still compresses.
-  const wanted = silentRunSpeeds(natural, clipDurSec, silentTarget);
+  // One speed per run, decided before the layout so a stretch spread over
+  // several short steps still compresses.
+  const wanted = stepSpeeds({
+    footageSec: natural,
+    clipDurSec,
+    skim,
+    silentTargetSec: Math.max(0, args.silentTargetSec ?? 0),
+    gapSec: gap,
+  });
 
   let acc = leadSec;
+  // End of the last line placed in the current skimmed run.
+  let runLineEnd = Number.NEGATIVE_INFINITY;
   for (let i = 0; i < n; i++) {
     const f = natural[i] ?? 0.1;
+    const clip = clipDurSec[i] ?? 0;
     // No trailing gap after the final clip (nothing follows it to breathe from).
     const isLast = i === n - 1;
+    const trailingGap = isLast ? 0 : gap;
     // What the step occupies on screen once sped up, snapped to a whole frame so
     // the plan and the encoded slice agree exactly.
     const w = wanted[i] ?? 1;
     const onScreen = w === 1 ? f : Math.max(1, Math.round((f / w) * fps)) / fps;
-    const speed = f / onScreen;
-    const hold = Math.max(
-      0,
-      (clipDurSec[i] ?? 0) - onScreen + (isLast ? 0 : gap)
-    );
     // The action (and its narration) starts after the leading still.
-    starts.push(acc + startPad);
+    const start = acc + startPad;
+    let lineStart = start;
+    let hold: number;
+    if (skim[i]) {
+      if (clip > 0) {
+        lineStart = Math.max(start, runLineEnd + gap);
+        runLineEnd = lineStart + clip;
+      }
+      const runEnds = isLast || !skim[i + 1];
+      hold = runEnds
+        ? Math.max(0, runLineEnd - (start + onScreen) + trailingGap)
+        : 0;
+      if (runEnds) {
+        runLineEnd = Number.NEGATIVE_INFINITY;
+      }
+    } else {
+      hold = Math.max(0, clip - onScreen + trailingGap);
+    }
+    starts.push(start);
+    lineStarts.push(lineStart);
     footage.push(f);
-    speeds.push(speed);
+    speeds.push(f / onScreen);
     holds.push(hold);
     acc += startPad + onScreen + hold;
   }
-  return { starts, footage, holds, speeds, leadSec };
+  return { starts, lineStarts, footage, holds, speeds, leadSec };
+}
+
+// Song step-sync: each step fills [onset_i, onset_{i+1}) by playing its footage
+// and freezing the remainder. The lead is the instrumental run before the first
+// line. An un-skimmed step that overruns its window has its tail clipped; a
+// skimmed one plays fast to fit instead (up to SKIM_MAX_SPEED), so the setup or
+// detour stays on camera as a fast-forward rather than being cut short.
+function planOnsetRetime(args: {
+  stepTimes: number[];
+  totalSec: number;
+  onsets: number[];
+  bodyEnd?: number;
+  skim: boolean[];
+  fps: number;
+}): ReturnType<typeof planRetime> {
+  const { stepTimes, totalSec, onsets, skim, fps } = args;
+  const n = stepTimes.length;
+  const starts: number[] = [];
+  const footage: number[] = [];
+  const holds: number[] = [];
+  const speeds: number[] = [];
+  const leadSec = Math.max(0, onsets[0] ?? 0);
+  const end = args.bodyEnd ?? totalSec;
+  for (let i = 0; i < n; i++) {
+    const src = stepTimes[i] ?? 0;
+    const srcNext = i < n - 1 ? (stepTimes[i + 1] ?? totalSec) : totalSec;
+    const natural = Math.max(0.1, srcNext - src);
+    const winStart = onsets[i] ?? 0;
+    const winEnd = i < n - 1 ? (onsets[i + 1] ?? end) : end;
+    const slot = Math.max(0.1, winEnd - winStart);
+    const fit = skim[i] ? Math.min(SKIM_MAX_SPEED, natural / slot) : 1;
+    let play = Math.min(natural, slot); // clip the tail on overrun
+    let onScreen = play;
+    if (fit > 1) {
+      // Floor to a whole frame so the step never runs past its window.
+      play = Math.min(natural, slot * fit);
+      onScreen = Math.max(1, Math.floor((play / fit) * fps)) / fps;
+    }
+    starts.push(winStart);
+    footage.push(play);
+    speeds.push(play / onScreen);
+    holds.push(Math.max(0, slot - onScreen)); // freeze-pad on underrun
+  }
+  return { starts, lineStarts: starts, footage, holds, speeds, leadSec };
 }
 
 // The least footage a lead slice may carry. encodeSlice freezes by CLONING a
@@ -1835,26 +1923,122 @@ export function silentFootageSpeed(
 // steps rather than one long one — and none of them individually clears the
 // target. Measured on a real demo: signing in and navigating were 4.0s and 3.0s
 // of un-narrated footage back to back, so a per-step rule left all 7s at real
-// time; as one run they compress to the target. Pure → unit-tested.
+// time; as one run they compress to the target.
+//
+// Skimmed steps are left at 1 and break a run: stepSpeeds paces them on their
+// own, and a quiet step beside a skimmed run is not part of it. Pure → unit-tested.
 export function silentRunSpeeds(
   footageSec: number[],
   clipDurSec: number[],
-  targetSec: number
+  targetSec: number,
+  skim: boolean[] = []
 ): number[] {
   const speeds = footageSec.map(() => 1);
+  const silent = (k: number) => (clipDurSec[k] ?? 0) <= 0 && !skim[k];
   let i = 0;
   while (i < footageSec.length) {
-    if ((clipDurSec[i] ?? 0) > 0) {
+    if (!silent(i)) {
       i += 1;
       continue;
     }
     let end = i;
     let total = 0;
-    while (end < footageSec.length && (clipDurSec[end] ?? 0) <= 0) {
+    while (end < footageSec.length && silent(end)) {
       total += footageSec[end] ?? 0;
       end += 1;
     }
     const speed = silentFootageSpeed(total, 0, targetSec);
+    for (let k = i; k < end; k++) {
+      speeds[k] = speed;
+    }
+    i = end;
+  }
+  return speeds;
+}
+
+// A stretch the agent marked with `run --skim` (setup, a detour, a form that has
+// to be filled to get somewhere) aims to play in about SKIM_TARGET_SEC, at least
+// SKIM_MIN_SPEED and at most SKIM_MAX_SPEED. Same target, floor and ceiling as
+// the cut seed (seedSpeedups in edit/cut.ts), so the plain finalize and the
+// cinematic pass skim alike. The ceiling is twice the un-narrated one because
+// the agent said outright that nobody needs to watch this.
+const SKIM_TARGET_SEC = 8;
+const SKIM_MIN_SPEED = 2;
+const SKIM_MAX_SPEED = 8;
+
+// The speed a run of consecutive skimmed steps plays at.
+//
+// Un-narrated, it is the skim speed, or the un-narrated speed when that is
+// faster: a skimmed stretch never plays slower than the same stretch unmarked.
+// $DAILIES_SILENT_FOOTAGE_SEC=0 drops only that second part; the skim itself is
+// the agent's explicit mark and stays.
+//
+// Narrated, the line plays over the fast footage instead of freezing it, so the
+// run may only go as fast as still leaves room for its lines (and the gaps
+// between and after them) from the first narrated step on. That can bring it
+// down to real time, never below: a line longer than the footage gets a hold
+// at the end of the run, as an un-skimmed step's would. Easing the speed beats
+// holding a fast-forward and then freezing: the picture keeps moving while the
+// line plays. Pure → unit-tested.
+export function skimRunSpeed(args: {
+  footageSec: number[];
+  clipDurSec: number[];
+  gapSec: number;
+  // False for the film's final run: nothing follows it to leave a gap for.
+  trailingGap: boolean;
+  silentTargetSec: number;
+}): number {
+  const { footageSec, clipDurSec, gapSec } = args;
+  const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+  const total = sum(footageSec);
+  const fast = Math.min(
+    SKIM_MAX_SPEED,
+    Math.max(SKIM_MIN_SPEED, total / SKIM_TARGET_SEC)
+  );
+  const first = clipDurSec.findIndex((c) => c > 0);
+  if (first === -1) {
+    return Math.max(fast, silentFootageSpeed(total, 0, args.silentTargetSec));
+  }
+  const lines = clipDurSec.filter((c) => c > 0);
+  const need =
+    sum(lines) + gapSec * (lines.length - 1) + (args.trailingGap ? gapSec : 0);
+  const room = sum(footageSec.slice(first));
+  return Math.max(1, Math.min(fast, room / need));
+}
+
+// One speed per step: skimmed runs at skimRunSpeed, everything else by
+// silentRunSpeeds. Pure → unit-tested.
+export function stepSpeeds(args: {
+  footageSec: number[];
+  clipDurSec: number[];
+  skim: boolean[];
+  silentTargetSec: number;
+  gapSec: number;
+}): number[] {
+  const { footageSec, clipDurSec, skim } = args;
+  const speeds = silentRunSpeeds(
+    footageSec,
+    clipDurSec,
+    args.silentTargetSec,
+    skim
+  );
+  let i = 0;
+  while (i < footageSec.length) {
+    if (!skim[i]) {
+      i += 1;
+      continue;
+    }
+    let end = i;
+    while (end < footageSec.length && skim[end]) {
+      end += 1;
+    }
+    const speed = skimRunSpeed({
+      footageSec: footageSec.slice(i, end),
+      clipDurSec: clipDurSec.slice(i, end),
+      gapSec: args.gapSec,
+      trailingGap: end < footageSec.length,
+      silentTargetSec: args.silentTargetSec,
+    });
     for (let k = i; k < end; k++) {
       speeds[k] = speed;
     }
@@ -1899,7 +2083,7 @@ async function retimeSegments(args: {
   bodyEnd?: number;
   // Target length for an un-narrated stretch; see planRetime.
   silentTargetSec?: number;
-}): Promise<{ segs: string[]; starts: number[] } | null> {
+}): Promise<{ segs: string[]; starts: number[]; lineStarts: number[] } | null> {
   const { ffmpeg, videoPath, steps, clipDurSec, frameRate, temps } = args;
   const totalSec = await audioDurationSec(ffmpeg, videoPath);
   if (totalSec === undefined || totalSec <= 0) {
@@ -1914,6 +2098,7 @@ async function retimeSegments(args: {
     onsets: args.onsets,
     bodyEnd: args.bodyEnd,
     silentTargetSec: args.silentTargetSec,
+    skim: steps.map((s) => Boolean(s.skim)),
     frameRateHz: frameRate,
   });
   const segs: string[] = [];
@@ -1951,7 +2136,7 @@ async function retimeSegments(args: {
     });
     segs.push(segPath);
   }
-  return { segs, starts: plan.starts };
+  return { segs, starts: plan.starts, lineStarts: plan.lineStarts };
 }
 
 // Join the title card, the re-timed body segments and the credits roll into the

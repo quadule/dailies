@@ -26,6 +26,7 @@ import {
   songHoldSec,
   songTargetSec,
   stepFootageSec,
+  stepSpeeds,
   subtitleStyle,
   titleMaxChars,
   titleStyle,
@@ -337,6 +338,24 @@ describe("buildNarrationPrompt", () => {
       steps,
     });
     expect(prompt).toContain("page.open('/login')");
+  });
+
+  it("marks skimmed steps and limits their stretch to one short line", () => {
+    const prompt = buildNarrationPrompt({
+      direction: "noir",
+      steps: [
+        { index: 0, name: "finish-onboarding", skim: true },
+        { index: 1, name: "open-timecards" },
+      ],
+    });
+    expect(prompt).toContain("0. finish-onboarding [fast-forward]");
+    expect(prompt).toContain("1. open-timecards\n");
+    expect(prompt).toContain("at most ONE short line");
+  });
+
+  it("leaves the skim rule out when no step is skimmed", () => {
+    const prompt = buildNarrationPrompt({ direction: "noir", steps });
+    expect(prompt).not.toContain("fast-forward");
   });
 
   it("surfaces showCaption text as an intent note, even past the slice", () => {
@@ -1353,6 +1372,159 @@ describe("planRetime — fast-forwarding silent footage", () => {
     expect(speeds[1]).toBe(1);
     expect(speeds[2]).toBe(2);
   });
+
+  it("leaves skimmed steps out of a run", () => {
+    // 6s + 20s of silence would be one 26s run; the skimmed step breaks it.
+    const speeds = silentRunSpeeds([3, 3, 20], [0, 0, 0], 4, [
+      false,
+      false,
+      true,
+    ]);
+    expect(speeds).toEqual([1.5, 1.5, 1]);
+  });
+});
+
+describe("stepSpeeds — skimmed runs", () => {
+  const speeds = (
+    footageSec: number[],
+    clipDurSec: number[],
+    skim: boolean[],
+    silentTargetSec = 4
+  ) =>
+    stepSpeeds({ footageSec, clipDurSec, skim, silentTargetSec, gapSec: 0.5 });
+
+  it("lets a silent skimmed run go past the un-narrated cap", () => {
+    // 64s of setup: 8x toward 8s. Unmarked, the same footage stops at 4x.
+    expect(speeds([30, 34], [0, 0], [true, true])).toEqual([8, 8]);
+    expect(speeds([30, 34], [0, 0], [false, false])).toEqual([4, 4]);
+  });
+
+  it("never plays a silent skimmed run slower than the same run unmarked", () => {
+    // 20s: the skim target alone says 2.5x, the un-narrated rule says 4x.
+    expect(speeds([20], [0], [true])).toEqual([4]);
+  });
+
+  it("keeps skimming when the un-narrated speed-up is switched off", () => {
+    expect(speeds([20], [0], [true], 0)).toEqual([2.5]);
+  });
+
+  it("plays even a short skimmed run at twice speed", () => {
+    expect(speeds([3], [0], [true], 0)).toEqual([2]);
+  });
+
+  it("paces a skimmed run apart from the quiet steps beside it", () => {
+    const s = speeds([3, 3, 20, 2], [0, 0, 0, 2], [false, false, true, false]);
+    expect(s[0]).toBe(1.5);
+    expect(s[1]).toBe(1.5);
+    expect(s[2]).toBe(4);
+    expect(s[3]).toBe(1);
+  });
+
+  it("plays a narrated skimmed run fast when its footage has room for the line", () => {
+    // 20s of footage, a 3s line (+0.5s gap after it): the skim speed, 2.5x.
+    expect(speeds([10, 10, 4], [3, 0, 2], [true, true, false])).toEqual([
+      2.5, 2.5, 1,
+    ]);
+  });
+
+  it("eases a narrated skimmed run to fit its line instead of freezing", () => {
+    // A 9s line (+0.5s gap) over 20s of footage: 20 / 9.5 ≈ 2.1x, not 2.5x.
+    const [first = 0] = speeds([10, 10, 4], [9, 0, 2], [true, true, false]);
+    expect(first).toBeCloseTo(20 / 9.5);
+  });
+
+  it("never slows a narrated skimmed run below real time", () => {
+    expect(speeds([10, 10, 4], [30, 0, 2], [true, true, false])).toEqual([
+      1, 1, 1,
+    ]);
+  });
+
+  it("only counts the footage from the line on", () => {
+    // The line sits on the second step, so the first step's 10s can't carry it.
+    const [first = 0] = speeds([10, 10, 4], [0, 9, 2], [true, true, false]);
+    expect(first).toBeCloseTo(10 / 9.5);
+  });
+});
+
+describe("planRetime — skimmed runs", () => {
+  it("holds the line over the run's fast footage and freezes only at its end", () => {
+    // A 30s line over 20s of skimmed footage: real time, then one 10.5s hold
+    // (line overrun + gap) on the run's LAST step, none on the step it belongs to.
+    const plan = planRetime({
+      stepTimes: [0, 10, 20],
+      clipDurSec: [30, 0, 2],
+      totalSec: 24,
+      gapSec: 0.5,
+      silentTargetSec: 4,
+      skim: [true, true, false],
+      frameRateHz: 25,
+    });
+    expect(plan.holds).toEqual([0, 10.5, 0]);
+    expect(plan.starts).toEqual([0, 10, 30.5]);
+    expect(plan.lineStarts).toEqual([0, 10, 30.5]);
+  });
+
+  it("speeds a narrated skimmed run up and lets the next step start after the line", () => {
+    const plan = planRetime({
+      stepTimes: [0, 10, 20],
+      clipDurSec: [3, 0, 2],
+      totalSec: 24,
+      gapSec: 0.5,
+      silentTargetSec: 4,
+      skim: [true, true, false],
+      frameRateHz: 25,
+    });
+    expect(plan.speeds).toEqual([2.5, 2.5, 1]);
+    // 20s of footage now takes 8s; the 3s line fits inside it, so no freeze.
+    expect(plan.holds).toEqual([0, 0, 0]);
+    expect(plan.starts).toEqual([0, 4, 8]);
+  });
+
+  it("chains a second line in a skimmed run after the first", () => {
+    const plan = planRetime({
+      stepTimes: [0, 2, 4],
+      clipDurSec: [3, 3, 0],
+      totalSec: 8,
+      gapSec: 0.5,
+      skim: [true, true, false],
+      frameRateHz: 25,
+    });
+    const [line0 = 0, line1 = 0] = plan.lineStarts;
+    expect(line1).toBeGreaterThanOrEqual(line0 + 3 + 0.5);
+    // The step after the run starts once the second line and its gap are done.
+    expect(plan.starts[2]).toBeCloseTo(line1 + 3 + 0.5, 5);
+    expect(plan.holds[0]).toBe(0);
+  });
+
+  it("starts lines with their steps outside a skimmed run", () => {
+    const plan = planRetime({
+      stepTimes: [0, 4],
+      clipDurSec: [6, 2],
+      totalSec: 8,
+      gapSec: 0.5,
+    });
+    expect(plan.lineStarts).toEqual(plan.starts);
+  });
+
+  it("fast-forwards a skimmed step that overruns its sung window", () => {
+    // Song sync: 20s of skimmed footage in a 5s window plays at 4x; the same
+    // footage unmarked is clipped to the window.
+    const args = {
+      stepTimes: [0, 20],
+      clipDurSec: [0, 0],
+      totalSec: 24,
+      onsets: [0, 5],
+      bodyEnd: 9,
+      frameRateHz: 25,
+    };
+    const skimmed = planRetime({ ...args, skim: [true, false] });
+    expect(skimmed.footage[0]).toBe(20);
+    expect(skimmed.speeds[0]).toBe(4);
+    expect(skimmed.holds[0]).toBe(0);
+    const plain = planRetime(args);
+    expect(plain.footage[0]).toBe(5);
+    expect(plain.speeds[0]).toBe(1);
+  });
 });
 
 describe("planRetime", () => {
@@ -1869,5 +2041,32 @@ describe("narrationJobs", () => {
 
   it("returns nothing when the model narrated no step", () => {
     expect(narrationJobs(steps, new Map())).toEqual([]);
+  });
+
+  it("keeps only the first line of each skimmed run", () => {
+    const skimmed = [
+      { name: "a", durationMs: 1000, videoTime: 0, skim: true },
+      { name: "b", durationMs: 1000, videoTime: 1, skim: true },
+      { name: "c", durationMs: 1000, videoTime: 2 },
+      { name: "d", durationMs: 1000, videoTime: 3, skim: true },
+    ];
+    const jobs = narrationJobs(
+      skimmed,
+      new Map([
+        [0, ""],
+        [1, "first in the run"],
+        [2, "unskimmed"],
+        [3, "a new run"],
+      ])
+    );
+    expect(jobs.map((j) => j.index)).toEqual([1, 2, 3]);
+    const twice = narrationJobs(
+      skimmed,
+      new Map([
+        [0, "kept"],
+        [1, "dropped"],
+      ])
+    );
+    expect(twice.map((j) => j.text)).toEqual(["kept"]);
   });
 });

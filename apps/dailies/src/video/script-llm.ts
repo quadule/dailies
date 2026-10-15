@@ -324,8 +324,9 @@ export function isSetupStep(step: { name: string; script?: string }): boolean {
 }
 
 // The song-mode sections: the footage grouping, with every RUN of 2+ consecutive
-// setup steps pre-collapsed into a single section so the whole "get into the app"
-// stretch can only earn ONE lyric line. The non-setup stretches around those runs
+// setup steps (by name, or marked with `run --skim`) pre-collapsed into a single
+// section so the whole "get into the app" stretch can only earn ONE lyric line.
+// The non-setup stretches around those runs
 // are grouped by footage exactly as before, each starting a fresh accumulation —
 // which is what stops the run's last step (say the sign-in) from being swept into
 // the first product section and costing that beat its line.
@@ -346,13 +347,15 @@ export function planLyricGroups(args: {
   footageSec: number[];
   group: (footageSec: number[], minSec: number) => number[][];
   minSec: number;
-  steps: { name: string; script?: string }[];
+  steps: { name: string; script?: string; skim?: boolean }[];
 }): number[][] {
   const { footageSec, group, minSec, steps } = args;
   // Normalize to one footage entry per step so every branch below partitions the
   // same index range.
   const footage = steps.map((_, i) => footageSec[i] ?? 0);
-  const setup = steps.map(isSetupStep);
+  // A step the agent recorded with `run --skim` is setup or a detour by its own
+  // account, whatever its name says.
+  const setup = steps.map((s) => Boolean(s.skim) || isSetupStep(s));
   const runs: { end: number; start: number }[] = [];
   let i = 0;
   while (i < steps.length) {
@@ -398,6 +401,9 @@ export function planLyricGroups(args: {
   return groups;
 }
 
+// How the narration prompt marks a step recorded with `run --skim`.
+const FAST_FORWARD_MARK = "fast-forward";
+
 // Build the `claude -p` prompt: the creative direction, the step list, and a
 // strict-JSON output contract. The `direction` is the already-composed steering
 // text (a random theme+style draw, or the user's verbatim --prompt). Deterministic
@@ -405,7 +411,7 @@ export function planLyricGroups(args: {
 export function buildNarrationPrompt(args: {
   direction: string;
   change?: ChangeContext;
-  steps: { index: number; name: string; script?: string }[];
+  steps: { index: number; name: string; script?: string; skim?: boolean }[];
 }): string {
   const { direction, change, steps } = args;
   const stepLines = steps
@@ -416,9 +422,17 @@ export function buildNarrationPrompt(args: {
       const intentPart = captions.length
         ? ` — intent: ${captions.map((c) => `"${c}"`).join(" ")}`
         : "";
-      return `  ${step.index}. ${step.name}${scriptPart}${intentPart}`;
+      const skimPart = step.skim ? ` [${FAST_FORWARD_MARK}]` : "";
+      return `  ${step.index}. ${step.name}${skimPart}${scriptPart}${intentPart}`;
     })
     .join("\n");
+  // Only when the run marked anything, so an unmarked run's prompt is unchanged.
+  // narrate.ts drops any second line in a stretch either way (narrationJobs).
+  const skimRules = steps.some((step) => step.skim)
+    ? [
+        `- Steps marked [${FAST_FORWARD_MARK}] are setup or a detour the operator flagged as not the point. The video plays them at several times normal speed. Each unbroken stretch of them gets at most ONE short line (under ~10 words), or none — any further line in the stretch is dropped. When the stretch opens the video, that one line is the orienting line. These steps do not count toward the dead-air rule above.`,
+      ]
+    : [];
 
   const changeLines = change
     ? [
@@ -440,6 +454,7 @@ export function buildNarrationPrompt(args: {
     "Rules:",
     '- OPEN by saying what is being tested. The very FIRST line must orient the viewer: in ONE short clause, the feature or behaviour this run exercises. Put it on the first step, keep it under ~12 words, and stay in character — "today we see whether X holds up", not a summary paragraph. Someone who watches only the opening should know what they are about to watch.',
     "- Do NOT leave a long stretch with no voice at all. A silent step still plays its footage in full, so several empty narrations in a row read as dead air rather than restraint. If three or more consecutive steps would be empty, give the FIRST of them a short line.",
+    ...skimRules,
     '- NOT every step needs narration. Narrate only the beats a viewer actually cares about — a real action taken, a screen or result reached, a meaningful change. For steps that are setup, waiting, retries, scrolling, or the automation inspecting the page (snapshots, DOM/selector probing, debug pokes), emit an EMPTY narration string "" so that moment plays with no voice-over. A few well-placed lines over a quiet score beat a wall-to-wall play-by-play.',
     "- Getting INTO the app is never the point: loading the first page, signing in, choosing a company or role. That whole stretch gets ONE line — the orienting line above — plus at most ONE more, and only if it runs long enough that it would otherwise fall silent. Never a line per step.",
     "- Spend the lines you do write on the FEATURE being exercised: what the person changes in the product, and what a viewer can SEE change on screen because of it (a menu opening, a column disappearing, a total updating, a message appearing).",

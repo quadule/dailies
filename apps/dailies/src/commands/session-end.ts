@@ -718,6 +718,7 @@ async function cinematizeSessionVideo(
     name: s.name,
     script: s.script,
     durationMs: s.durationMs,
+    skim: s.skim,
     videoTime: sourceTimeOf(s) as number,
   }));
   if (steps.length === 0) {

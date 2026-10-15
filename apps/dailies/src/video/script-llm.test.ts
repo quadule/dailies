@@ -130,6 +130,26 @@ describe("planLyricGroups", () => {
       steps: named(names),
     });
 
+  it("collapses a run of skimmed steps whatever their names", () => {
+    // Product-sounding names the setup heuristic would keep apart, marked with
+    // `run --skim` by the agent that recorded them.
+    const steps = [
+      { name: "fill-worker-profile", skim: true },
+      { name: "upload-tax-forms", skim: true },
+      { name: "sign-direct-deposit", skim: true },
+      { name: "open-timecards" },
+      { name: "approve-timecard" },
+    ];
+    const groups = planLyricGroups({
+      footageSec: [9, 9, 9, 6, 6],
+      group: groupStepsForLyrics,
+      minSec: GROUP_MIN_SEC,
+      steps,
+    });
+    expect(groups[0]).toEqual([0, 1, 2]);
+    expect(groups.flat()).toEqual([0, 1, 2, 3, 4]);
+  });
+
   it("collapses a leading setup run into ONE group, however long its footage", () => {
     // The session that prompted this: 3 setup steps (~19s) then 11 product steps.
     // Before, the footage grouper spent two groups — two sung lines — on the
