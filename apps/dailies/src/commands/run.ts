@@ -6,11 +6,25 @@ import { readSessionRecord, writeSessionRecord } from "../session/registry.js";
 import { resultRenderer } from "./render.js";
 import { readScript } from "./script-input.js";
 
+// Enough of a step's error to say why it failed — Playwright's call log after
+// the first lines is mostly repetition.
+const STEP_ERROR_CHARS = 600;
+
+// Playwright colors its call log for a terminal; the record is read as text.
+const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
+function stepError(message: string): string {
+  return message.replace(ANSI_ESCAPE, "").trim().slice(0, STEP_ERROR_CHARS);
+}
+
 interface RunArgs {
   file?: string;
   json: boolean;
+  // Read the live page without recording a step (see `run --peek`).
+  peek?: boolean;
   script?: string;
   sessionId: string;
+  skim?: boolean;
   step?: string;
   timeoutMs?: number;
 }
@@ -24,6 +38,13 @@ export async function runInSession(args: RunArgs): Promise<number> {
       `Session "${args.sessionId}" is ${pre.status}; cannot run new steps.\n`
     );
     return 1;
+  }
+
+  if (args.peek && (args.step !== undefined || args.skim)) {
+    process.stderr.write(
+      "--peek records no step, so it takes no --step or --skim.\n"
+    );
+    return 2;
   }
 
   const scriptText = await readScript(args);
@@ -52,12 +73,14 @@ export async function runInSession(args: RunArgs): Promise<number> {
 
     const stepName = args.step ?? `step-${record.steps.length + 1}`;
     const startedAt = Date.now();
+    // A peek sends no step name, so the daemon skips the trace group, the
+    // settle and the screenshot, and runs the script read-only.
     const request: ExecuteRequest = {
       id: requestId("execute"),
       type: "execute",
       browser: record.browser,
       script: scriptText,
-      step: stepName,
+      ...(args.peek ? { readOnly: true } : { step: stepName }),
     };
     if (args.timeoutMs !== undefined) {
       request.timeoutMs = args.timeoutMs;
@@ -89,13 +112,18 @@ export async function runInSession(args: RunArgs): Promise<number> {
       );
       return 1;
     }
+    if (args.peek) {
+      return code;
+    }
 
     record.steps.push({
       durationMs: Date.now() - startedAt,
       exitCode: code,
+      ...(code !== 0 && daemonError ? { error: stepError(daemonError) } : {}),
       name: stepName,
       ok: code === 0,
       script: scriptText,
+      ...(args.skim ? { skim: true } : {}),
       startedAt: new Date(startedAt).toISOString(),
     });
     await writeSessionRecord(record);

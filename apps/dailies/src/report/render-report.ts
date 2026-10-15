@@ -437,10 +437,13 @@ function renderStepBody(step: SessionManifest["steps"][number]): string {
           .map(renderActionRow)
           .join("")}</tbody></table>`
       : "";
-  if (!(hasScript || actions)) {
+  const error = step.error
+    ? `<div class="cmd-err">${escapeHtml(step.error)}</div>`
+    : "";
+  if (!(hasScript || actions || error)) {
     return '<div class="empty">No script or Playwright actions recorded for this step. Enable trace capture to record actions.</div>';
   }
-  return `${scriptBlock}${actions}`;
+  return `${error}${scriptBlock}${actions}`;
 }
 
 // One panel for the whole run: every step as an expandable row that carries

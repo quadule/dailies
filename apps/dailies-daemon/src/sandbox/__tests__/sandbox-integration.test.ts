@@ -84,7 +84,7 @@ describe("QuickJS sandbox integration", { concurrent: false }, () => {
       `
         const page = await browser.getPage("locator");
         await page.goto("https://example.com");
-        console.log(await page.locator("h1").textContent());
+        console.log(await page.locator("title").textContent());
       `,
       manager,
       "default",

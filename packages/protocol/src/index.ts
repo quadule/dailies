@@ -29,6 +29,10 @@ export const ExecuteRequestSchema = RequestBaseSchema.extend({
   // daemon wraps the run in tracing.group(step)/groupEnd and screenshots the
   // active page to the session's screenshots/<step>.png after a successful run.
   step: z.string().min(1).max(200).optional(),
+  // A peek: run against the session's live page without recording anything.
+  // Input that a viewer would see (clicks, typing, navigation, captions,
+  // effects) is refused, because footage outside a step is cut from the film.
+  readOnly: z.boolean().optional(),
 });
 
 export const BrowsersRequestSchema = RequestBaseSchema.extend({

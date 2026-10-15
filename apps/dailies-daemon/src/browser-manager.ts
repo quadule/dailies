@@ -328,6 +328,23 @@ export class BrowserManager {
     return page;
   }
 
+  // An open page by name or target id, for a peek: never opens a tab, names
+  // one, or moves lastDrivenPage (which picks the step screenshot and the video
+  // a session finishes). Undefined when there is no such page.
+  async findOpenPage(
+    browserName: string,
+    pageNameOrId: string
+  ): Promise<Page | undefined> {
+    const entry = this.getBrowserEntry(browserName);
+    const named = entry.pages.get(pageNameOrId);
+    if (named && !named.isClosed()) {
+      return named;
+    }
+    return TARGET_ID_PATTERN.test(pageNameOrId)
+      ? ((await this.findPageByTargetId(entry, pageNameOrId)) ?? undefined)
+      : undefined;
+  }
+
   async newPage(browserName: string): Promise<Page> {
     const entry = this.getBrowserEntry(browserName);
     const page =

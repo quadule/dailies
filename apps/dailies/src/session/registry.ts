@@ -11,6 +11,9 @@ export const SESSION_SCHEMA_VERSION = 1;
 
 export interface SessionStep {
   durationMs: number;
+  // Why a failed step failed: the daemon's error message, trimmed. Without it
+  // the only record of the cause was inside trace.zip.
+  error?: string;
   exitCode: number;
   name: string;
   ok: boolean;
@@ -22,6 +25,9 @@ export interface SessionStep {
   // The script text this step ran — surfaced in the report/results.json so a
   // reviewer can see what the agent actually sent.
   script?: string;
+  // Recorded with `run --skim`: setup or a detour the film should fast-forward
+  // through. The seed cut turns runs of these into speed-ups.
+  skim?: boolean;
   startedAt: string;
   // Where this step lands in the CONDENSED video, in seconds. Set at session
   // end once the video has been trimmed, so the report/viewer timeline can seek

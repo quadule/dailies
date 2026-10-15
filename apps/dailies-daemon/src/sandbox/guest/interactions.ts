@@ -5,6 +5,25 @@ const CURSOR_SETTLE_MS = CURSOR_GLIDE_MS + 200;
 const SETTLE_BUFFER_MS = 150;
 // Bound smooth scrolling even when a page ignores its requested behavior.
 const SCROLL_REVEAL_CAP_MS = 1500;
+// Default waits for a locator action and for a navigation (see augmentPage).
+const ACTION_TIMEOUT_MS = 10_000;
+const NAVIGATION_TIMEOUT_MS = 30_000;
+// The page helpers a peek refuses: everything that moves the cursor, scrolls,
+// types, uploads, or draws on the page.
+const PEEK_REFUSED_HELPERS = [
+  "humanClick",
+  "humanClickAndWaitForURL",
+  "humanFill",
+  "reveal",
+  "setInputFiles",
+  "showCaption",
+  "showSpotlight",
+  "circle",
+  "underline",
+  "pointAt",
+  "highlightText",
+  "lookAt",
+];
 
 // This source runs in the bootstrap's private closure. Its only dependencies
 // are the captured hostCall and guest runtime globals; it supplies augmentPage.
@@ -789,6 +808,28 @@ export const PAGE_INTERACTIONS_SOURCE = `            // Human-interaction helper
               page.failOnDialogs = async () => {
                 await hostCall("setDialogPolicy", JSON.stringify([page._guid, "fail"]));
               };
+              // A locator action that can't find its element fails in
+              // ${ACTION_TIMEOUT_MS / 1000}s instead of Playwright's 30s. A wrong
+              // selector is the usual reason a step stalls, and the full 30s per
+              // miss was most of a long session's dead time. Typing is one key per
+              // action, so a long humanFill is unaffected; navigation keeps 30s.
+              // A known-slow wait passes its own { timeout }.
+              if (typeof page.setDefaultTimeout === "function") {
+                page.setDefaultTimeout(${ACTION_TIMEOUT_MS});
+                page.setDefaultNavigationTimeout(${NAVIGATION_TIMEOUT_MS});
+              }
+              // A peek (\`run --peek\`) reads the page and records nothing, so
+              // whatever a viewer would see happen is refused here, before the
+              // cursor moves. The host bridge refuses the raw input as well.
+              if (globalThis.__dailiesPeek) {
+                for (const name of ${JSON.stringify(PEEK_REFUSED_HELPERS)}) {
+                  page[name] = async () => {
+                    throw new Error(
+                      "page." + name + " is not allowed in a peek: a peek is read-only and unrecorded. Run it as a step instead (drop --peek).",
+                    );
+                  };
+                }
+              }
               return page;
             };
 

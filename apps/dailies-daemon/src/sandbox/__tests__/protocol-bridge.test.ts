@@ -40,7 +40,7 @@ describe("protocol bridge", { concurrent: false }, () => {
     await page.goto("https://example.com");
 
     await expect(page.title()).resolves.toBe("Example Domain");
-    await expect(page.locator("h1").textContent()).resolves.toBe(
+    await expect(page.locator("title").textContent()).resolves.toBe(
       "Example Domain"
     );
     await expect(page.evaluate(() => document.title)).resolves.toBe(
@@ -62,5 +62,22 @@ describe("protocol bridge", { concurrent: false }, () => {
     expect(activeBrowser?.isConnected()).toBe(false);
 
     await bridge.dispose("test cleanup");
+  }, 60_000);
+});
+
+describe("read-only protocol bridge", { concurrent: false }, () => {
+  it("refuses input a peek must not send, with a message that says why", async () => {
+    const bridge = createProtocolBridge({ readOnly: true });
+    try {
+      const playwright = await bridge.initializePlaywright();
+      const browser = await playwright.chromium.launch({ headless: true });
+      await expect(browser.newPage()).rejects.toThrow(
+        "newPage is not allowed in a peek"
+      );
+      // Closing is refused too; disposing the bridge shuts the browser down.
+      await expect(browser.close()).rejects.toThrow("not allowed in a peek");
+    } finally {
+      await bridge.dispose("test teardown");
+    }
   }, 60_000);
 });

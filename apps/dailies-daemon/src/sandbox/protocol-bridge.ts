@@ -50,6 +50,7 @@ export class ProtocolBridge {
       preLaunchedBrowser: options.preLaunchedBrowser,
       sharedBrowser: options.sharedBrowser,
       denyLaunch: options.denyLaunch,
+      readOnly: options.readOnly,
       sdkLanguage: options.sdkLanguage,
       sendToSandbox: (json) => {
         scheduleDelivery(this.schedule, () =>

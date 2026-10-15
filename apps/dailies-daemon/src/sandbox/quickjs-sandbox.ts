@@ -241,6 +241,8 @@ interface QuickJSSandboxOptions {
   onCaption?: (event: { at: string; durationMs: number; text: string }) => void;
   onStderr: (data: string) => void;
   onStdout: (data: string) => void;
+  // A peek: refuse input a viewer would see (see HostBridge's readOnly).
+  readOnly?: boolean;
   timeoutMs?: number;
 }
 
@@ -293,9 +295,12 @@ export class QuickJSSandbox {
             this.#options.manager.listPages(this.#options.browserName),
           closePage: (name) => this.#closePage(name),
           settleAfterInteraction: () =>
-            this.#options.manager.settleActivePage(this.#options.browserName, {
-              fast: true,
-            }),
+            this.#options.readOnly
+              ? Promise.resolve()
+              : this.#options.manager.settleActivePage(
+                  this.#options.browserName,
+                  { fast: true }
+                ),
           saveScreenshot: (name, data) => this.#writeTempFile(name, data),
           writeFile: (name, data) => this.#writeTempFile(name, data),
           readFile: (name) => this.#readTempFile(name),
@@ -306,6 +311,11 @@ export class QuickJSSandbox {
           // host, so the timestamp shares a clock with the session record and
           // the video — the sandbox has no reliable wall clock of its own.
           recordCaption: (text, durationMs) => {
+            if (this.#options.readOnly) {
+              return Promise.reject(
+                new Error("page.showCaption is not allowed in a peek")
+              );
+            }
             // Args arrive from the sandbox as `unknown` — a script can call
             // showCaption with anything, so coerce rather than trust.
             const ms = Number(durationMs);
@@ -329,6 +339,11 @@ export class QuickJSSandbox {
       this.#host.executeScriptSync(QUICKJS_RUNTIME_SOURCE, {
         filename: "quickjs-runtime.js",
       });
+      if (this.#options.readOnly) {
+        this.#host.executeScriptSync("globalThis.__dailiesPeek = true;", {
+          filename: "peek.js",
+        });
+      }
 
       const bundleCode = await getSandboxClientBundleCode();
       this.#host.executeScriptSync(createClientFactorySource(bundleCode), {
@@ -353,6 +368,7 @@ export class QuickJSSandbox {
         ),
         sharedBrowser: true,
         denyLaunch: true,
+        readOnly: this.#options.readOnly,
       });
 
       await this.#host.executeScript(SANDBOX_BOOTSTRAP_SOURCE, {
@@ -539,16 +555,28 @@ export class QuickJSSandbox {
   }
 
   async #getPage(name: unknown): Promise<string> {
-    const page = await this.#options.manager.getPage(
-      this.#options.browserName,
-      requireString(name, "Page name or targetId")
-    );
+    const pageName = requireString(name, "Page name or targetId");
+    const page = this.#options.readOnly
+      ? await this.#options.manager.findOpenPage(
+          this.#options.browserName,
+          pageName
+        )
+      : await this.#options.manager.getPage(
+          this.#options.browserName,
+          pageName
+        );
+    if (!page) {
+      throw new Error(
+        `No page "${pageName}" is open, and a peek can't open one. Open it in a step.`
+      );
+    }
     const guid = extractGuid(page);
     this.#guardDialogs(page, guid);
     return guid;
   }
 
   async #newPage(): Promise<string> {
+    this.#refuseInPeek("browser.newPage");
     const page = await this.#options.manager.newPage(this.#options.browserName);
     this.#anonymousPages.add(page);
     page.on("close", () => {
@@ -628,10 +656,21 @@ export class QuickJSSandbox {
   }
 
   async #closePage(name: unknown): Promise<void> {
+    this.#refuseInPeek("browser.closePage");
     await this.#options.manager.closePage(
       this.#options.browserName,
       requireString(name, "Page name")
     );
+  }
+
+  // Opening or closing a tab during a peek would change the session off camera,
+  // and a tab opened there records a video of its own.
+  #refuseInPeek(what: string): void {
+    if (this.#options.readOnly) {
+      throw new Error(
+        `${what} is not allowed in a peek: a peek is read-only and unrecorded. Run it as a step instead (drop --peek).`
+      );
+    }
   }
 
   async #writeTempFile(name: unknown, payload: unknown): Promise<string> {

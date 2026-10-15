@@ -185,7 +185,9 @@ interface SessionStartOpts {
 }
 
 interface RunOpts {
+  peek?: boolean;
   session: string;
+  skim?: boolean;
   step?: string;
   timeout?: number;
 }
@@ -479,6 +481,14 @@ export function buildProgram(): Command {
     .requiredOption("--session <id>", "Target session id")
     .option("--step <name>", "Step label (defaults to step-N)")
     .option(
+      "--peek",
+      "Read the live page without recording a step: no screenshot, no report entry, and clicks, typing, navigation and captions are refused"
+    )
+    .option(
+      "--skim",
+      "Setup or a detour, not the subject: the finished video fast-forwards through it"
+    )
+    .option(
       "--timeout <SECONDS>",
       "Maximum script execution time in seconds",
       parseTimeout
@@ -487,6 +497,8 @@ export function buildProgram(): Command {
       const script = await scriptFromStdin(file, program);
       const code = await runInSession({
         sessionId: opts.session,
+        peek: opts.peek === true,
+        skim: opts.skim === true,
         step: opts.step,
         file,
         script,

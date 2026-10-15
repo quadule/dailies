@@ -72,7 +72,8 @@ describe("QuickJS named page management", { concurrent: false }, () => {
   }, 180_000);
 
   async function createSandbox(
-    output: ReturnType<typeof createOutput>
+    output: ReturnType<typeof createOutput>,
+    readOnly = false
   ): Promise<QuickJSSandbox> {
     await manager.ensureBrowser(browserName, {
       headless: true,
@@ -83,6 +84,7 @@ describe("QuickJS named page management", { concurrent: false }, () => {
       browserName,
       onStdout: output.sink.onStdout,
       onStderr: output.sink.onStderr,
+      readOnly,
       timeoutMs: 60_000,
     });
     await sandbox.initialize();
@@ -95,6 +97,52 @@ describe("QuickJS named page management", { concurrent: false }, () => {
   ): Promise<void> {
     await sandbox.executeScript(`(async () => {\n${script}\n})()`);
   }
+
+  it("lets a peek read an open page but never open or close one", async () => {
+    const step = await createSandbox(createOutput());
+    try {
+      await runUserScript(
+        step,
+        `await (await browser.getPage("main")).setContent("<h1>Hi</h1>");`
+      );
+    } finally {
+      await step.dispose();
+    }
+
+    const output = createOutput();
+    const peek = await createSandbox(output, true);
+    try {
+      await runUserScript(
+        peek,
+        `
+        const page = await browser.getPage("main");
+        console.log(await page.locator("h1").textContent());
+        for (const attempt of [
+          () => browser.getPage("other"),
+          () => browser.newPage(),
+          () => browser.closePage("main"),
+        ]) {
+          try {
+            await attempt();
+            console.log("allowed");
+          } catch (error) {
+            console.log(error.message.includes("peek") ? "refused" : error.message);
+          }
+        }
+      `
+      );
+    } finally {
+      await peek.dispose();
+    }
+
+    expect(outputLines(output)).toEqual([
+      "Hi",
+      "refused",
+      "refused",
+      "refused",
+    ]);
+    expect(pageNames(await manager.listPages(browserName))).toEqual(["main"]);
+  }, 120_000);
 
   it("persists named pages across script executions", async () => {
     const output = createOutput();

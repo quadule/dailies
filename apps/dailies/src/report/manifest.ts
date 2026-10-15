@@ -33,6 +33,7 @@ export interface ManifestArtifacts {
 export interface ManifestStep {
   actions: TraceAction[];
   durationMs: number;
+  error?: string;
   exitCode: number;
   name: string;
   screenshot?: string;
@@ -176,6 +177,7 @@ export function buildManifest(input: BuildManifestInput): SessionManifest {
           ? (actionsByStep[step.name] ?? [])
           : [],
       durationMs: step.durationMs,
+      ...(step.error ? { error: step.error } : {}),
       exitCode: step.exitCode,
       name: step.name,
       screenshot: shot?.path,

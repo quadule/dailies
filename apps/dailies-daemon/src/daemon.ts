@@ -64,7 +64,15 @@ function formatError(error: unknown): string {
     if (error.name === "ScriptTimeoutError") {
       return error.message;
     }
-    return error.stack ?? error.message;
+    // A V8 stack starts with "Name: message"; a QuickJS one (any error a step
+    // script throws) is frames only, so it would report where but not why.
+    // The host's "QuickJS promise rejected" prefix says where the error crossed
+    // into Node, which is nothing a script author can act on.
+    const stack = error.stack ?? "";
+    const message = error.message.replace(/^QuickJS promise rejected: /, "");
+    return stack.includes(error.message)
+      ? stack
+      : `${error.name}: ${message}\n${stack}`.trimEnd();
   }
 
   return String(error);
@@ -327,6 +335,7 @@ async function handleExecute(
           },
         },
         {
+          readOnly: request.readOnly,
           timeout: timeoutMs,
         }
       );

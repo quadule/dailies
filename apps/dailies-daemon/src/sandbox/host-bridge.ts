@@ -17,6 +17,53 @@ import { SnapshotTracker } from "./snapshot-tracking.js";
 // `download` event — is forwarded verbatim so downloads keep working; the daemon
 // records video on its own real context regardless of what the sandbox sees.
 const WITHHELD_EVENTS = new Set(["video"]);
+
+// Protocol methods a peek refuses: everything that sends input, navigates,
+// scrolls, or closes something. A peek runs between steps, where no footage is
+// kept, so any of these would change the app off camera and the film would
+// jump. Reading — snapshots, evaluate, locator queries — passes through.
+const PEEK_REFUSED_METHODS: ReadonlySet<string> = new Set([
+  "addScriptTag",
+  "addStyleTag",
+  "blur",
+  "bringToFront",
+  "check",
+  "click",
+  "close",
+  "dblclick",
+  "dispatchEvent",
+  "dragAndDrop",
+  "fill",
+  "focus",
+  "goBack",
+  "goForward",
+  "goto",
+  "hover",
+  "keyboardDown",
+  "keyboardInsertText",
+  "keyboardPress",
+  "keyboardType",
+  "keyboardUp",
+  "mouseClick",
+  "mouseDown",
+  "mouseMove",
+  "mouseUp",
+  "mouseWheel",
+  "newPage",
+  "press",
+  "reload",
+  "scrollIntoViewIfNeeded",
+  "selectOption",
+  "selectText",
+  "setChecked",
+  "setContent",
+  "setInputFiles",
+  "setViewportSize",
+  "tap",
+  "touchscreenTap",
+  "type",
+  "uncheck",
+]);
 const snapshotTracker = new SnapshotTracker();
 
 interface BridgeMessage {
@@ -26,6 +73,8 @@ interface BridgeMessage {
 export interface HostBridgeOptions {
   denyLaunch?: boolean;
   preLaunchedBrowser?: unknown;
+  // A peek: refuse PEEK_REFUSED_METHODS instead of dispatching them.
+  readOnly?: boolean;
   sdkLanguage?: string;
   sendToSandbox: (json: string) => void;
   sharedBrowser?: boolean;
@@ -51,6 +100,7 @@ export class HostBridge {
       preLaunchedBrowser: options.preLaunchedBrowser,
       sharedBrowser: options.sharedBrowser,
       denyLaunch: options.denyLaunch,
+      readOnly: options.readOnly,
       sdkLanguage: options.sdkLanguage ?? "javascript",
     };
     this.playwright = createPlaywright({
@@ -89,6 +139,24 @@ export class HostBridge {
 
   async receiveFromSandbox(json: string): Promise<void> {
     const message = JSON.parse(json) as WireMessage;
+    if (
+      this.options.readOnly &&
+      typeof message.method === "string" &&
+      PEEK_REFUSED_METHODS.has(message.method)
+    ) {
+      this.sendToSandbox(
+        JSON.stringify({
+          id: message.id,
+          error: {
+            error: {
+              name: "Error",
+              message: `${message.method} is not allowed in a peek: a peek is read-only and unrecorded. Run it as a step instead (drop --peek).`,
+            },
+          },
+        })
+      );
+      return;
+    }
     await this.dispatcherConnection.dispatch(
       this.prepareTrackedSnapshot(message)
     );
