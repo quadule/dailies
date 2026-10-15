@@ -248,6 +248,32 @@ describe("scrubHarFile", () => {
     expect(await readFile(harPath, "utf8")).toBe("{ not json");
   });
 
+  it("scrubs a HAR too large to read as one string, entry by entry", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "scrub-har-"));
+    const harPath = path.join(dir, "network.har");
+    const fixture = harFixture();
+    // A second entry whose strings hold every character the walker must not
+    // mistake for structure: braces, brackets, escaped quotes, the marker.
+    const tricky = {
+      request: {
+        url: 'https://app.example.com/?q={"entries":[}]',
+        headers: [{ name: "Cookie", value: 'a\\"b{]' }],
+      },
+    };
+    fixture.log.entries.push(tricky as never);
+    const raw = JSON.stringify(fixture);
+    await writeFile(harPath, raw);
+
+    // Force the streaming path; a real large HAR is checked by hand.
+    const outcome = await scrubHarFile(harPath, log, { streamAboveBytes: 0 });
+
+    expect(outcome.scrubbed).toBe(true);
+    const expected = JSON.parse(raw);
+    const replaced = scrubHarLog(expected);
+    expect(outcome).toEqual({ replaced, scrubbed: true });
+    expect(JSON.parse(await readFile(harPath, "utf8"))).toEqual(expected);
+  });
+
   it("does not rewrite a HAR that has nothing sensitive in it", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "scrub-har-"));
     const harPath = path.join(dir, "network.har");

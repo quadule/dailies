@@ -31,7 +31,13 @@ function recordWith(steps: SessionStep[]): SessionRecord {
   return {
     artifactsDir: "/tmp/s",
     browser: "__session__s",
-    capture: { console: true, har: true, trace: true, video: true },
+    capture: {
+      console: true,
+      full: false,
+      har: true,
+      trace: true,
+      video: true,
+    },
     createdAt: CREATED_AT,
     headless: true,
     id: "s",

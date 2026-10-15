@@ -173,6 +173,7 @@ async function scriptFromStdin(
 interface SessionStartOpts {
   console: boolean;
   cursor: boolean;
+  fullCapture?: boolean;
   har: boolean;
   headless?: boolean;
   name?: string;
@@ -270,6 +271,10 @@ export function buildProgram(): Command {
     .option("--no-har", "Disable network HAR capture")
     .option("--no-console", "Disable console / page-error capture")
     .option(
+      "--full-capture",
+      "Record the trace with DOM snapshots and screenshots, and the HAR with every request and response body. Off by default: on a long run against a dev server they reach gigabytes"
+    )
+    .option(
       "--viewport <WxH>",
       "Page viewport for the recording, e.g. 1920x1080 (default 1440x900)"
     )
@@ -295,6 +300,7 @@ export function buildProgram(): Command {
           video: opts.video,
           har: opts.har,
           console: opts.console,
+          full: opts.fullCapture === true,
         },
         viewport: opts.viewport,
         cursor: opts.cursor,

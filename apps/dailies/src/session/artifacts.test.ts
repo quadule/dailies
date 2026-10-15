@@ -23,7 +23,13 @@ function record(): SessionRecord {
   return {
     artifactsDir: fixture.dir,
     browser: "__session__recovery",
-    capture: { console: false, har: false, trace: false, video: false },
+    capture: {
+      console: false,
+      full: false,
+      har: false,
+      trace: false,
+      video: false,
+    },
     createdAt: "2026-06-02T10:00:00.000Z",
     endedAt: "2026-06-02T10:00:05.000Z",
     headless: true,

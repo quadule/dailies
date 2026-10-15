@@ -137,7 +137,13 @@ function startReq(
   over: Partial<SessionStartRequest> = {}
 ): SessionStartRequest {
   return {
-    capture: { console: true, har: true, trace: true, video: true },
+    capture: {
+      console: true,
+      full: false,
+      har: true,
+      trace: true,
+      video: true,
+    },
     id: "r1",
     sessionId: "s1",
     type: "session-start",
@@ -187,6 +193,17 @@ describe("SessionManager", () => {
     expect(launched[0]?.name).toBe("__session__s1");
     expect(launched[0]?.options.record.videoDir).toBeDefined();
     expect(launched[0]?.options.record.har?.path).toContain("network.har");
+    // Lean by default: no response bodies, no static assets.
+    const har = launched[0]?.options.record.har;
+    expect(har?.content).toBe("omit");
+    expect(har?.urlFilter?.test("http://localhost:3000/projects/1")).toBe(true);
+    expect(har?.urlFilter?.test("http://localhost:3000/api/ssn?x=1")).toBe(
+      true
+    );
+    expect(
+      har?.urlFilter?.test("http://localhost:3000/assets/app-3f2a.js?v=2")
+    ).toBe(false);
+    expect(har?.urlFilter?.test("http://localhost:3000/logo.svg")).toBe(false);
     expect(launched[0]?.options.profileDirOverride).toContain("profile");
     expect(calls).toContain("tracing.start");
   });
@@ -579,7 +596,13 @@ describe("SessionManager", () => {
     const sessions = new SessionManager(makeManager(entry, calls, []), log);
     await sessions.start(
       startReq({
-        capture: { console: false, har: false, trace: false, video: false },
+        capture: {
+          console: false,
+          full: false,
+          har: false,
+          trace: false,
+          video: false,
+        },
       })
     );
     expect(calls).not.toContain("tracing.start");

@@ -28,6 +28,26 @@ import { SESSION_CURSOR_SCRIPT } from "./session-cursor.js";
 // path drives it unchanged (just target `__session__<id>`).
 const SESSION_PREFIX = "__session__";
 
+// The requests a lean HAR keeps: everything but static assets, matched by file
+// extension before any query or fragment. A dev server that serves JS modules
+// one file at a time otherwise fills the HAR with thousands of script loads
+// and buries the app's own requests (documents, XHR, form posts) among them.
+const LEAN_HAR_URLS =
+  /^(?!.*\.(?:js|mjs|css|map|woff2?|ttf|otf|eot|png|jpe?g|gif|svg|ico|webp|avif|wasm)(?:[?#]|$))/i;
+
+// How the session context records its HAR: off, lean (the default), or full.
+function harRecording(
+  capture: { har: boolean; full: boolean },
+  harPath: string
+): { path: string; content: "embed" | "omit"; urlFilter?: RegExp } | undefined {
+  if (!capture.har) {
+    return;
+  }
+  return capture.full
+    ? { path: harPath, content: "embed" }
+    : { path: harPath, content: "omit", urlFilter: LEAN_HAR_URLS };
+}
+
 // Cap each teardown step so a hung context.close() can't stall daemon exit.
 const TEARDOWN_TIMEOUT_MS = 5000;
 
@@ -206,9 +226,7 @@ export class SessionManager {
         profileDirOverride: profileDir,
         record: {
           videoDir: req.capture.video ? videoDir : undefined,
-          har: req.capture.har
-            ? { path: harPath, content: "embed" }
-            : undefined,
+          har: harRecording(req.capture, harPath),
         },
         // Recordings always get a fixed, realistic desktop viewport so video
         // and screenshots are deterministic regardless of headed window size.
@@ -277,9 +295,13 @@ export class SessionManager {
         );
       }
       if (req.capture.trace) {
+        // Lean by default (see CaptureOptionsSchema): the action log and step
+        // groups, without the DOM snapshots and screencast frames that made up
+        // nearly all of a long session's trace. The video already shows the
+        // screen; the report reads only the actions.
         await entry.context.tracing.start({
-          screenshots: true,
-          snapshots: true,
+          screenshots: req.capture.full,
+          snapshots: req.capture.full,
           sources: true,
           title: req.name ?? req.sessionId,
         });

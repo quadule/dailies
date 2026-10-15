@@ -12,7 +12,13 @@ function makeRecord(): SessionRecord {
   return {
     artifactsDir: DIR,
     browser: "__session__s1",
-    capture: { console: true, har: true, trace: true, video: true },
+    capture: {
+      console: true,
+      full: false,
+      har: true,
+      trace: true,
+      video: true,
+    },
     createdAt: "2026-06-02T10:00:00.000Z",
     endedAt: "2026-06-02T10:00:05.000Z",
     headless: false,
@@ -52,7 +58,13 @@ function makeEndResult(): SessionEndResult {
     session: {
       artifactsDir: DIR,
       browser: "__session__s1",
-      capture: { console: true, har: true, trace: true, video: true },
+      capture: {
+        console: true,
+        full: false,
+        har: true,
+        trace: true,
+        video: true,
+      },
       endedAt: 1,
       headless: false,
       name: "checkout",

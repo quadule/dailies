@@ -76,7 +76,11 @@ interface LaunchBrowserOptions {
   isSession?: boolean;
   profileDirOverride?: string;
   record?: {
-    har?: { content: "embed" | "attach" | "omit"; path: string };
+    har?: {
+      content: "embed" | "attach" | "omit";
+      path: string;
+      urlFilter?: RegExp;
+    };
     videoDir?: string;
   };
   // Fixed page viewport. When set, video recording is sized to match so the
@@ -89,7 +93,11 @@ export interface SessionLaunchOptions {
   ignoreHTTPSErrors: boolean;
   profileDirOverride: string;
   record: {
-    har?: { content: "embed" | "attach" | "omit"; path: string };
+    har?: {
+      content: "embed" | "attach" | "omit";
+      path: string;
+      urlFilter?: RegExp;
+    };
     videoDir?: string;
   };
   viewport?: { height: number; width: number };
@@ -671,6 +679,9 @@ export class BrowserManager {
               recordHar: {
                 path: options.record.har.path,
                 content: options.record.har.content,
+                ...(options.record.har.urlFilter
+                  ? { urlFilter: options.record.har.urlFilter }
+                  : {}),
               },
             }
           : {}),

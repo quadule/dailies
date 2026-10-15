@@ -116,8 +116,8 @@ main README.
 | --- | --- |
 | `dailies init` | One-shot setup: install the runtime, then print next steps (add the agent plugin, where reports land). |
 | `dailies install` | Install the embedded runtime (Chromium + Playwright + QuickJS) into `~/.dailies`. |
-| `dailies session start` | Start a capture-enabled session; prints its id. Toggle capture with `--no-trace` / `--no-video` / `--no-har` / `--no-console`; `--headless` for unattended runs. |
-| `dailies run [FILE]` | Run a script (a file, or stdin if omitted) as one step. Requires `--session <id>`; label it with `--step <name>`; bound it with `--timeout <seconds>`. |
+| `dailies session start` | Start a capture-enabled session; prints its id. Toggle capture with `--no-trace` / `--no-video` / `--no-har` / `--no-console`, or record DOM snapshots and response bodies with `--full-capture`; `--headless` for unattended runs. |
+| `dailies run [FILE]` | Run a script (a file, or stdin if omitted) as one step. Requires `--session <id>`; label it with `--step <name>`; bound it with `--timeout <seconds>`; mark setup or a detour with `--skim` so the video fast-forwards it. `--peek` reads the live page without recording a step. |
 | `dailies session end <id>` | Stop recording, collect artifacts, render `report.html` + `results.json`. Declare the outcome with `--pass` / `--fail [reason]` (otherwise it's the per-step tally); add evidence with `--attach <file>` and numbers with `--metric name=value` (both repeatable); `--video <page>` picks which recording to finish when the run drove several pages, `--open` opens the report, `--stop-daemon` shuts the daemon down afterward if nothing else needs it. Cut a film with `--cinematic` / `--song` / `--prompt <text>`, pinning slots with `--narrator` / `--music` / `--image <provider>`. |
 | `dailies session abort <id>` | Best-effort teardown of a session — salvage a wedged run from whatever artifacts survived. |
 | `dailies session list` | List recorded sessions (table; `--json` for machine output). |
@@ -169,7 +169,7 @@ Everything for a run lands under `~/.dailies/sessions/<id>/`:
 session.json   session metadata + per-step record
 results.json   decoded results (steps, summary, artifact paths)
 report.html    self-contained report — open it anywhere, commit it, share it
-trace.zip      Playwright trace (DOM snapshots + actions, one group per step)
+trace.zip      Playwright trace (actions, one group per step; DOM snapshots with --full-capture)
 ```
 
 …plus the WebM video, the network HAR, the console log, and one screenshot per step.

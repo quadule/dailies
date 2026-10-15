@@ -137,7 +137,11 @@ EOF
 Open any session and Dailies replays the whole thing — the page, the script, every Playwright call, the
 console, the network, the full trace. Nothing summarized, nothing reconstructed: it's the actual run.
 (Every screenshot below is real output.) Capture is on by default; switch any stream off with
-`--no-trace` / `--no-video` / `--no-har` / `--no-console`.
+`--no-trace` / `--no-video` / `--no-har` / `--no-console`. The trace and HAR are lean unless you
+ask: the trace keeps every Playwright call but no DOM snapshots or screencast frames (the video
+already shows the screen), and the HAR keeps the app's own requests without static assets or
+response bodies. `session start --full-capture` records both in full — on a long run against a dev
+server that serves its JavaScript unbundled, that is gigabytes.
 
 ### The session at a glance
 
@@ -188,7 +192,8 @@ headers, payload, and response — like a devtools network panel, frozen at the 
 
 The raw Playwright `trace.zip`, the network HAR, the console log, the machine-readable `results.json`,
 and the self-contained `report.html` — all under `~/.dailies/sessions/<id>/`, all one click away. Open
-the trace in Playwright's own viewer with `npx playwright show-trace`.
+the trace in Playwright's own viewer with `npx playwright show-trace` (its DOM snapshots and
+network tab need a `--full-capture` session).
 
 #### What's safe to share
 
@@ -199,8 +204,8 @@ is the one built to be handed around; the session **directory** is not.
 | --- | --- | --- |
 | `report.html` | **Yes** — this is the shareable one | Steps, screenshots, video, each step's script verbatim, console. No request headers. |
 | `results.json` | Yes | Step outcomes, timings, artifact paths, and each step's script verbatim. |
-| `network.har` | **Scrubbed, but check** | Full traffic. `Cookie` / `set-cookie` / `Authorization` **values are replaced at `session end`** (names kept), and so are request-**body** fields whose *name* looks like a credential (`password`, `secret`, `token`, `api_key`, …). Response **bodies are not scrubbed at all** — a login response can still hold a token. |
-| `trace.zip` | **No** | The same traffic as the HAR, unscrubbed. |
+| `network.har` | **Scrubbed, but check** | The app's requests (all traffic, with bodies, under `--full-capture`). `Cookie` / `set-cookie` / `Authorization` **values are replaced at `session end`** (names kept), and so are request-**body** fields whose *name* looks like a credential (`password`, `secret`, `token`, `api_key`, …). Response **bodies are not scrubbed at all** — a login response can still hold a token (lean capture records none). |
+| `trace.zip` | **No** | Every Playwright call with its parameters, unscrubbed; with `--full-capture`, the same traffic as the HAR as well. |
 | `profile/` | **No** | A real Chrome profile — an actual cookie database and `Login Data`. |
 
 One thing the "yes" rows don't protect you from: **step scripts are stored verbatim** in both

@@ -42,7 +42,13 @@ function record(status: SessionRecord["status"]): SessionRecord {
   return {
     artifactsDir: fixture.dir,
     browser: "__session__s",
-    capture: { console: true, har: true, trace: true, video: true },
+    capture: {
+      console: true,
+      full: false,
+      har: true,
+      trace: true,
+      video: true,
+    },
     createdAt: "2026-06-02T10:00:00.000Z",
     endedAt: status === "active" ? undefined : "2026-06-02T10:00:05.000Z",
     headless: true,

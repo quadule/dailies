@@ -126,8 +126,25 @@ describe("session capture flags", () => {
     expect((await run(["session", "start"])).code).toBe(0);
     expect(sessionStartMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        capture: { trace: true, video: true, har: true, console: true },
+        capture: {
+          trace: true,
+          video: true,
+          har: true,
+          console: true,
+          full: false,
+        },
         cursor: true,
+      })
+    );
+  });
+
+  it("records full traces and HAR bodies only when asked", async () => {
+    sessionStartMock.mockResolvedValue(0);
+
+    expect((await run(["session", "start", "--full-capture"])).code).toBe(0);
+    expect(sessionStartMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        capture: expect.objectContaining({ full: true }),
       })
     );
   });
@@ -145,7 +162,13 @@ describe("session capture flags", () => {
     expect(result.code).toBe(0);
     expect(sessionStartMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        capture: { trace: true, video: false, har: true, console: false },
+        capture: {
+          trace: true,
+          video: false,
+          har: true,
+          console: false,
+          full: false,
+        },
         cursor: false,
       })
     );

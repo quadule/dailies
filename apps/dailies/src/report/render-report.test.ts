@@ -19,7 +19,13 @@ function fixtureManifest(extra?: {
   const record: SessionRecord = {
     artifactsDir: DIR,
     browser: "__session__s1",
-    capture: { console: true, har: true, trace: true, video: false },
+    capture: {
+      console: true,
+      full: false,
+      har: true,
+      trace: true,
+      video: false,
+    },
     createdAt: "2026-06-02T10:00:00.000Z",
     endedAt: "2026-06-02T10:00:04.000Z",
     headless: true,

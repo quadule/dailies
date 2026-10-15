@@ -16,7 +16,9 @@
 // can carry tokens of their own, and the browser `profile/` directory contains a
 // real Chrome cookie database. See the artifact table in the README.
 
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { finished } from "node:stream/promises";
 import type { Logger } from "dailies-logger";
 import type { SessionEndResult } from "dailies-protocol";
 
@@ -186,6 +188,153 @@ export type ScrubHarOutcome =
   | { scrubbed: true; replaced: number }
   | { scrubbed: false; reason: string };
 
+// Above this size a HAR is scrubbed one entry at a time instead of parsed
+// whole. V8 caps a string at about 512 MB, so a long session's HAR could not
+// even be read as one: on a 50-minute run against a dev server the 780 MB HAR
+// failed to scrub and kept every session cookie, with only a warning to say so.
+export const STREAM_SCRUB_BYTES = 128 * 1024 * 1024;
+
+const ENTRIES_MARKER = Buffer.from('"entries":[');
+const QUOTE = 0x22;
+const BACKSLASH = 0x5c;
+const OPEN_BRACE = 0x7b;
+const CLOSE_BRACE = 0x7d;
+const OPEN_BRACKET = 0x5b;
+const CLOSE_BRACKET = 0x5d;
+const COMMA = Buffer.from(",");
+
+// Slices a HAR's entries array into one buffer per entry, by bracket depth,
+// across however many chunks the file arrives in. Strings are skipped (with
+// their escapes) so a brace or bracket inside a URL or a body is not structure.
+class EntrySlicer {
+  #depth = 0;
+  #inString = false;
+  #escaped = false;
+  #parts: Buffer[] = [];
+  // Where the entry in progress starts in the current chunk; -1 between entries.
+  #start = -1;
+  readonly #onEntry: (bytes: Buffer) => void;
+
+  constructor(onEntry: (bytes: Buffer) => void) {
+    this.#onEntry = onEntry;
+  }
+
+  // Feed the next chunk; returns where the entries array closed, or -1.
+  feed(chunk: Buffer): number {
+    this.#start = this.#depth > 0 ? 0 : -1;
+    for (let i = 0; i < chunk.length; i++) {
+      if (this.#byte(chunk, i)) {
+        return i;
+      }
+    }
+    if (this.#depth > 0 && this.#start >= 0) {
+      this.#parts.push(chunk.subarray(this.#start));
+    }
+    return -1;
+  }
+
+  // One byte of the array. True when it is the array's own closing bracket.
+  #byte(chunk: Buffer, i: number): boolean {
+    const b = chunk[i] as number;
+    if (this.#inString) {
+      this.#skipString(b);
+    } else if (b === QUOTE) {
+      this.#inString = true;
+    } else if (b === OPEN_BRACE || b === OPEN_BRACKET) {
+      if (this.#depth === 0) {
+        this.#start = i;
+      }
+      this.#depth++;
+    } else if (b === CLOSE_BRACE || b === CLOSE_BRACKET) {
+      if (this.#depth === 0) {
+        return true;
+      }
+      this.#depth--;
+      if (this.#depth === 0) {
+        this.#finish(chunk.subarray(this.#start, i + 1));
+        this.#start = -1;
+      }
+    }
+    return false;
+  }
+
+  #finish(tail: Buffer): void {
+    this.#parts.push(tail);
+    this.#onEntry(Buffer.concat(this.#parts));
+    this.#parts = [];
+  }
+
+  #skipString(b: number): void {
+    if (this.#escaped) {
+      this.#escaped = false;
+    } else if (b === BACKSLASH) {
+      this.#escaped = true;
+    } else if (b === QUOTE) {
+      this.#inString = false;
+    }
+  }
+}
+
+// Scrub a HAR of any size into `tmp`, holding one entry in memory at a time.
+// Everything before `"entries":[` and after its closing bracket is copied
+// byte for byte (pages and metadata carry no credentials); each entry is
+// parsed, scrubbed by scrubHarLog, and written back — re-serialized only if
+// something in it changed. That marker can only be structural: inside a JSON
+// string its quotes would be escaped. Throws on anything that isn't shaped
+// like a HAR, so the caller keeps the original.
+async function scrubHarStreaming(
+  harPath: string,
+  tmp: string
+): Promise<number> {
+  const out = createWriteStream(tmp);
+  let count = 0;
+  let first = true;
+  const slicer = new EntrySlicer((bytes) => {
+    const entry = JSON.parse(bytes.toString("utf8")) as unknown;
+    const replaced = scrubHarLog({ log: { entries: [entry] } });
+    count += replaced;
+    if (!first) {
+      out.write(COMMA);
+    }
+    first = false;
+    out.write(replaced > 0 ? JSON.stringify(entry) : bytes);
+  });
+  let state: "prefix" | "entries" | "suffix" = "prefix";
+  let prefix = Buffer.alloc(0);
+  try {
+    for await (const data of createReadStream(harPath)) {
+      let chunk = data as Buffer;
+      if (state === "prefix") {
+        prefix = Buffer.concat([prefix, chunk]);
+        const at = prefix.indexOf(ENTRIES_MARKER);
+        if (at < 0) {
+          continue;
+        }
+        const after = at + ENTRIES_MARKER.length;
+        out.write(prefix.subarray(0, after));
+        chunk = prefix.subarray(after);
+        state = "entries";
+      }
+      if (state === "entries") {
+        const close = slicer.feed(chunk);
+        if (close < 0) {
+          continue;
+        }
+        chunk = chunk.subarray(close);
+        state = "suffix";
+      }
+      out.write(chunk);
+    }
+    if (state !== "suffix") {
+      throw new Error("network.har has no complete entries list to scrub");
+    }
+  } finally {
+    out.end();
+    await finished(out);
+  }
+  return count;
+}
+
 // Rewrite `harPath` with its credentials scrubbed, atomically (temp + rename)
 // so an interrupted or failed pass can never leave a truncated HAR behind. On
 // any failure the original file is left exactly as it was and the reason is
@@ -193,17 +342,27 @@ export type ScrubHarOutcome =
 // disabled with --no-har) is not an error.
 export async function scrubHarFile(
   harPath: string,
-  logger: Logger
+  logger: Logger,
+  options: { streamAboveBytes?: number } = {}
 ): Promise<ScrubHarOutcome> {
   const tmp = `${harPath}.scrub-${process.pid}`;
   try {
-    const raw = await readFile(harPath, "utf8");
-    const har = JSON.parse(raw) as unknown;
-    const replaced = scrubHarLog(har);
-    if (replaced === 0) {
-      return { replaced: 0, scrubbed: true };
+    const { size } = await stat(harPath);
+    let replaced: number;
+    if (size > (options.streamAboveBytes ?? STREAM_SCRUB_BYTES)) {
+      replaced = await scrubHarStreaming(harPath, tmp);
+      if (replaced === 0) {
+        await rm(tmp, { force: true });
+        return { replaced: 0, scrubbed: true };
+      }
+    } else {
+      const har = JSON.parse(await readFile(harPath, "utf8")) as unknown;
+      replaced = scrubHarLog(har);
+      if (replaced === 0) {
+        return { replaced: 0, scrubbed: true };
+      }
+      await writeFile(tmp, JSON.stringify(har));
     }
-    await writeFile(tmp, JSON.stringify(har));
     await rename(tmp, harPath);
     logger.debug({ harPath, replaced }, "scrubbed credentials from the HAR");
     return { replaced, scrubbed: true };

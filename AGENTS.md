@@ -220,7 +220,15 @@ A recorded session runs against a logged-in app, so its artifacts are not unifor
   `apps/dailies/src/session/scrub-har.ts`). Request bodies are scrubbed by credential-looking
   field name (`password`, `token`, …); response bodies are **not** scrubbed, so a login response
   can still hold a token.
-- `trace.zip` carries the same traffic unscrubbed, and `profile/` is a real Chrome cookie database.
+- `trace.zip` carries every Playwright call's parameters unscrubbed (and, under
+  `--full-capture`, the same traffic as the HAR), and `profile/` is a real Chrome cookie database.
+- Capture is lean by default (`CaptureOptionsSchema.full`): the trace has no DOM snapshots or
+  screencast frames, and the HAR has no response bodies and no static assets (`LEAN_HAR_URLS`).
+  The report reads only the trace's action log and the HAR's method/url/status/time, and on a
+  50-minute run against a dev server full capture wrote a 1.5 GB trace and a 780 MB HAR.
+- A HAR over `STREAM_SCRUB_BYTES` is scrubbed one entry at a time (`scrubHarStreaming`). Reading it
+  whole fails past V8's ~512 MB string limit, and before the streaming path that failure left
+  every cookie in place behind a warning.
 
 So: attach or link `report.html`, never zip a whole session directory into a PR or a chat. Sessions
 recorded before scrubbing landed still hold credentials in their HAR.

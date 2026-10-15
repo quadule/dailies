@@ -56,11 +56,20 @@ export const StopRequestSchema = RequestBaseSchema.extend({
 
 // Which auditability artifacts a session records. All default on; the
 // orchestrator turns individual ones off via `--no-<kind>` flags.
+//
+// `full` is off by default, which keeps the trace and HAR lean: the trace holds
+// the action log (what the report reads) without DOM snapshots or screencast
+// frames, and the HAR holds the app's own requests without response bodies or
+// static assets. Measured on a 50-minute session against a dev server that
+// serves ~18,000 unbundled JS modules, full capture wrote a 1.5 GB trace and a
+// 780 MB HAR — too large to scrub or summarize — and neither was ever opened.
+// `session start --full-capture` restores both for a run that needs them.
 export const CaptureOptionsSchema = z.object({
   trace: z.boolean().default(true),
   video: z.boolean().default(true),
   har: z.boolean().default(true),
   console: z.boolean().default(true),
+  full: z.boolean().default(false),
 });
 
 // Fixed page viewport for a session's capture context. Recordings need a

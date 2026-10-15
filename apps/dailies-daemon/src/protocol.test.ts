@@ -9,7 +9,13 @@ describe("session request capture defaults", () => {
       success: true,
       request: {
         ...start,
-        capture: { trace: true, video: true, har: true, console: true },
+        capture: {
+          trace: true,
+          video: true,
+          har: true,
+          console: true,
+          full: false,
+        },
         cursor: true,
       },
     });
@@ -23,7 +29,13 @@ describe("session request capture defaults", () => {
       success: true,
       request: {
         ...start,
-        capture: { trace: true, video: false, har: true, console: true },
+        capture: {
+          trace: true,
+          video: false,
+          har: true,
+          console: true,
+          full: false,
+        },
         cursor: false,
       },
     });
