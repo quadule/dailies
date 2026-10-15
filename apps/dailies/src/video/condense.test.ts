@@ -1,16 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   analyzeMotion,
-  chunk,
   clampKeepsToFloor,
   computeKeepSegments,
   keptSeconds,
-  MAX_SELECT_TERMS,
   MAX_STILL_SEC,
   mergeWindows,
   motionBursts,
   parseMotionOutput,
   remapToCondensed,
+  selectTree,
   stillSpans,
   subtractStillsFromWindows,
 } from "./condense.js";
@@ -414,34 +413,36 @@ describe("subtractStillsFromWindows", () => {
   });
 });
 
-describe("chunk", () => {
-  // A long session can produce hundreds of kept segments; past ~100
-  // `between(t,…)` terms ffmpeg's expression parser aborts the encode, so the
-  // segments must be batched under MAX_SELECT_TERMS and concatenated.
-  it("keeps every batch within the select-expression ceiling", () => {
-    const keeps = Array.from({ length: 170 }, (_, i) => ({
-      start: i,
-      end: i + 0.5,
-    }));
-    const batches = chunk(keeps, MAX_SELECT_TERMS);
-    expect(batches.length).toBeGreaterThan(1);
-    for (const batch of batches) {
-      expect(batch.length).toBeLessThanOrEqual(MAX_SELECT_TERMS);
+describe("selectTree", () => {
+  // ffmpeg's parser fails on a flat sum past ~100 terms; a balanced tree nests
+  // only log2(n) deep, so hundreds of kept segments stay one expression.
+  it("nests a long sum only logarithmically deep", () => {
+    const terms = Array.from(
+      { length: 400 },
+      (_, i) => `between(t,${i},${i + 0.5})`
+    );
+    const expr = selectTree(terms);
+    let depth = 0;
+    let max = 0;
+    for (const ch of expr) {
+      if (ch === "(") {
+        depth += 1;
+        max = Math.max(max, depth);
+      } else if (ch === ")") {
+        depth -= 1;
+      }
     }
-    // No segment is lost or duplicated across batches.
-    expect(batches.flat()).toEqual(keeps);
+    // between(…) contributes one level of its own.
+    expect(max).toBeLessThanOrEqual(Math.ceil(Math.log2(400)) + 1);
+    for (const term of terms) {
+      expect(expr).toContain(term);
+    }
   });
 
-  it("returns a single batch when keeps fit", () => {
-    const keeps = [
-      { start: 0, end: 1 },
-      { start: 2, end: 3 },
-    ];
-    expect(chunk(keeps, MAX_SELECT_TERMS)).toEqual([keeps]);
-  });
-
-  it("handles an empty list", () => {
-    expect(chunk([], MAX_SELECT_TERMS)).toEqual([]);
+  it("returns a lone term unwrapped, and selects nothing for no terms", () => {
+    expect(selectTree(["a"])).toBe("a");
+    expect(selectTree(["a", "b"])).toBe("(a+b)");
+    expect(selectTree([])).toBe("0");
   });
 });
 

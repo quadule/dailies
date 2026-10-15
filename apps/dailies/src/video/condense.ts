@@ -39,7 +39,7 @@
 // When ffmpeg is unavailable — or when either pass fails — the original video is
 // kept untouched and the report still renders.
 import { execFile } from "node:child_process";
-import { access, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, rename, rm, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { Logger } from "dailies-logger";
 import { ENCODE_TIMEOUT_MS, VP8_ENCODE_ARGS } from "./ffmpeg.js";
@@ -122,19 +122,28 @@ const MIN_SAVINGS_SEC = 1;
 
 // Shortest individual cut worth making. A still only a few frames longer than
 // MAX_STILL_SEC would otherwise be "trimmed" by one or two frames — which saves
-// nothing, spends two `select` terms (they are capped, see MAX_SELECT_TERMS) and
-// risks a single-frame judder at the join. So a still has to run this much past
+// nothing, spends two `select` terms and risks a single-frame judder at the join. So a still has to run this much past
 // the cap before its middle is cut.
 const MIN_CUT_SEC = 0.25;
 
-// Max `between(t,…)` terms in a single `select` expression. ffmpeg's expression
-// evaluator fails to parse/allocate past ~100 terms ("Error while parsing
-// expression" / "Cannot allocate memory"), which aborts the whole encode — so a
-// long session with many kept segments would silently keep its raw video. When
-// keeps exceed this, we encode in batches and concat them. Kept well under the
-// observed ~100 ceiling: it varies by ffmpeg build, and the extra decode pass is
-// cheap insurance.
-export const MAX_SELECT_TERMS = 50;
+// Join `select` terms into one expression as a balanced tree of `+`.
+//
+// ffmpeg's expression parser has a nesting budget, and a flat `a+b+c+…` spends
+// it once per term: past ~100 terms it fails with "Error while parsing
+// expression" / "Cannot allocate memory" and the encode aborts. A balanced tree
+// nests only log2(n) deep — measured, 2,000 terms parse and run in one pass. So
+// a long session's hundreds of kept segments are one decode of the source, not
+// one per batch of 50 plus a concat. Pure → unit-tested.
+export function selectTree(terms: string[]): string {
+  if (terms.length === 0) {
+    return "0";
+  }
+  if (terms.length === 1) {
+    return terms[0] as string;
+  }
+  const mid = Math.floor(terms.length / 2);
+  return `(${selectTree(terms.slice(0, mid))}+${selectTree(terms.slice(mid))})`;
+}
 
 // The motion pass decodes every frame and runs signalstats over it, so it is
 // far heavier than the freezedetect pass it replaced (~3s per minute of
@@ -371,17 +380,9 @@ export function remapToCondensed(
 }
 
 function selectExpression(keeps: Segment[]): string {
-  return keeps
-    .map((k) => `between(t,${k.start.toFixed(3)},${k.end.toFixed(3)})`)
-    .join("+");
-}
-
-export function chunk<T>(items: T[], size: number): T[][] {
-  const batches: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    batches.push(items.slice(i, i + size));
-  }
-  return batches;
+  return selectTree(
+    keeps.map((k) => `between(t,${k.start.toFixed(3)},${k.end.toFixed(3)})`)
+  );
 }
 
 // Re-encode the kept segments to `output`. Decodes every frame and filters by
@@ -406,62 +407,6 @@ async function encodeKeeps(
       "-an",
       ...VP8_ENCODE_ARGS,
       output,
-    ],
-    ENCODE_TIMEOUT_MS
-  );
-}
-
-// Produce the condensed video at `tmpPath`. Under MAX_SELECT_TERMS kept segments
-// it's a single `select` pass; beyond that the expression would overflow
-// ffmpeg's parser, so encode each batch to its own segment file and concat them.
-// Every temp it creates is pushed to `temps` so the caller can clean up even on
-// a partial failure. Each batch is a full decode of the source.
-async function buildCondensed(
-  ffmpeg: string,
-  videoPath: string,
-  keeps: Segment[],
-  tmpPath: string,
-  temps: string[]
-): Promise<void> {
-  if (keeps.length <= MAX_SELECT_TERMS) {
-    await encodeKeeps(ffmpeg, videoPath, keeps, tmpPath);
-    return;
-  }
-
-  const segmentPaths: string[] = [];
-  const batches = chunk(keeps, MAX_SELECT_TERMS);
-  for (let i = 0; i < batches.length; i++) {
-    const segmentPath = `${videoPath}.seg${i}.webm`;
-    temps.push(segmentPath);
-    segmentPaths.push(segmentPath);
-    await encodeKeeps(ffmpeg, videoPath, batches[i] ?? [], segmentPath);
-  }
-
-  const listPath = `${videoPath}.concat.txt`;
-  temps.push(listPath);
-  // concat demuxer escapes a single quote as '\'' inside the quoted path.
-  const list = segmentPaths
-    .map((p) => `file '${p.replace(/'/g, "'\\''")}'`)
-    .join("\n");
-  await writeFile(listPath, `${list}\n`);
-
-  // The batches share identical codec/timebase, so the concat demuxer can copy
-  // streams without another decode/encode.
-  await runFfmpeg(
-    ffmpeg,
-    [
-      "-hide_banner",
-      "-nostats",
-      "-y",
-      "-f",
-      "concat",
-      "-safe",
-      "0",
-      "-i",
-      listPath,
-      "-c",
-      "copy",
-      tmpPath,
     ],
     ENCODE_TIMEOUT_MS
   );
@@ -674,10 +619,6 @@ export async function condenseVideo(
   options: CondenseOptions = {}
 ): Promise<CondenseResult> {
   const tmpPath = `${videoPath}.condensed.webm`;
-  // Every temp file created below (the output, plus per-batch segments and the
-  // concat list) so the finally block can remove them all, including on a
-  // partial failure — otherwise a long session leaks .webm files into its dir.
-  const temps: string[] = [tmpPath];
   try {
     const ffmpeg = options.ffmpegPath ?? (await findFfmpeg());
     if (!ffmpeg) {
@@ -728,7 +669,7 @@ export async function condenseVideo(
       };
     }
 
-    await buildCondensed(ffmpeg, videoPath, keeps, tmpPath, temps);
+    await encodeKeeps(ffmpeg, videoPath, keeps, tmpPath);
     const produced = await stat(tmpPath);
     if (produced.size === 0) {
       return { condensed: false, reason: "encoder produced an empty file" };
@@ -742,6 +683,6 @@ export async function condenseVideo(
       reason: err instanceof Error ? err.message : String(err),
     };
   } finally {
-    await Promise.all(temps.map((t) => rm(t, { force: true })));
+    await rm(tmpPath, { force: true });
   }
 }
