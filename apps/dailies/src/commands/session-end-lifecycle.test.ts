@@ -123,6 +123,17 @@ describe("sessionEnd lifecycle", () => {
         await readFile(path.join(fixture.dir, "report.html"), "utf8")
       ).toContain("new-attachment.txt");
       expect((await readSessionRecord("s")).status).toBe(status);
+
+      // Rebuilding again keeps the run's real end time and duration.
+      output = "";
+      expect(await sessionEnd("s", true, { condense: false })).toBe(0);
+      expect((await readSessionRecord("s")).endedAt).toBe(
+        "2026-06-02T10:00:05.000Z"
+      );
+      const results = JSON.parse(
+        await readFile(path.join(fixture.dir, "results.json"), "utf8")
+      ) as { durationMs: number };
+      expect(results.durationMs).toBe(5000);
     }
   );
 

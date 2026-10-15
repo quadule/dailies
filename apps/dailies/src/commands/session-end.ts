@@ -846,10 +846,14 @@ export async function sessionEnd(
     if (metrics.length > 0) {
       r.metrics = metrics;
     }
+    // A re-finalize keeps the run's real end time. Stamping "now" on it would
+    // stretch the report's duration (and squeeze its timeline) on every rebuild.
+    if (r.status === "active" || !r.endedAt) {
+      r.endedAt = new Date(result?.session.endedAt ?? Date.now()).toISOString();
+    }
     if (r.status === "active") {
       r.status = "ended";
     }
-    r.endedAt = new Date(result?.session.endedAt ?? Date.now()).toISOString();
     // Record the agent's explicit verdict (if given) so it drives the report's
     // pass/fail and survives a later re-render.
     if (opts.verdict) {

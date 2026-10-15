@@ -229,6 +229,9 @@
 
 ### Fixed
 
+- **Rebuilding a report keeps the run's duration.** Re-running `session end` on an ended session
+  stamped the current time as its end, so each rebuild stretched the reported duration (a
+  152-minute run read 164m) and squeezed the timeline bars to the left.
 - **`--cinematic` no longer demands the `claude` binary.** The pass gated on `claude --version`
   even though narration can come from an OpenAI-compatible endpoint or Apple Intelligence
   (`$DAILIES_LLM`), so a Linux box with only `$DAILIES_LLM_URL` set was told the CLI was missing. It
