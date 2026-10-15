@@ -59,6 +59,9 @@
 - **`run --skim` and cut speed-ups.** `cut.json` takes `speedups` (`{ start, end, rate }`). The
   seed fast-forwards runs of skimmed steps and, when a run shows captions, uncaptioned stretches of
   5s or more. Captions over sped-up footage stay up for their full length.
+- **Skimmed steps in the cinematic pass.** `--cinematic` and `--song` fast-forward runs of skimmed
+  steps too, up to 8x. A skimmed run gets one narration line at most, which plays over the fast
+  footage instead of freezing it, and in `--song` the run shares one lyric line.
 - **Step errors in the record.** A failed step's error message is saved on the step and shown in
   the report, and errors thrown by a script now include their message.
 
