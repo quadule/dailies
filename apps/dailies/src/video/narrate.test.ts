@@ -988,6 +988,20 @@ describe("wrapCaption", () => {
     }
   });
 
+  it("balances two lines instead of stranding the last words", () => {
+    const text =
+      "E-Verify is turned on from admin, so this starts as a Wrapbook admin.";
+    expect(wrapCaption(text, 60)).toBe(
+      "E-Verify is turned on from admin,\nso this starts as a Wrapbook admin."
+    );
+  });
+
+  it("keeps a caption that fits one line on one line", () => {
+    expect(wrapCaption("Saving personal details.", 60)).toBe(
+      "Saving personal details."
+    );
+  });
+
   it("truncates with an ellipsis when it would exceed two lines", () => {
     const out = wrapCaption(
       "This narration is far too long to ever fit within a mere two short caption lines on screen.",

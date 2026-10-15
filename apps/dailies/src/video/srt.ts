@@ -141,11 +141,43 @@ function truncateWithEllipsis(line: string, limit: number): string {
   return `${line.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
+// Greedy word wrap at `limit`, stopping once `maxLines` lines are full.
+// `truncated` says words were left over.
+function greedyWrap(
+  words: string[],
+  limit: number,
+  maxLines: number
+): { lines: string[]; truncated: boolean } {
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length <= limit) {
+      current = candidate;
+      continue;
+    }
+    // `word` won't fit on the current line. If a new line would exceed the
+    // budget, stop here — the leftover words get folded into an ellipsis.
+    if (lines.length + 1 >= maxLines) {
+      lines.push(current);
+      return { lines, truncated: true };
+    }
+    lines.push(current);
+    current = word;
+  }
+  lines.push(current);
+  return { lines, truncated: false };
+}
+
 // Wrap caption text for burn-in so it never shows more than `maxLines` lines.
-// Greedy word wrap at `maxCharsPerLine`; if the text needs more lines than that,
-// the last line is truncated with an ellipsis. The explicit line breaks become
-// libass `\N`, and `WrapStyle=2` in the burn style means they are the ONLY thing
-// that starts a line — libass can't add a surprise extra one on top.
+// Lines are BALANCED, the way CSS `text-wrap: balance` sets a heading: the
+// fewest lines greedy wrapping needs, at the narrowest width that still fits in
+// that many. Greedy wrapping alone fills the first line to the cap and leaves a
+// word or two stranded on the second. (CSS can't do this for us — the burn is
+// libass, not a browser.) Text that needs more lines than `maxLines` keeps the
+// greedy wrap and ends in an ellipsis. The explicit line breaks become libass
+// `\N`, and `WrapStyle=2` in the burn style means they are the ONLY thing that
+// starts a line — libass can't add a surprise extra one on top.
 export function wrapCaption(
   text: string,
   maxCharsPerLine = CAPTION_LINE_CAP,
@@ -156,29 +188,30 @@ export function wrapCaption(
   if (words.length === 0) {
     return "";
   }
-  const lines: string[] = [];
-  let current = "";
-  let truncated = false;
-  for (const word of words) {
-    const candidate = current ? `${current} ${word}` : word;
-    if (candidate.length <= limit) {
-      current = candidate;
-      continue;
-    }
-    // `word` won't fit on the current line. If a new line would exceed the
-    // budget, stop here — the leftover words get folded into an ellipsis.
-    if (lines.length + 1 >= maxLines) {
-      truncated = true;
-      break;
-    }
-    lines.push(current);
-    current = word;
-  }
-  lines.push(current);
-  if (truncated) {
+  const greedy = greedyWrap(words, limit, maxLines);
+  if (greedy.truncated) {
+    const lines = greedy.lines;
     lines[lines.length - 1] = truncateWithEllipsis(lines.at(-1) ?? "", limit);
+    return lines.join("\n");
   }
-  return lines.join("\n");
+  const count = greedy.lines.length;
+  if (count < 2) {
+    return greedy.lines.join("\n");
+  }
+  // The narrowest width that still wraps into `count` lines. Width only ever
+  // adds lines as it shrinks, so a binary search finds it.
+  let lo = Math.ceil(words.join(" ").length / count);
+  let hi = limit;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const trial = greedyWrap(words, mid, count);
+    if (trial.truncated) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return greedyWrap(words, lo, count).lines.join("\n");
 }
 
 // Strip inline caption override tags (`{...}`) from narration text before it's
