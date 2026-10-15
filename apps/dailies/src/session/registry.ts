@@ -17,6 +17,10 @@ export interface SessionStep {
   exitCode: number;
   name: string;
   ok: boolean;
+  // Characters the step printed to stdout (its logs plus its return value) —
+  // what the agent that ran it read back. Absent on steps recorded before it
+  // was tracked, and on takeover steps.
+  outputChars?: number;
   // The step's position in the PRE-cinematic (condensed) cut, preserved when the
   // cinematic pass first runs so `session end --cinematic --prompt …` can be
   // re-run with a different theme from the clean condensed source + its timings,
@@ -54,6 +58,9 @@ export interface SessionRecord {
   // interprets them; they are persisted so runs can be compared over time.
   metrics?: { name: string; value: number }[];
   name?: string;
+  // `run --peek` calls: they record no step, but their output was still read,
+  // so the count and total characters printed are kept here.
+  peeks?: { count: number; outputChars: number };
   schemaVersion: number;
   status: "active" | "ended" | "aborted";
   steps: SessionStep[];

@@ -86,9 +86,16 @@ export function renderSessionRecord(
     stdout.write("Steps:\n");
     for (const step of record.steps) {
       const mark = step.ok ? "✓" : "✗";
+      const out =
+        step.outputChars === undefined ? "" : `, ${step.outputChars} chars out`;
       stdout.write(
-        `  ${mark} ${step.name} (${formatDurationMs(step.durationMs)})\n`
+        `  ${mark} ${step.name} (${formatDurationMs(step.durationMs)}${out})\n`
       );
     }
+  }
+  if (record.peeks) {
+    stdout.write(
+      `Peeks:   ${record.peeks.count} (${record.peeks.outputChars} chars out)\n`
+    );
   }
 }

@@ -36,6 +36,8 @@ export interface ManifestStep {
   error?: string;
   exitCode: number;
   name: string;
+  // Characters the step printed to stdout — what the agent read back from it.
+  outputChars?: number;
   screenshot?: string;
   script?: string;
   // Recorded with `run --skim` (setup or a detour). The report folds runs of
@@ -59,6 +61,10 @@ export interface ManifestSummary {
   commandCount: number;
   consoleErrors: number;
   networkFailures: number;
+  // Characters printed by every step and peek — the step output the agent read
+  // during the run. Absent for sessions recorded before it was tracked.
+  outputChars?: number;
+  peeks?: number;
   stepsFailed: number;
   stepsPassed: number;
   stepsTotal: number;
@@ -130,6 +136,25 @@ function attachmentListEntries(refs?: ArtifactRef[]): ArtifactListEntry[] {
 // Pure fusion of the orchestrator's session.json step log + the daemon's
 // artifact metadata + parser-derived counts. Artifact paths are made relative
 // to the session dir so the report can link to siblings.
+// Total characters the steps and peeks printed. Left out entirely for a session
+// recorded before steps were measured, so it doesn't read as zero output.
+function outputSummary(
+  record: SessionRecord
+): Pick<ManifestSummary, "outputChars" | "peeks"> {
+  const measured = record.steps.some((s) => s.outputChars !== undefined);
+  if (!(measured || record.peeks)) {
+    return {};
+  }
+  const stepChars = record.steps.reduce(
+    (sum, s) => sum + (s.outputChars ?? 0),
+    0
+  );
+  return {
+    outputChars: stepChars + (record.peeks?.outputChars ?? 0),
+    peeks: record.peeks?.count ?? 0,
+  };
+}
+
 export function buildManifest(input: BuildManifestInput): SessionManifest {
   const { record, endResult, consoleErrors, networkFailures, actionsByStep } =
     input;
@@ -183,6 +208,7 @@ export function buildManifest(input: BuildManifestInput): SessionManifest {
       ...(step.error ? { error: step.error } : {}),
       exitCode: step.exitCode,
       name: step.name,
+      outputChars: step.outputChars,
       screenshot: shot?.path,
       script: step.script,
       ...(step.skim ? { skim: true } : {}),
@@ -294,6 +320,7 @@ export function buildManifest(input: BuildManifestInput): SessionManifest {
       commandCount,
       consoleErrors,
       networkFailures,
+      ...outputSummary(record),
       stepsFailed,
       stepsPassed,
       stepsTotal: steps.length,

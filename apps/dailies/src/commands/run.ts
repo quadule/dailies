@@ -17,6 +17,27 @@ function stepError(message: string): string {
   return message.replace(ANSI_ESCAPE, "").trim().slice(0, STEP_ERROR_CHARS);
 }
 
+// Passes the script's stdout through while counting it. Everything a step or
+// peek prints is read back by the agent that ran it, so the count is what that
+// output cost in context — the number that tells a 2k-char step from one that
+// dumped a 100k-char snapshot.
+export function countingStdout(target: NodeJS.WritableStream): {
+  chars: () => number;
+  stream: NodeJS.WritableStream;
+} {
+  let chars = 0;
+  const stream = {
+    write(chunk: string | Uint8Array, ...rest: unknown[]): boolean {
+      chars +=
+        typeof chunk === "string"
+          ? chunk.length
+          : Buffer.from(chunk).toString("utf8").length;
+      return (target.write as (...args: unknown[]) => boolean)(chunk, ...rest);
+    },
+  } as NodeJS.WritableStream;
+  return { chars: () => chars, stream };
+}
+
 interface RunArgs {
   file?: string;
   json: boolean;
@@ -91,10 +112,11 @@ export async function runInSession(args: RunArgs): Promise<number> {
     // session-loss check below can't be spoofed by a script that prints
     // "No active session" to stderr and then fails.
     let daemonError = "";
+    const stdout = countingStdout(process.stdout);
     const code = await sendRequest(
       request,
       resultRenderer(args.json),
-      process.stdout,
+      stdout.stream,
       process.stderr,
       (message) => {
         daemonError = message;
@@ -113,6 +135,14 @@ export async function runInSession(args: RunArgs): Promise<number> {
       return 1;
     }
     if (args.peek) {
+      // A peek records no step, but what it printed was still read: keep a
+      // running total so the session's output cost includes its looks.
+      const peeks = record.peeks ?? { count: 0, outputChars: 0 };
+      record.peeks = {
+        count: peeks.count + 1,
+        outputChars: peeks.outputChars + stdout.chars(),
+      };
+      await writeSessionRecord(record);
       return code;
     }
 
@@ -122,6 +152,7 @@ export async function runInSession(args: RunArgs): Promise<number> {
       ...(code !== 0 && daemonError ? { error: stepError(daemonError) } : {}),
       name: stepName,
       ok: code === 0,
+      outputChars: stdout.chars(),
       script: scriptText,
       ...(args.skim ? { skim: true } : {}),
       startedAt: new Date(startedAt).toISOString(),

@@ -29,6 +29,9 @@
   biggest rules three times over; it now loads about 40 KB, each rule once. The skills also steer
   agents away from ending every step with a whole-page snapshot, which on a real app is tens of
   thousands of characters per step.
+- **Step output is measured.** `session.json` records how many characters each step printed
+  (`outputChars`) and a running total for peeks, and `results.json`, the report and `status`
+  show them. That output is what the agent reads back, so this is where a run's token cost shows.
 
 - **Current browser and build dependencies.** Playwright/Chromium move to **1.63.0**,
   with the sandbox bridge adapted to the new protocol. The CLI now requires **Node 22.12.0+**;

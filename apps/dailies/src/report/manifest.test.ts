@@ -136,6 +136,36 @@ describe("buildManifest", () => {
     );
   });
 
+  it("rolls up the output the steps and peeks printed", () => {
+    const record = makeRecord();
+    if (record.steps[0]) {
+      record.steps[0].outputChars = 1000;
+    }
+    if (record.steps[1]) {
+      record.steps[1].outputChars = 250;
+    }
+    record.peeks = { count: 3, outputChars: 40_000 };
+    const m = buildManifest({
+      consoleErrors: 0,
+      endResult: makeEndResult(),
+      networkFailures: 0,
+      record,
+    });
+    expect(m.steps.map((s) => s.outputChars)).toEqual([1000, 250]);
+    expect(m.summary).toMatchObject({ outputChars: 41_250, peeks: 3 });
+  });
+
+  it("leaves output size out for sessions recorded before it was tracked", () => {
+    const m = buildManifest({
+      consoleErrors: 0,
+      endResult: makeEndResult(),
+      networkFailures: 0,
+      record: makeRecord(),
+    });
+    expect(m.summary.outputChars).toBeUndefined();
+    expect(m.steps[0]?.outputChars).toBeUndefined();
+  });
+
   it("marks aborted sessions regardless of step outcomes", () => {
     const record = makeRecord();
     record.status = "aborted";

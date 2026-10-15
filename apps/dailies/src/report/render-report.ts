@@ -42,6 +42,17 @@ function fmtBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// Step output is counted in characters (what the agent read back), not bytes.
+function fmtChars(chars: number): string {
+  if (chars < 1000) {
+    return `${chars} chars`;
+  }
+  if (chars < 1_000_000) {
+    return `${(chars / 1000).toFixed(1)}k chars`;
+  }
+  return `${(chars / 1_000_000).toFixed(2)}M chars`;
+}
+
 function fmtClock(iso: string): string {
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) {
@@ -413,9 +424,22 @@ function renderEnvironment(m: SessionManifest): string {
         <tr><td class="tag">Captured</td><td>${escapeHtml(flags || "none")}</td></tr>
         <tr><td class="tag">Started</td><td class="num">${escapeHtml(fmtClock(m.createdAt))}</td></tr>
         <tr><td class="tag">Ended</td><td class="num">${escapeHtml(fmtClock(m.endedAt))}</td></tr>
-        <tr><td class="tag">Duration</td><td class="num">${fmtMs(m.durationMs)}</td></tr>
+        <tr><td class="tag">Duration</td><td class="num">${fmtMs(m.durationMs)}</td></tr>${renderOutputRow(m)}
       </tbody></table>
     </div>`;
+}
+
+// What the agent read back from its steps and peeks — the run's main context
+// cost after the skills themselves. Omitted for sessions that predate it.
+function renderOutputRow(m: SessionManifest): string {
+  const { outputChars, peeks = 0 } = m.summary;
+  if (outputChars === undefined) {
+    return "";
+  }
+  const steps = `${m.summary.stepsTotal} step${m.summary.stepsTotal === 1 ? "" : "s"}`;
+  const looks = `${peeks} peek${peeks === 1 ? "" : "s"}`;
+  return `
+        <tr><td class="tag">Step output</td><td class="num">${fmtChars(outputChars)} printed by ${steps} and ${looks}</td></tr>`;
 }
 
 function renderSummary(m: SessionManifest): string {
@@ -549,7 +573,11 @@ function renderStepRow(view: StepsView, i: number): string {
   }
   const slug = sessionStepSlug(step.name);
   const n = step.actions.length;
-  const note = n > 0 ? ` · ${plural(n, "action")}` : "";
+  const note =
+    (n > 0 ? ` · ${plural(n, "action")}` : "") +
+    (step.outputChars === undefined
+      ? ""
+      : ` · ${fmtChars(step.outputChars)} out`);
   const shotBtn = view.screenshots[slug]
     ? `<button class="shotlink" data-goto-shot="${escapeHtml(slug)}" title="View screenshot" aria-label="View screenshot">${CAMERA_ICON}</button>`
     : "";

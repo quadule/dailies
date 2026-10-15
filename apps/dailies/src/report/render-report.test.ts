@@ -13,6 +13,8 @@ const LOGIN_SLUG = sessionStepSlug("login");
 
 function fixtureManifest(extra?: {
   actionsByStep?: Record<string, TraceAction[]>;
+  outputChars?: number[];
+  peeks?: SessionRecord["peeks"];
   scripts?: Record<string, string>;
   withVideo?: boolean;
 }) {
@@ -80,6 +82,15 @@ function fixtureManifest(extra?: {
       }
     }
   }
+  for (const [i, chars] of (extra?.outputChars ?? []).entries()) {
+    const step = record.steps[i];
+    if (step) {
+      step.outputChars = chars;
+    }
+  }
+  if (extra?.peeks) {
+    record.peeks = extra.peeks;
+  }
   if (extra?.withVideo) {
     endResult.artifacts.push({
       bytes: 4096,
@@ -102,7 +113,32 @@ function fixtureManifest(extra?: {
   });
 }
 
+const EMPTY_CTX = {
+  consoleEntries: [],
+  parsedHar: { entries: [], failed: 0, slowest: [], total: 0 },
+  screenshots: {},
+};
+
 describe("renderReport", () => {
+  it("shows how much output each step and the whole run printed", () => {
+    const html = renderReport(
+      fixtureManifest({
+        outputChars: [120_000, 300],
+        peeks: { count: 4, outputChars: 8000 },
+      }),
+      EMPTY_CTX
+    );
+    expect(html).toContain("120.0k chars out");
+    expect(html).toContain("300 chars out");
+    expect(html).toContain("128.3k chars printed by 2 steps and 4 peeks");
+  });
+
+  it("omits output size for a session that predates it", () => {
+    const html = renderReport(fixtureManifest(), EMPTY_CTX);
+    expect(html).not.toContain("chars out");
+    expect(html).not.toContain("Step output");
+  });
+
   it("renders a self-contained report with key sections", () => {
     const html = renderReport(fixtureManifest(), {
       consoleEntries: [{ kind: "console", text: "kaboom", type: "error" }],
