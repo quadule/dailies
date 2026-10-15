@@ -470,11 +470,12 @@ JSON-serializable.
 <!-- dailies:snippet rule-fail-fast cli=npx-cli -->
 - End each script by logging the state you need for the next decision — stdout is your
   observation channel.
-- Use short timeouts (`npx dailies-cli run --timeout 10`) so a step fails fast instead of hanging on a
-  missing element.
+- A missing element fails its action after 10s, not Playwright's 30s. Don't raise that globally;
+  pass `{ timeout }` to the one wait you know is slow (a long server job). `run --timeout` caps
+  the whole step, which a long `humanFill` can legitimately need.
 - In assertion / extraction steps, degrade gracefully — log a `WARN` / `FAIL` line instead of
   crashing, so the step still records its evidence. While exploring, a missed selector means
-  look again (snapshot, fix, retry as a new step), not a silent fallback.
+  look again (peek, fix, retry as a new step), not a silent fallback.
 - End before you stop: `npx dailies-cli stop` shuts the daemon down and aborts any live session,
   skipping its report.html — always `npx dailies-cli session end <id>` first.
 <!-- dailies:end rule-fail-fast -->

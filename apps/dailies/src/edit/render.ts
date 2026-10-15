@@ -591,26 +591,53 @@ export interface CutRenderResult {
   lines: { at: number; text: string; outStart: number; durationSec: number }[];
   notes: string[];
   sourceDurationSec: number;
+  speedups: {
+    start: number;
+    end: number;
+    rate: number;
+    outAt: number;
+    outEnd: number;
+  }[];
   steps: { name: string; at: number }[];
   videoPath: string;
   warnings: string[];
 }
 
-export async function renderCut(args: {
-  sessionId: string;
+// The rendered video, minus the bookkeeping only `dailies cut render` does
+// (pinning the voice, re-timing the steps, rebuilding the report).
+interface RenderedCut {
+  cues: OutputCue[];
+  notes: string[];
+  placed: { line: CutLine; outStart: number; durationSec: number }[];
+  plan: CutPlan;
+  used: Set<string>;
+  voice?: Voice;
+  warnings: string[];
+}
+
+// Render a cut into `videoPath` from the clean source: voice the lines, plan
+// the timeline, burn the captions and mix the voice in one ffmpeg pass. Shared
+// by `dailies cut render` and a plain `session end`, which renders the seed cut
+// it just wrote — so the two can never disagree about what a cut looks like.
+export async function renderCutVideo(args: {
+  cut: Cut;
+  dir: string;
+  ffmpeg: string;
+  probed: ProbedVideo;
+  source: string;
+  sourceDurationSec: number;
+  videoPath: string;
+  // False skips burning the captions (`session end --no-captions`); the .srt
+  // is still written.
+  burnCaptions?: boolean;
   progress: (message: string) => void;
   echo: Echo;
-}): Promise<CutRenderResult | { error: string }> {
-  const { sessionId, progress, echo } = args;
-  const loaded = await loadCutSource(sessionId);
-  if ("error" in loaded) {
-    return loaded;
-  }
-  const { cut, dir, ffmpeg, probed, source, videoPath } = loaded;
+}): Promise<RenderedCut | { error: string }> {
+  const { cut, dir, ffmpeg, probed, source, videoPath, progress, echo } = args;
   const notes: string[] = [];
   const warnings: string[] = [];
   let plan = planCut(cut, {
-    durationSec: loaded.sourceDurationSec,
+    durationSec: args.sourceDurationSec,
     fps: probed.frameRate,
   });
   warnings.push(...plan.warnings);
@@ -619,7 +646,6 @@ export async function renderCut(args: {
   if ("error" in voicing) {
     return voicing;
   }
-  await pinVoice(sessionId, cut, voicing.voice);
 
   const { placed, overrunSec } = layoutLines({
     plan,
@@ -640,7 +666,9 @@ export async function renderCut(args: {
   });
 
   const srtPath = `${videoPath}.captions.srt`;
-  const burn = await writeCaptions({ ffmpeg, srtPath, cues, probed, notes });
+  const burn =
+    (await writeCaptions({ ffmpeg, srtPath, cues, probed, notes })) &&
+    args.burnCaptions !== false;
   const clipFor = new Map(voicing.voiced.map((v) => [v.line, v.m4aPath]));
   const bandPx = captionBandPx(probed.height);
   // Beside the video, not in the OS temp dir, so the rename into place never
@@ -674,18 +702,51 @@ export async function renderCut(args: {
   } finally {
     await rm(rendered, { force: true });
   }
-  await pruneCache(dir, voicing.used);
+  return {
+    cues,
+    notes,
+    placed,
+    plan,
+    used: voicing.used,
+    voice: voicing.voice,
+    warnings,
+  };
+}
+
+export async function renderCut(args: {
+  sessionId: string;
+  progress: (message: string) => void;
+  echo: Echo;
+}): Promise<CutRenderResult | { error: string }> {
+  const { sessionId, progress, echo } = args;
+  const loaded = await loadCutSource(sessionId);
+  if ("error" in loaded) {
+    return loaded;
+  }
+  const { cut, dir } = loaded;
+  const rendered = await renderCutVideo({ ...loaded, progress, echo });
+  if ("error" in rendered) {
+    return rendered;
+  }
+  const { plan, placed, cues, notes, warnings } = rendered;
+  await pinVoice(sessionId, cut, rendered.voice);
+  await pruneCache(dir, rendered.used);
 
   progress("rebuilding the report…");
   const steps = await retimeAndReport(sessionId, cut, plan);
   return {
-    videoPath,
+    videoPath: loaded.videoPath,
     captions: cues,
     cuts: cut.cuts.map((c) => ({ ...c, outAt: mapTime(plan, c.start).out })),
     holds: cut.holds.flatMap((h) => {
       const mapped = mapTime(plan, h.at);
       return mapped.removed ? [] : [{ ...h, outAt: mapped.out }];
     }),
+    speedups: cut.speedups.map((v) => ({
+      ...v,
+      outAt: mapTime(plan, v.start).out,
+      outEnd: mapTime(plan, v.end).out,
+    })),
     sourceDurationSec: plan.sourceDurationSec,
     durationSec: plan.outDurationSec,
     steps,

@@ -1,6 +1,6 @@
 ---
 name: dailies-edit
-description: Edit a recorded Dailies video after the fact — change or add captions, cut out a section, hold (pause) on a frame longer, add a text-to-speech voice-over, or swap in a recorded voice — then re-render the video and report. No re-recording. Use when the user wants to change a finished Dailies recording. Trigger phrases — "edit the video", "change the caption", "cut out the login part", "pause longer on this screen", "add a voice-over", "make it say X instead", "use my recording instead of the robot voice".
+description: Edit a recorded Dailies video after the fact — change or add captions, cut out a section, speed up or slow down a stretch, hold (pause) on a frame longer, add a text-to-speech voice-over, or swap in a recorded voice — then re-render the video and report. No re-recording. Use when the user wants to change a finished Dailies recording. Trigger phrases — "edit the video", "change the caption", "cut out the login part", "speed through the setup", "play this part at normal speed", "pause longer on this screen", "add a voice-over", "make it say X instead", "use my recording instead of the robot voice".
 allowed-tools:
   - Bash(dailies:*)
   - Bash(npx dailies-cli:*)
@@ -45,6 +45,10 @@ positions. Change it, then run `npx dailies-cli cut render <id>` to rebuild the 
   dropped, with a warning.
 - `holds`: `{ "at", "seconds" }` — freeze the frame at `at` for that long; everything after plays
   later. A hold at the end of the video extends the last frame.
+- `speedups`: `{ "start", "end", "rate" }` — play that stretch `rate` times faster, a whole number
+  from 2 to 8. A caption over it stays up for its full length while the picture runs fast. The
+  seed already speeds up steps run with `--skim` and, when the run showed captions, long
+  stretches with none; delete an entry to play it at real speed, or change its rate.
 - `narration`: `{ "at", "text" }` — a spoken line starting at `at`, voiced by text-to-speech.
   While it plays its text is shown as the caption; add `"caption": "…"` to show different text,
   or `"caption": ""` to show none. To use a recorded voice instead of TTS, add

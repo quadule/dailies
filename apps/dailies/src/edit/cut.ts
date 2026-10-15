@@ -15,8 +15,9 @@
 // Rendering (ffmpeg, TTS) lives in render.ts.
 
 import {
-  MAX_SELECT_TERMS,
   mergeWindows,
+  type Segment,
+  selectTree,
   subtractSpans,
 } from "../video/condense.js";
 import {
@@ -45,6 +46,20 @@ export interface CutHold {
   at: number;
   seconds: number;
 }
+
+// Play a range of source footage `rate` times faster, for a stretch a viewer
+// only needs to see happen. The rate is a whole number because the renderer
+// keeps every rate-th frame: a fractional stride would round differently on
+// each range, and across hundreds of ranges the planned times would drift from
+// the frames actually kept.
+export interface CutSpeedup {
+  end: number;
+  rate: number;
+  start: number;
+}
+
+// Fastest a speed-up may play. Past this a form being filled is a blur.
+export const MAX_SPEEDUP_RATE = 8;
 
 // Text in the caption band, with no voice.
 export interface CutCaption {
@@ -75,6 +90,7 @@ export interface Cut {
   cuts: CutRange[];
   holds: CutHold[];
   narration: CutLine[];
+  speedups: CutSpeedup[];
   steps: CutStep[];
   version: typeof CUT_VERSION;
   // The recording this cut finishes: its filename in the session's video/ dir.
@@ -194,6 +210,40 @@ function parseVoice(value: unknown): CutVoice {
   return voice;
 }
 
+function parseSpeedups(raw: Obj): CutSpeedup[] {
+  const speedups = list(raw, "speedups", ["start", "end", "rate"], (o, w) => {
+    const speedup = {
+      start: num(o, "start", w),
+      end: num(o, "end", w),
+      rate: o.rate as number,
+    };
+    if (speedup.end <= speedup.start) {
+      throw new CutError(`${w}.end must be after its start`);
+    }
+    if (
+      !Number.isInteger(speedup.rate) ||
+      speedup.rate < 2 ||
+      speedup.rate > MAX_SPEEDUP_RATE
+    ) {
+      throw new CutError(
+        `${w}.rate must be a whole number from 2 to ${MAX_SPEEDUP_RATE}`
+      );
+    }
+    return speedup;
+  });
+  const sorted = [...speedups].sort((a, b) => a.start - b.start);
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1] as CutSpeedup;
+    const cur = sorted[i] as CutSpeedup;
+    if (cur.start < prev.end) {
+      throw new CutError(
+        `speedups overlap at ${fmt(cur.start)} — merge them or pick one rate`
+      );
+    }
+  }
+  return sorted;
+}
+
 // Parse a cut.json document. Returns a readable error instead of throwing.
 export function parseCut(raw: unknown): { cut: Cut } | { error: string } {
   try {
@@ -209,6 +259,7 @@ export function parseCut(raw: unknown): { cut: Cut } | { error: string } {
         "steps",
         "cuts",
         "holds",
+        "speedups",
         "captions",
         "narration",
       ],
@@ -235,6 +286,7 @@ export function parseCut(raw: unknown): { cut: Cut } | { error: string } {
         at: num(o, "at", w),
         seconds: num(o, "seconds", w),
       })),
+      speedups: parseSpeedups(raw),
       captions: list(raw, "captions", ["start", "end", "text"], (o, w) => {
         const caption = {
           start: num(o, "start", w),
@@ -291,6 +343,11 @@ export function formatCut(cut: Cut): string {
     steps: cut.steps.map((s) => ({ name: s.name, at: round(s.at) })),
     cuts: cut.cuts.map((c) => ({ start: round(c.start), end: round(c.end) })),
     holds: cut.holds.map((h) => ({ at: round(h.at), seconds: h.seconds })),
+    speedups: cut.speedups.map((v) => ({
+      start: round(v.start),
+      end: round(v.end),
+      rate: v.rate,
+    })),
     captions: cut.captions.map((c) => ({
       start: round(c.start),
       end: round(c.end),
@@ -301,12 +358,16 @@ export function formatCut(cut: Cut): string {
   return `${JSON.stringify(ordered, null, 2)}\n`;
 }
 
-// The cut `session end` writes: the run's own captions and step markers, and no
-// edits. Rendering it reproduces the plain finalize.
+// The cut `session end` writes: the run's own captions and step markers, plus
+// speed-ups for the footage nobody needs to watch in real time (see
+// seedSpeedups). Rendering it reproduces the plain finalize.
 export function seedCut(args: {
   video: string;
-  steps: { name: string; videoTime?: number }[];
+  steps: { name: string; videoTime?: number; skim?: boolean }[];
   captions: { startSec: number; endSec: number; text: string }[];
+  // Length of the condensed source. Without it the stretch after the last
+  // caption has no end, so no speed-up is seeded there.
+  durationSec?: number;
 }): Cut {
   return {
     version: CUT_VERSION,
@@ -317,6 +378,7 @@ export function seedCut(args: {
     ),
     cuts: [],
     holds: [],
+    speedups: seedSpeedups(args),
     captions: args.captions.map((c) => ({
       start: c.startSec,
       end: c.endSec,
@@ -324,6 +386,94 @@ export function seedCut(args: {
     })),
     narration: [],
   };
+}
+
+// A stretch the agent marked with `run --skim` (setup, a detour, a form that
+// has to be filled to get somewhere) aims to play in about this long, up to
+// MAX_SPEEDUP_RATE.
+const SKIM_TARGET_SEC = 8;
+
+// Uncaptioned footage this long or longer plays fast. A caption is how a run
+// says what matters; a long stretch with none is the run getting somewhere.
+const QUIET_MIN_SEC = 5;
+// …aiming for about this long, no faster than QUIET_MAX_RATE. Same target and
+// ceiling as the cinematic pass's un-narrated footage (narrate.ts).
+const QUIET_TARGET_SEC = 4;
+const QUIET_MAX_RATE = 4;
+
+// A caption plays at real speed from a beat before it appears to a beat after
+// it goes: the action it explains usually lands while it is on screen.
+const CAPTION_LEAD_SEC = 0.5;
+const CAPTION_TAIL_SEC = 1;
+
+function rateFor(
+  lengthSec: number,
+  targetSec: number,
+  maxRate: number
+): number {
+  return Math.min(maxRate, Math.max(2, Math.ceil(lengthSec / targetSec)));
+}
+
+// The speed-ups a fresh cut starts with. Two sources, in this order:
+//
+// 1. Skimmed steps. A run of consecutive steps recorded with `run --skim`,
+//    from the first one's start to the next unskimmed step. Captions inside
+//    keep showing for their full reading time while the footage runs fast
+//    under them (outputCaptions), because a detour is exactly where a run
+//    explains itself most.
+// 2. Quiet stretches, as a fallback for runs that marked nothing: footage
+//    outside every caption, QUIET_MIN_SEC or longer. Only when the run showed
+//    captions at all — with none there is no signal for what matters, and the
+//    whole film playing at 4x is not a safe guess.
+//
+// Pure → unit-tested.
+export function seedSpeedups(args: {
+  steps: { videoTime?: number; skim?: boolean }[];
+  captions: { startSec: number; endSec: number }[];
+  durationSec?: number;
+}): CutSpeedup[] {
+  const end = args.durationSec ?? Number.POSITIVE_INFINITY;
+  const timed = args.steps.filter(
+    (s): s is { videoTime: number; skim?: boolean } => s.videoTime !== undefined
+  );
+  const skims: Segment[] = [];
+  for (let i = 0; i < timed.length; i++) {
+    const first = timed[i] as { videoTime: number; skim?: boolean };
+    if (!first.skim) {
+      continue;
+    }
+    let j = i;
+    while (j < timed.length && timed[j]?.skim) {
+      j++;
+    }
+    const stop = timed[j]?.videoTime ?? end;
+    if (Number.isFinite(stop) && stop > first.videoTime) {
+      skims.push({ start: first.videoTime, end: Math.min(stop, end) });
+    }
+    i = j - 1;
+  }
+  const speedups: CutSpeedup[] = mergeWindows(skims, end).map((w) => ({
+    ...w,
+    rate: rateFor(w.end - w.start, SKIM_TARGET_SEC, MAX_SPEEDUP_RATE),
+  }));
+
+  if (args.captions.length > 0 && Number.isFinite(end)) {
+    const spoken = args.captions.map((c) => ({
+      start: c.startSec - CAPTION_LEAD_SEC,
+      end: c.endSec + CAPTION_TAIL_SEC,
+    }));
+    const quiet = subtractSpans([{ start: 0, end }], [...spoken, ...skims]);
+    for (const span of quiet) {
+      const length = span.end - span.start;
+      if (length >= QUIET_MIN_SEC) {
+        speedups.push({
+          ...span,
+          rate: rateFor(length, QUIET_TARGET_SEC, QUIET_MAX_RATE),
+        });
+      }
+    }
+  }
+  return speedups.sort((a, b) => a.start - b.start);
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +486,8 @@ export function seedCut(args: {
 export interface CutPiece {
   endHoldSec: number;
   outStart: number;
+  // Present when the piece plays fast: every rate-th frame is kept.
+  rate?: number;
   srcEnd: number;
   srcStart: number;
   startHoldSec: number;
@@ -363,21 +515,63 @@ function fmt(sec: number): string {
   return `${sec.toFixed(2)}s`;
 }
 
-function pieceSec(p: CutPiece): number {
-  return p.startHoldSec + (p.srcEnd - p.srcStart) + p.endHoldSec;
+// Source frames a piece spans, and how many of them it keeps.
+function pieceFrames(p: CutPiece, fps: number): { span: number; kept: number } {
+  const span = Math.round(p.srcEnd * fps) - Math.round(p.srcStart * fps);
+  return { span, kept: Math.ceil(span / (p.rate ?? 1)) };
 }
 
-function restack(pieces: CutPiece[]): number {
+// Output seconds of a piece's footage, holds excluded.
+function footageSec(p: CutPiece, fps: number): number {
+  return p.rate ? pieceFrames(p, fps).kept / fps : p.srcEnd - p.srcStart;
+}
+
+function pieceSec(p: CutPiece, fps: number): number {
+  return p.startHoldSec + footageSec(p, fps) + p.endHoldSec;
+}
+
+function restack(pieces: CutPiece[], fps: number): number {
   let out = 0;
   for (const piece of pieces) {
     piece.outStart = out;
-    out += pieceSec(piece);
+    out += pieceSec(piece, fps);
+  }
+  return out;
+}
+
+// Split pieces where a speed-up starts or ends, and give each the rate of the
+// speed-up it falls in. A piece's holds stay on its outer ends.
+function applySpeedups(pieces: CutPiece[], speedups: CutSpeedup[]): CutPiece[] {
+  if (speedups.length === 0) {
+    return pieces;
+  }
+  const bounds = speedups.flatMap((v) => [v.start, v.end]);
+  const out: CutPiece[] = [];
+  for (const piece of pieces) {
+    const inside = [
+      ...new Set(bounds.filter((b) => b > piece.srcStart && b < piece.srcEnd)),
+    ].sort((a, b) => a - b);
+    const edges = [piece.srcStart, ...inside, piece.srcEnd];
+    for (let i = 0; i < edges.length - 1; i++) {
+      const srcStart = edges[i] as number;
+      const srcEnd = edges[i + 1] as number;
+      const mid = (srcStart + srcEnd) / 2;
+      const rate = speedups.find((v) => mid > v.start && mid < v.end)?.rate;
+      out.push({
+        srcStart,
+        srcEnd,
+        startHoldSec: i === 0 ? piece.startHoldSec : 0,
+        endHoldSec: i === edges.length - 2 ? piece.endHoldSec : 0,
+        outStart: 0,
+        ...(rate && rate > 1 ? { rate } : {}),
+      });
+    }
   }
   return out;
 }
 
 export function planCut(
-  cut: Pick<Cut, "cuts" | "holds">,
+  cut: Pick<Cut, "cuts" | "holds"> & Partial<Pick<Cut, "speedups">>,
   source: { durationSec: number; fps: number }
 ): CutPlan {
   const fps = source.fps > 0 ? source.fps : 30;
@@ -444,12 +638,21 @@ export function planCut(
       });
     }
   }
-  const outDurationSec = restack(pieces);
+  const speedups = (cut.speedups ?? [])
+    .map((v) => ({
+      start: snap(v.start),
+      end: snap(Math.min(v.end, duration)),
+      rate: v.rate,
+    }))
+    .filter((v) => v.end > v.start && v.rate > 1);
+  const timed = applySpeedups(pieces, speedups);
+  const outDurationSec = restack(timed, fps);
   return {
     fps,
-    identity: removed.length === 0 && points.length === 0,
+    identity:
+      removed.length === 0 && points.length === 0 && speedups.length === 0,
     outDurationSec,
-    pieces,
+    pieces: timed,
     sourceDurationSec: duration,
     warnings,
   };
@@ -468,40 +671,46 @@ export function extendTail(plan: CutPlan, seconds: number): CutPlan {
     ...plan,
     pieces,
     identity: false,
-    outDurationSec: restack(pieces),
+    outDurationSec: restack(pieces, plan.fps),
   };
 }
 
 // The ffmpeg video filter that turns the source into the planned footage, in
 // one pass: keep the pieces' frames (`select` by frame number on a constant-rate
-// stream), renumber them, then repeat a frame wherever a hold freezes it
-// (`loop` with size=1). Returns "" for the identity plan.
+// stream; a sped-up piece keeps every rate-th one), renumber them, then repeat a
+// frame wherever a hold freezes it (`loop` with size=1). Returns "" for the
+// identity plan.
 //
 // One stream, no `split`: trimming each piece separately and concatenating
 // would make ffmpeg buffer decoded frames for every later piece until the
 // earlier ones are consumed. The loops are applied from the last frame back so
 // each one's index is still the post-select index — inserting frames only
-// shifts what comes after. Pure → unit-tested.
+// shifts what comes after. The select terms are joined as a balanced tree
+// (selectTree), so there is no cap on how many stretches a cut keeps.
+// Pure → unit-tested.
 export function cutVideoFilter(plan: CutPlan): string {
   if (plan.identity) {
     return "";
   }
   const fps = plan.fps;
   const frame = (sec: number) => Math.round(sec * fps);
-  // Contiguous pieces (split only by a hold) are one kept range of frames.
-  const ranges: { start: number; end: number }[] = [];
+  // Contiguous real-speed pieces (split only by a hold) are one kept range of
+  // frames. A sped-up piece is its own range: its stride starts on its first
+  // frame, which is what pieceFrames counted.
+  const ranges: { start: number; end: number; rate: number }[] = [];
   const loops: { at: number; count: number }[] = [];
   let out = 0;
   for (const piece of plan.pieces) {
     const start = frame(piece.srcStart);
     const end = frame(piece.srcEnd);
+    const rate = piece.rate ?? 1;
     const prev = ranges.at(-1);
-    if (prev && prev.end === start) {
+    if (prev && prev.end === start && prev.rate === 1 && rate === 1) {
       prev.end = end;
     } else {
-      ranges.push({ start, end });
+      ranges.push({ start, end, rate });
     }
-    const length = end - start;
+    const length = pieceFrames(piece, fps).kept;
     if (piece.startHoldSec > 0) {
       loops.push({ at: out, count: frame(piece.startHoldSec) });
     }
@@ -510,14 +719,15 @@ export function cutVideoFilter(plan: CutPlan): string {
     }
     out += length;
   }
-  if (ranges.length > MAX_SELECT_TERMS) {
-    throw new Error(
-      `the cut keeps ${ranges.length} separate stretches of footage; the most one render can handle is ${MAX_SELECT_TERMS} — merge some cuts`
-    );
-  }
-  const select = ranges
-    .map((r) => `between(n,${r.start},${r.end - 1})`)
-    .join("+");
+  const select = selectTree(
+    ranges
+      .filter((r) => r.end > r.start)
+      .map((r) =>
+        r.rate === 1
+          ? `between(n,${r.start},${r.end - 1})`
+          : `between(n,${r.start},${r.end - 1})*not(mod(n-${r.start},${r.rate}))`
+      )
+  );
   const chain = [
     `fps=${fps}`,
     `select='${select}'`,
@@ -536,13 +746,21 @@ export function cutVideoFilter(plan: CutPlan): string {
 // Where a source time lands in the output. A time inside removed footage maps
 // to where the footage after the cut begins, flagged `removed`. A time that is
 // exactly at a hold maps to the START of the freeze, so a caption or line placed
-// on a hold plays over it rather than after it.
+// on a hold plays over it rather than after it. Inside a sped-up piece a time
+// maps to the first kept frame at or after it.
 export function mapTime(
   plan: CutPlan,
   t: number
 ): { out: number; removed: boolean } {
-  const at = snapper(plan.fps)(t);
+  const fps = plan.fps;
+  const at = snapper(fps)(t);
   const eps = 1e-6;
+  const into = (p: CutPiece, src: number) =>
+    p.rate
+      ? Math.ceil(
+          (Math.round(src * fps) - Math.round(p.srcStart * fps)) / p.rate
+        ) / fps
+      : src - p.srcStart;
   for (const p of plan.pieces) {
     if (at < p.srcStart - eps) {
       return { out: p.outStart, removed: true };
@@ -552,13 +770,13 @@ export function mapTime(
     }
     if (at < p.srcEnd - eps) {
       return {
-        out: p.outStart + p.startHoldSec + (at - p.srcStart),
+        out: p.outStart + p.startHoldSec + into(p, at),
         removed: false,
       };
     }
     if (Math.abs(at - p.srcEnd) <= eps && p.endHoldSec > 0) {
       return {
-        out: p.outStart + p.startHoldSec + (p.srcEnd - p.srcStart),
+        out: p.outStart + p.startHoldSec + footageSec(p, fps),
         removed: false,
       };
     }
@@ -593,13 +811,20 @@ export function outputCaptions(args: {
   for (const caption of captions) {
     const start = mapTime(plan, caption.start);
     const end = mapTime(plan, caption.end);
-    if (end.out - start.out < MIN_CAPTION_SEC) {
+    // Over sped-up footage a caption keeps its own length, holding while the
+    // picture runs fast underneath — its source span was sized to be read. A
+    // cut through either end is an edit to the caption, so that one shrinks.
+    const shown =
+      start.removed || end.removed
+        ? end.out - start.out
+        : Math.max(end.out - start.out, caption.end - caption.start);
+    if (shown < MIN_CAPTION_SEC) {
       warnings.push(
         `caption "${caption.text}" is inside cut footage and was dropped`
       );
       continue;
     }
-    cues.push({ start: start.out, end: end.out, text: caption.text });
+    cues.push({ start: start.out, end: start.out + shown, text: caption.text });
   }
   for (const { line, outStart, durationSec } of lines) {
     const text = line.caption ?? line.text;

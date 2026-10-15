@@ -10,6 +10,7 @@ import {
   parseCut,
   planCut,
   seedCut,
+  seedSpeedups,
 } from "./cut.js";
 
 const SOURCE = { durationSec: 20, fps: 25 };
@@ -266,7 +267,7 @@ describe("cutVideoFilter", () => {
       1.4
     );
     expect(cutVideoFilter(plan)).toBe(
-      "fps=25,select='between(n,0,149)+between(n,300,721)',setpts=N/FRAME_RATE/TB,loop=loop=35:size=1:start=571,loop=loop=50:size=1:start=433,setpts=N/FRAME_RATE/TB"
+      "fps=25,select='(between(n,0,149)+between(n,300,721))',setpts=N/FRAME_RATE/TB,loop=loop=35:size=1:start=571,loop=loop=50:size=1:start=433,setpts=N/FRAME_RATE/TB"
     );
   });
 
@@ -283,7 +284,130 @@ describe("cutVideoFilter", () => {
   it("does not renumber twice when nothing is held", () => {
     const plan = planCut({ cuts: [{ start: 2, end: 4 }], holds: [] }, SOURCE);
     expect(cutVideoFilter(plan)).toBe(
-      "fps=25,select='between(n,0,49)+between(n,100,499)',setpts=N/FRAME_RATE/TB"
+      "fps=25,select='(between(n,0,49)+between(n,100,499))',setpts=N/FRAME_RATE/TB"
     );
+  });
+});
+
+describe("speedups", () => {
+  // 25fps: 4s→8s at 4x is frames 100..199, every 4th kept = 25 frames = 1s.
+  const fast = {
+    cuts: [],
+    holds: [],
+    speedups: [{ start: 4, end: 8, rate: 4 }],
+  };
+
+  it("plays a sped-up range in a whole number of kept frames", () => {
+    const plan = planCut(fast, SOURCE);
+    expect(plan.identity).toBe(false);
+    expect(plan.pieces.map((p) => [p.srcStart, p.srcEnd, p.rate])).toEqual([
+      [0, 4, undefined],
+      [4, 8, 4],
+      [8, 20, undefined],
+    ]);
+    expect(plan.outDurationSec).toBe(17);
+  });
+
+  it("maps times inside and after the speed-up", () => {
+    const plan = planCut(fast, SOURCE);
+    // Offset 50 frames; the first kept frame at or after it is the 13th.
+    expect(mapTime(plan, 6)).toEqual({ out: 4.52, removed: false });
+    expect(mapTime(plan, 10)).toEqual({ out: 7, removed: false });
+  });
+
+  it("keeps every rate-th frame of the range in the filter", () => {
+    expect(cutVideoFilter(planCut(fast, SOURCE))).toBe(
+      "fps=25,select='(between(n,0,99)+(between(n,100,199)*not(mod(n-100,4))+between(n,200,499)))',setpts=N/FRAME_RATE/TB"
+    );
+  });
+
+  it("keeps a hold inside a speed-up on the right frame", () => {
+    const plan = planCut(
+      {
+        cuts: [],
+        holds: [{ at: 6, seconds: 1 }],
+        speedups: [{ start: 4, end: 8, rate: 2 }],
+      },
+      SOURCE
+    );
+    // 4→6 at 2x is 25 frames (1s), then the 1s hold, then 6→8 at 2x.
+    expect(mapTime(plan, 6).out).toBe(5);
+    expect(plan.outDurationSec).toBe(4 + 1 + 1 + 1 + 12);
+  });
+
+  it("holds a caption for its own length over fast footage", () => {
+    const plan = planCut(fast, SOURCE);
+    const cues = outputCaptions({
+      plan,
+      captions: [{ start: 4, end: 7, text: "detour" }],
+      lines: [],
+      warnings: [],
+    });
+    expect(cues).toEqual([{ start: 4, end: 7, text: "detour" }]);
+  });
+
+  it("refuses fractional, too-fast, and overlapping rates", () => {
+    const seed = seedCut({ video: "page.webm", steps: [], captions: [] });
+    expect(
+      parseCut({ ...seed, speedups: [{ start: 1, end: 2, rate: 2.5 }] })
+    ).toEqual({
+      error: "speedups[0].rate must be a whole number from 2 to 8",
+    });
+    expect(
+      parseCut({ ...seed, speedups: [{ start: 1, end: 2, rate: 1 }] })
+    ).toEqual({
+      error: "speedups[0].rate must be a whole number from 2 to 8",
+    });
+    expect(
+      parseCut({
+        ...seed,
+        speedups: [
+          { start: 1, end: 5, rate: 2 },
+          { start: 4, end: 6, rate: 3 },
+        ],
+      })
+    ).toEqual({
+      error: "speedups overlap at 4.00s — merge them or pick one rate",
+    });
+  });
+});
+
+describe("seedSpeedups", () => {
+  it("speeds up a run of skimmed steps up to the next unskimmed one", () => {
+    expect(
+      seedSpeedups({
+        steps: [
+          { videoTime: 0 },
+          { videoTime: 10, skim: true },
+          { videoTime: 30, skim: true },
+          { videoTime: 74 },
+        ],
+        captions: [],
+        durationSec: 90,
+      })
+    ).toEqual([{ start: 10, end: 74, rate: 8 }]);
+  });
+
+  it("speeds up long uncaptioned stretches when the run captions anything", () => {
+    expect(
+      seedSpeedups({
+        steps: [],
+        captions: [
+          { startSec: 2, endSec: 5 },
+          { startSec: 9, endSec: 12 },
+        ],
+        durationSec: 30,
+      })
+    ).toEqual([{ start: 13, end: 30, rate: 4 }]);
+  });
+
+  it("leaves a run with no captions at real speed", () => {
+    expect(
+      seedSpeedups({
+        steps: [{ videoTime: 0 }],
+        captions: [],
+        durationSec: 300,
+      })
+    ).toEqual([]);
   });
 });

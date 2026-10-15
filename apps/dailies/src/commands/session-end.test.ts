@@ -222,31 +222,22 @@ describe("stepKeepWindows", () => {
     expect(windows).toEqual([windowFor(2, 1)]);
   });
 
-  it("drops failed steps so stuck/timed-out attempts aren't kept", () => {
+  it("keeps failed steps, whose clicks often landed before the step threw", () => {
+    // A sign-in whose click worked and whose wait for the next page timed out:
+    // the click is on camera and the run went on from where it left the app.
+    // The frozen wait inside it is trimmed by the motion pass, not here.
     const windows = stepKeepWindows(
       recordWith([
-        // a 30s timed-out login attempt (mostly frozen) — must be excluded
         step({
           startedAt: "2026-06-02T10:00:02.000Z",
           durationMs: 30_000,
           ok: false,
           exitCode: 1,
         }),
-        // the attempt that worked, 1s, starting at t=33s
         step({ startedAt: "2026-06-02T10:00:33.000Z", durationMs: 1000 }),
       ])
     );
-    expect(windows).toEqual([windowFor(33, 1)]);
-  });
-
-  it("returns no windows when every step failed (falls back to the motion pass)", () => {
-    const windows = stepKeepWindows(
-      recordWith([
-        step({ startedAt: "2026-06-02T10:00:02.000Z", ok: false, exitCode: 1 }),
-        step({ startedAt: "2026-06-02T10:00:05.000Z", ok: false, exitCode: 1 }),
-      ])
-    );
-    expect(windows).toEqual([]);
+    expect(windows).toEqual([windowFor(2, 30), windowFor(33, 1)]);
   });
 });
 

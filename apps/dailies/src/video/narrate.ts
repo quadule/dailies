@@ -2142,45 +2142,6 @@ async function mixAudioAndCaptions(args: {
   );
 }
 
-// Burn an SRT into a band below the frame, with no audio work — the plain-mode
-// counterpart to the cinematic pass's combined mix-and-burn. Same band and style,
-// so a plain cut and a cinematic one caption identically.
-//
-// Returns false when it could not run (no `subtitles` filter in this ffmpeg), so
-// the caller can leave the video untouched rather than fail the session.
-export async function burnCaptionBand(args: {
-  ffmpeg: string;
-  videoPath: string;
-  srtPath: string;
-  outPath: string;
-  echo?: Echo;
-}): Promise<boolean> {
-  const { ffmpeg, videoPath, srtPath, outPath, echo } = args;
-  const filters = await availableFilters(ffmpeg);
-  if (!filters.has("subtitles")) {
-    return false;
-  }
-  const probed = await probeVideo(ffmpeg, videoPath);
-  const band = captionBandPx(probed?.height);
-  await run(
-    ffmpeg,
-    [
-      ...FFMPEG_BASE_ARGS,
-      "-i",
-      videoPath,
-      "-vf",
-      `pad=iw:ih+${band}:0:0:color=black,subtitles='${escapeSubtitlesPath(srtPath)}':force_style='${subtitleStyle((probed?.height ?? 720) + band, band, probed?.width ?? 1280)}'`,
-      ...VP8_ENCODE_ARGS,
-      // The recording has no audio track; -an keeps the muxer from waiting on one.
-      "-an",
-      outPath,
-    ],
-    ENCODE_TIMEOUT_MS,
-    echo
-  );
-  return true;
-}
-
 // Height of the caption band added below the frame, in pixels. Sized to hold two
 // rendered caption lines with breathing room — the SRT writer wraps to two — and
 // proportional so it holds at any capture size. Pure → unit-tested.

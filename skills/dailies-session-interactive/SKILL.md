@@ -36,16 +36,17 @@ as it records.
   `click` / `fill`. This is not optional.
 - Reach a page by clicking the control a real user sees (e.g. the login button on the main login
   page), not by brute-forcing a hidden widget. If a step times out, STOP and take the obvious path
-  instead of retrying the same dead end — and use `--timeout 10` so a wrong turn fails fast instead
-  of burning 30s.
+  instead of retrying the same dead end. A locator action that can't find its element fails after
+  10s; pass `{ timeout }` only to a wait you know is slow.
 - A click that navigates (Turbo / SPA especially) finishes asynchronously — `humanClick` returns
   BEFORE the navigation commits, so do NOT read `page.url()` or `snapshotForAI()` on the next line
   (you'll get the OLD page; `page.url()` is also client-cached and lags a Turbo nav). Two correct
-  options: (1) make the navigating click the LAST action of the step and observe at the start of the
-  next — Dailies settles the page at each step boundary, so it's already on the committed destination;
-  or (2) to stay in the same step, `const href = await page.humanClickAndWaitForURL(link)`. To check
-  where you landed between steps without a recorded run, `npx dailies-cli session url <id>` prints the live
-  committed URL (read-only, fast).
+  options: (1) make the navigating click the LAST action of the step and look with a peek (`npx dailies-cli
+  run --session <id> --peek`) — Dailies settles the page at each step boundary, so it's already on
+  the committed destination; or (2) to stay in the same step, `const href = await
+  page.humanClickAndWaitForURL(link)` — only for a click that really navigates; on a drawer, a
+  modal or a form that may re-render it waits out its whole timeout. `npx dailies-cli session url <id>`
+  prints the live committed URL (read-only, fast).
 - A click returning is NOT success. Before you submit, confirm the submit control is enabled and
   every required field / checkbox is satisfied; afterward, verify the change actually persisted. A
   disabled or validation-blocked submit saved nothing — never report that run as passed.
@@ -154,12 +155,13 @@ build on). Read the printed code, then continue driving the flow.
 2. Start: `id=$(npx dailies-cli session start --name "<flow>")`. The browser is headed by
    default (no flag) — which is required here so the user can take over; never pass `--headed` (it
    doesn't exist), and don't pass `--headless`.
-3. **LOOK** — observe before acting; an observe step records like any other (log `page.url()`,
-   `page.title()`, `(await page.snapshotForAI()).full`).
-4. **DECIDE** the next small action. If it's ambiguous or not yours to do, ask the user / hand over.
-5. **ACT** — run that action as an intent-named step (`npx dailies-cli run --session "$id" --step
-   <name>`), or take over (above) when the user must do it.
-6. **READ** stdout + exit code; on failure observe and retry as a new step.
+3. **LOOK** — read the page with a peek, which records nothing: `npx dailies-cli run --session "$id"
+   --peek` with a script that logs `page.url()`, `page.title()`, `(await page.snapshotForAI()).full`.
+4. **DECIDE** the next thing a viewer would name. If it's ambiguous or not yours to do, ask the
+   user / hand over.
+5. **ACT** — run it as one intent-named step (`npx dailies-cli run --session "$id" --step <name>`,
+   plus `--skim` for setup or a detour), or take over (above) when the user must do it.
+6. **READ** stdout + exit code; on failure peek and retry as a new step.
 7. Loop 3–6 until done; finish with explicit assertion step(s) logging `PASS`/`FAIL`.
 8. End, render, and open the report: `npx dailies-cli session end "$id" --open`. The `--open`
    flag opens the self-contained `~/.dailies/sessions/<id>/report.html` in the browser for you —
@@ -169,6 +171,25 @@ build on). Read the printed code, then continue driving the flow.
    the page you were demonstrating.
 
 ## Hard rules
+
+<!-- dailies:snippet rule-steps cli=npx-cli -->
+- LOOK with a peek, not a step: `npx dailies-cli run --session "$id" --peek` runs a script against the live
+  page and records nothing — no step, no screenshot, no report entry. Snapshots, `page.url()`,
+  `evaluate` and locator reads all work; clicks, typing, navigation, scrolling, captions and
+  effects are refused, because footage between steps is cut from the film. A step is something a
+  viewer watches happen; a peek is you reading the screen.
+- Size steps the way a viewer would name them: "fill in the W-4", "sign Section 1", "invite the
+  worker" — not one step per radio button or field. A step can fill a whole form and submit it.
+  Five steps for five answers on one page is five rows a reviewer scrolls past, and five more
+  model round trips. Split only where you need to read the result before deciding what to do.
+- After an action, the end of the step can log what the next decision needs (`snapshotForAI({
+  track: "main" })` for just what changed), so the next look is often unnecessary.
+- Mark setup and detours with `--skim`: signing in, flipping a setting, finishing unrelated
+  onboarding to reach the feature, filling a form only because the flow demands it. The finished
+  video fast-forwards through a run of skimmed steps, captions and all. Leave it off the steps
+  that show the thing under test. Uncaptioned stretches are sped up too, so caption the moments
+  that matter.
+<!-- dailies:end rule-steps -->
 
 <!-- dailies:snippet rule-observe-first -->
 - Unknown page? Snapshot first, then act: read `(await page.snapshotForAI()).full` to see the full
@@ -448,17 +469,18 @@ last-opened tab and binds it to that step in the report. So:
 <!-- dailies:snippet rule-fail-fast cli=npx-cli -->
 - End each script by logging the state you need for the next decision — stdout is your
   observation channel.
-- Use short timeouts (`npx dailies-cli run --timeout 10`) so a step fails fast instead of hanging on a
-  missing element.
+- A missing element fails its action after 10s, not Playwright's 30s. Don't raise that globally;
+  pass `{ timeout }` to the one wait you know is slow (a long server job). `run --timeout` caps
+  the whole step, which a long `humanFill` can legitimately need.
 - In assertion / extraction steps, degrade gracefully — log a `WARN` / `FAIL` line instead of
   crashing, so the step still records its evidence. While exploring, a missed selector means
-  look again (snapshot, fix, retry as a new step), not a silent fallback.
+  look again (peek, fix, retry as a new step), not a silent fallback.
 - End before you stop: `npx dailies-cli stop` shuts the daemon down and aborts any live session,
   skipping its report.html — always `npx dailies-cli session end <id>` first.
 <!-- dailies:end rule-fail-fast -->
 
 - Stay in this conversation — don't delegate the flow to a subagent; the point is to collaborate.
-- Name steps by intent (`observe-cart`, `enable-feature-flag`, `submit-login-form`).
+- Name steps by intent (`fill-shipping-address`, `enable-feature-flag`, `submit-login-form`).
 - Never skip `session end` — without it there is no report.
 - **File uploads:** write the file into the sandbox temp dir first (`writeFile(name, data)`), then
   `await page.setInputFiles(inputSelector, name)` — call this on `page`, never on a locator.

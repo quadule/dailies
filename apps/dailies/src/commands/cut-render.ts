@@ -53,6 +53,10 @@ export async function cutRender(id: string, json: boolean): Promise<number> {
       t: h.outAt,
       label: `hold     ${h.seconds.toFixed(1)}s freeze (written at ${h.at.toFixed(2)})`,
     })),
+    ...result.speedups.map((v) => ({
+      t: v.outAt,
+      label: `speedup  ${v.rate}x until ${at(v.outEnd)} (written at ${v.start.toFixed(2)}–${v.end.toFixed(2)})`,
+    })),
     ...result.lines.map((l) => ({
       t: l.outStart,
       label: `line     "${l.text}" (${l.durationSec.toFixed(1)}s, written at ${l.at.toFixed(2)})`,

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { copyFile, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { formatDurationMs, requestId } from "dailies-cli-kit";
 import {
@@ -16,8 +16,9 @@ import {
   type SessionEndRequest,
   type SessionEndResult,
 } from "dailies-protocol";
-import { seedCut } from "../edit/cut.js";
-import { cutPath, writeCut } from "../edit/cut-file.js";
+import { type Cut, mapTime, seedCut } from "../edit/cut.js";
+import { cutPath, readCut, writeCut } from "../edit/cut-file.js";
+import { renderCutVideo } from "../edit/render.js";
 import { logger } from "../logger.js";
 import { writeSessionReport } from "../report/load-and-render.js";
 import { endResultFromDisk } from "../session/artifacts.js";
@@ -34,20 +35,17 @@ import { scrubSessionHar } from "../session/scrub-har.js";
 import {
   condenseVideo,
   findFfmpeg,
+  keptSeconds,
   remapToCondensed,
   type Segment,
 } from "../video/condense.js";
 import { probeDurationSec, probeVideo } from "../video/ffmpeg.js";
 import type { MediaPreferences } from "../video/media-preferences.js";
 import {
-  burnCaptionBand,
   type CinematicStep,
-  captionBandPx,
-  captionFontPx,
   cinematicProcess,
   precinematicVideoPath,
 } from "../video/narrate.js";
-import { buildSrt, captionLineMax } from "../video/srt.js";
 import { stopDaemonIfIdle } from "./daemon-stop.js";
 
 interface SessionEndOpts {
@@ -121,13 +119,13 @@ export const STEP_PAD_AFTER_SEC = 1.5;
 // session's createdAt, and each step is stamped with the same wall clock, so
 // (step.startedAt - createdAt) is the step's offset into the recording.
 //
-// Failed steps (ok === false) are left out. A step that timed out or errored —
-// e.g. an agent stuck retrying the login page — records as a long, mostly frozen
-// stretch whose only value (the failure) is already captured in the report and
-// results.json. Keeping its window would pad the condensed cut (and the cinematic
-// demo) with dead air from attempts that didn't work; dropping it trims those
-// stuck retries out. If every step failed we return no windows and condenseVideo
-// falls back to the whole-video motion pass, so a wholly-failed run still trims.
+// Failed steps are kept too. They used to be dropped as dead air, but a step
+// usually fails AFTER acting: the sign-in click landed and the wait for the next
+// page timed out, the signature was typed and the submit selector was wrong. On
+// a real 50-minute run, 22 of 197 steps failed, and dropping them cut the
+// cursor out mid-glide and jumped the app between screens with no click to
+// explain it. The dead wait inside a failed step is motionless, so the motion
+// pass trims it like any other still.
 export function stepKeepWindows(record: SessionRecord): Segment[] {
   const t0 = Date.parse(record.createdAt);
   if (!Number.isFinite(t0)) {
@@ -135,9 +133,6 @@ export function stepKeepWindows(record: SessionRecord): Segment[] {
   }
   const windows: Segment[] = [];
   for (const step of record.steps) {
-    if (!step.ok) {
-      continue;
-    }
     const startMs = Date.parse(step.startedAt);
     if (!Number.isFinite(startMs)) {
       continue;
@@ -440,14 +435,21 @@ function reorderVideos(
   }
 }
 
+interface Condensed {
+  // page.showCaption cues, in condensed time.
+  cues: CaptionCue[];
+  // Length of the condensed recording; undefined when nothing was trimmed.
+  durationSec?: number;
+}
+
 async function condenseSessionVideos(
   result: SessionEndResult,
   record: SessionRecord,
   captions: CaptionEvent[]
-): Promise<CaptionCue[]> {
+): Promise<Condensed> {
   const videos = result.artifacts.filter((a) => a.kind === "video");
   if (videos.length === 0) {
-    return [];
+    return { cues: [] };
   }
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) {
@@ -455,7 +457,7 @@ async function condenseSessionVideos(
       "  ⚠ video not condensed: ffmpeg not found — install ffmpeg (brew install ffmpeg / apt install ffmpeg) or set $DAILIES_FFMPEG\n"
     );
     logger.info("ffmpeg not found; keeping raw session videos");
-    return [];
+    return { cues: [] };
   }
   const keepWindows = stepKeepWindows(record);
   // A caption is normally shown over a page that is doing nothing, which is
@@ -524,7 +526,7 @@ async function condenseSessionVideos(
   // (built from the record just after this).
   const t0 = Date.parse(record.createdAt);
   if (!Number.isFinite(t0)) {
-    return [];
+    return { cues: [] };
   }
   if (mappingKeeps) {
     for (const step of record.steps) {
@@ -540,7 +542,10 @@ async function condenseSessionVideos(
   // No keeps means nothing was trimmed (a short recording with no dead air), so
   // caption times need no remapping — they are already video time. Returning []
   // here would silently drop every caption from such a run.
-  return captionCues(record, captions, mappingKeeps);
+  return {
+    cues: captionCues(record, captions, mappingKeeps),
+    durationSec: mappingKeeps ? keptSeconds(mappingKeeps) : undefined,
+  };
 }
 
 // Caption cues in condensed video time. Pure → unit-tested.
@@ -585,65 +590,73 @@ export function captionCues(
   return cues.filter((c) => c.endSec > c.startSec);
 }
 
-// Burn the run's own showCaption cues into the video, for a plain (non-cinematic)
-// finalize. Best-effort throughout: captions are presentation, and a session's
-// evidence must never be lost because ffmpeg could not draw text.
-async function burnPlainCaptions(
+// Plain mode: render the cut this finalize just seeded — its captions burned
+// into the band and its speed-ups applied, in one ffmpeg pass. It is the same
+// render `dailies cut render` runs, so a plain finalize and a render of the
+// untouched seed are the same video. Steps are re-timed to the output, with
+// precinematicVideoTime keeping their place in the clean source for a later
+// cut render or cinematic pass. Best-effort throughout: a session's evidence
+// must never be lost because ffmpeg could not draw text.
+async function renderPlainCut(
   result: SessionEndResult,
-  cues: CaptionCue[]
+  record: SessionRecord,
+  cut: Cut,
+  burnCaptions: boolean
 ): Promise<void> {
   const video = result.artifacts.find((a) => a.kind === "video");
   const ffmpeg = await findFfmpeg();
   if (!(video && ffmpeg)) {
     return;
   }
+  // Progress only. The full ffmpeg command line is hundreds of characters of
+  // select terms on a long run, and an agent reads all of it.
+  const progress = (line: string) => process.stderr.write(`  · ${line}\n`);
   try {
-    // Burn from the clean condensed cut, never from a video that may already
-    // carry a band. `session end` is re-runnable, and without this a second run
-    // padded the padded video and stacked a second band under the first.
-    const clean = precinematicVideoPath(video.path);
-    if (existsSync(clean)) {
-      await copyFile(clean, video.path);
-    } else {
-      await copyFile(video.path, clean);
+    const source = precinematicVideoPath(video.path);
+    if (!existsSync(source)) {
+      await copyFile(video.path, source);
     }
-    const probed = await probeVideo(ffmpeg, video.path);
-    const srtPath = `${video.path}.captions.srt`;
-    await writeFile(
-      srtPath,
-      buildSrt(
-        cues.map((c) => ({ start: c.startSec, end: c.endSec, text: c.text })),
-        // Same budget the cinematic pass uses: chars per line depends on the
-        // caption font as well as the frame width, and the font comes from the
-        // band, which comes from the frame height.
-        captionLineMax(
-          probed?.width,
-          captionFontPx(captionBandPx(probed?.height))
-        )
-      ),
-      "utf8"
-    );
-    const outPath = `${video.path}.captioned.webm`;
-    const burned = await burnCaptionBand({
-      ffmpeg,
-      videoPath: video.path,
-      srtPath,
-      outPath,
-      echo: (line) => process.stderr.write(`  · ${line}\n`),
-    });
-    if (!burned) {
-      process.stderr.write(
-        "  ⚠ captions not burned — this ffmpeg has no `subtitles` filter; the .srt is written alongside the video\n"
-      );
+    const probed = await probeVideo(ffmpeg, source);
+    const sourceDurationSec = await probeDurationSec(ffmpeg, source);
+    if (!(probed && sourceDurationSec)) {
+      logger.warn({ source }, "could not probe the condensed recording");
       return;
     }
-    await rename(outPath, video.path);
+    const rendered = await renderCutVideo({
+      cut,
+      dir: result.session.artifactsDir,
+      ffmpeg,
+      probed,
+      source,
+      sourceDurationSec,
+      videoPath: video.path,
+      burnCaptions,
+      progress,
+      echo: () => undefined,
+    });
+    if ("error" in rendered) {
+      process.stderr.write(`  ⚠ video not finished: ${rendered.error}\n`);
+      return;
+    }
+    for (const note of rendered.notes) {
+      process.stderr.write(`  ⚠ ${note}\n`);
+    }
+    for (const step of record.steps) {
+      const src = step.precinematicVideoTime ?? step.videoTime;
+      if (src !== undefined) {
+        step.precinematicVideoTime = src;
+        step.videoTime = mapTime(rendered.plan, src).out;
+      }
+    }
     video.bytes = await stat(video.path)
       .then((st) => st.size)
       .catch(() => video.bytes);
-    process.stderr.write(`  ✓ ${cues.length} caption(s) burned\n`);
+    const fast = cut.speedups.length;
+    process.stderr.write(
+      `  ✓ ${formatDurationMs(Math.round(rendered.plan.outDurationSec * 1000))} video${burnCaptions && rendered.cues.length > 0 ? `, ${rendered.cues.length} caption(s) burned` : ""}${fast > 0 ? `, ${fast} stretch(es) sped up` : ""}\n`
+    );
   } catch (err) {
-    logger.warn({ err }, "could not burn showCaption captions");
+    logger.warn({ err }, "could not render the plain cut");
   }
 }
 
@@ -918,12 +931,12 @@ export async function sessionEnd(
   const cinematicRequested = opts.cinematic === true || opts.song === true;
   // page.showCaption cues, in condensed time. Burned below in plain mode; the
   // cinematic pass writes its own captions from the narration instead.
-  let cues: CaptionCue[] = [];
+  let condensed: Condensed | undefined;
   const alreadyCondensed =
     videoArtifact !== undefined &&
     existsSync(precinematicVideoPath(videoArtifact.path));
   if (opts.condense !== false && !alreadyCondensed) {
-    cues = await condenseSessionVideos(
+    condensed = await condenseSessionVideos(
       endResult,
       record,
       await readCaptions(endResult.session.artifactsDir)
@@ -963,7 +976,8 @@ export async function sessionEnd(
       seedCut({
         video: path.basename(primary.path),
         steps: record.steps,
-        captions: cues,
+        captions: condensed?.cues ?? [],
+        durationSec: condensed?.durationSec,
       })
     )
       .then((file) =>
@@ -1002,8 +1016,24 @@ export async function sessionEnd(
   // into the same band the cinematic pass uses. Nothing was painted during
   // recording, so this is the only thing that puts them on screen — and it runs
   // here, at finalize, which is what lets one recording be finished in any mode.
-  if (!cinematicRequested && opts.captions !== false && cues.length > 0) {
-    await burnPlainCaptions(endResult, cues);
+  if (!cinematicRequested && condensed) {
+    const read = await readCut(id);
+    if ("cut" in read) {
+      await renderPlainCut(
+        endResult,
+        record,
+        read.cut,
+        opts.captions !== false
+      );
+      await writeSessionRecord(record).catch((err) =>
+        logger.warn({ err, sessionId: id }, "could not persist step timings")
+      );
+    } else {
+      logger.warn(
+        { sessionId: id, error: read.error },
+        "could not read cut.json"
+      );
+    }
   }
 
   // Resilient like `session abort`: a report-write failure must not crash the

@@ -11,6 +11,10 @@ positions. Change it, then run `{{cli}} cut render <id>` to rebuild the video an
   dropped, with a warning.
 - `holds`: `{ "at", "seconds" }` — freeze the frame at `at` for that long; everything after plays
   later. A hold at the end of the video extends the last frame.
+- `speedups`: `{ "start", "end", "rate" }` — play that stretch `rate` times faster, a whole number
+  from 2 to 8. A caption over it stays up for its full length while the picture runs fast. The
+  seed already speeds up steps run with `--skim` and, when the run showed captions, long
+  stretches with none; delete an entry to play it at real speed, or change its rate.
 - `narration`: `{ "at", "text" }` — a spoken line starting at `at`, voiced by text-to-speech.
   While it plays its text is shown as the caption; add `"caption": "…"` to show different text,
   or `"caption": ""` to show none. To use a recorded voice instead of TTS, add

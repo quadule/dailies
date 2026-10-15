@@ -177,7 +177,9 @@ line in `narrate.ts` (`voiceCredit` / `musicToolName` / `titleArtToolName`), and
 ## Editing a finished recording (`apps/dailies/src/edit/`)
 
 A plain `session end` writes `cut.json` beside the session — an edit decision list seeded with the
-run's captions and step positions — and `dailies cut render <id>` rebuilds the video from it.
+run's captions, step positions and speed-ups — and renders it; `dailies cut render <id>` rebuilds
+the video from it again after edits. Both go through `renderCutVideo` (`edit/render.ts`), so a plain
+finalize and a render of the untouched seed are the same video.
 
 - **Every time in a cut is source time**: seconds into the clean condensed cut (the
   `*.precinematic.webm` sidecar). Cuts and holds move everything after them in the output, so
@@ -194,9 +196,17 @@ run's captions and step positions — and `dailies cut render <id>` rebuilds the
   keyed by text + voice + speed (recordings by file size + mtime); the first render pins the
   resolved voice into `cut.json` so later lines can't come out in a different voice. There is no
   silent fallback to a second voice.
+- **Speed-ups are whole-number strides**: a `speedups` range at rate k keeps every k-th frame,
+  and `planCut`/`mapTime` count kept frames exactly. A fractional rate would round differently per
+  range and drift across hundreds of them. The seed (`seedSpeedups`) speeds up runs of steps
+  recorded with `run --skim`, plus — only when the run showed any captions — uncaptioned stretches
+  of 5s or more. A caption over sped-up footage keeps its own length (`outputCaptions`).
 - **A render is one ffmpeg pass**: `cutVideoFilter` keeps frames with `select` on frame numbers,
   freezes with `loop=size=1` (applied last-frame-first so indices stay valid), then the caption
-  burn and voice mix ride in the same filter graph. Don't go back to encoding pieces and
+  burn and voice mix ride in the same filter graph. `select` terms are joined by `selectTree` as a
+  balanced tree: ffmpeg's parser fails on a flat sum past ~100 terms, and the tree nests only
+  log2(n) deep (2,000 terms measured fine). Condensing uses the same tree, so a long session is one
+  decode of the source, not one per batch. Don't go back to encoding pieces and
   concatenating — a separate trim pass plus a burn/mix pass measured ~3 min vs ~17 s for 29 s of
   1440x900 footage. Holds are snapped to whole frames so the frame-based freeze matches `mapTime`.
   Every encode in the pipeline uses `VP8_ENCODE_ARGS` (`video/ffmpeg.ts`): libvpx at

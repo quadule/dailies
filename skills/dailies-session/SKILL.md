@@ -35,16 +35,17 @@ renders a self-contained `report.html`.
   `click` / `fill`. This is not optional.
 - Reach a page by clicking the control a real user sees (e.g. the login button on the main login
   page), not by brute-forcing a hidden widget. If a step times out, STOP and take the obvious path
-  instead of retrying the same dead end — and use `--timeout 10` so a wrong turn fails fast instead
-  of burning 30s.
+  instead of retrying the same dead end. A locator action that can't find its element fails after
+  10s; pass `{ timeout }` only to a wait you know is slow.
 - A click that navigates (Turbo / SPA especially) finishes asynchronously — `humanClick` returns
   BEFORE the navigation commits, so do NOT read `page.url()` or `snapshotForAI()` on the next line
   (you'll get the OLD page; `page.url()` is also client-cached and lags a Turbo nav). Two correct
-  options: (1) make the navigating click the LAST action of the step and observe at the start of the
-  next — Dailies settles the page at each step boundary, so it's already on the committed destination;
-  or (2) to stay in the same step, `const href = await page.humanClickAndWaitForURL(link)`. To check
-  where you landed between steps without a recorded run, `npx dailies-cli session url <id>` prints the live
-  committed URL (read-only, fast).
+  options: (1) make the navigating click the LAST action of the step and look with a peek (`npx dailies-cli
+  run --session <id> --peek`) — Dailies settles the page at each step boundary, so it's already on
+  the committed destination; or (2) to stay in the same step, `const href = await
+  page.humanClickAndWaitForURL(link)` — only for a click that really navigates; on a drawer, a
+  modal or a form that may re-render it waits out its whole timeout. `npx dailies-cli session url <id>`
+  prints the live committed URL (read-only, fast).
 - A click returning is NOT success. Before you submit, confirm the submit control is enabled and
   every required field / checkbox is satisfied; afterward, verify the change actually persisted. A
   disabled or validation-blocked submit saved nothing — never report that run as passed.
@@ -134,21 +135,22 @@ One session, small steps that reproduce it, `session end` — the report bundles
 1. Runtime: if `dailies` (or `npx dailies-cli`) already runs, it's installed — don't reinstall.
    Only run `npx dailies-cli install` if a command reports the runtime/browser is missing.
 2. Start: `id=$(npx dailies-cli session start --name "<flow>")`
-3. **LOOK** — observe before acting; an observe step records like any other:
+3. **LOOK** — read the page with a peek, which records nothing (the first page load is a step, or
+   pass `--url` to `session start`):
    ```sh
-   npx dailies-cli run --session "$id" --step observe-home <<'EOF'
+   npx dailies-cli run --session "$id" --peek <<'EOF'
    const page = await browser.getPage("main");
-   await page.goto("http://localhost:3000", { waitUntil: "domcontentloaded" });
    console.log(page.url(), await page.title());
    console.log((await page.snapshotForAI()).full); // aria outline — pick selectors from this
    EOF
    ```
-4. **DECIDE** the next small action from stdout.
-5. **ACT** — run that one action (or a tight cluster, e.g. fill three fields + submit) as its own
-   intent-named step: `npx dailies-cli run --session "$id" --step submit-login-form <<'EOF' …`
-   (a `./step.js` file works too). Reuse the same named page so each step picks up where the last
-   left off.
-6. **READ** stdout + exit code. Failed? Observe where the page is, then retry as a NEW step —
+4. **DECIDE** the next thing a viewer would name — "sign in", "fill in the W-4" — from stdout.
+5. **ACT** — run it as one intent-named step, the whole form and its submit together:
+   `npx dailies-cli run --session "$id" --step submit-login-form <<'EOF' …` (a `./step.js` file works
+   too). Add `--skim` when it's setup or a detour rather than the thing under test. Reuse the same
+   named page so each step picks up where the last left off, and end the script by logging what the
+   next decision needs.
+6. **READ** stdout + exit code. Failed? Peek at where the page is, then retry as a NEW step —
    duplicates are honest evidence, and a failed step does not end the session.
 7. Repeat 3–6 until the flow is done; finish with explicit assertion step(s): expected text / URL /
    state, logging `PASS`/`FAIL`.
@@ -164,11 +166,31 @@ One session, small steps that reproduce it, `session end` — the report bundles
 
 ## Explore vs batch
 
-- Unknown UI → small steps, observe between actions, selectors picked from snapshots.
-- Known flow (user gave exact steps, or you already verified the UI) → skip the observing and
-  batch the flow into a few named steps. Re-checking what you already know just pads the report.
+- Unknown UI → peek before acting, selectors picked from snapshots. Peeks cost nothing in the
+  report, so look as often as you need — but still act in viewer-sized steps.
+- Known flow (user gave exact steps, or you already verified the UI) → skip the peeking and
+  batch the flow into a few named steps. Re-checking what you already know just costs time.
 
 ## Hard rules
+
+<!-- dailies:snippet rule-steps cli=npx-cli -->
+- LOOK with a peek, not a step: `npx dailies-cli run --session "$id" --peek` runs a script against the live
+  page and records nothing — no step, no screenshot, no report entry. Snapshots, `page.url()`,
+  `evaluate` and locator reads all work; clicks, typing, navigation, scrolling, captions and
+  effects are refused, because footage between steps is cut from the film. A step is something a
+  viewer watches happen; a peek is you reading the screen.
+- Size steps the way a viewer would name them: "fill in the W-4", "sign Section 1", "invite the
+  worker" — not one step per radio button or field. A step can fill a whole form and submit it.
+  Five steps for five answers on one page is five rows a reviewer scrolls past, and five more
+  model round trips. Split only where you need to read the result before deciding what to do.
+- After an action, the end of the step can log what the next decision needs (`snapshotForAI({
+  track: "main" })` for just what changed), so the next look is often unnecessary.
+- Mark setup and detours with `--skim`: signing in, flipping a setting, finishing unrelated
+  onboarding to reach the feature, filling a form only because the flow demands it. The finished
+  video fast-forwards through a run of skimmed steps, captions and all. Leave it off the steps
+  that show the thing under test. Uncaptioned stretches are sped up too, so caption the moments
+  that matter.
+<!-- dailies:end rule-steps -->
 
 <!-- dailies:snippet rule-observe-first -->
 - Unknown page? Snapshot first, then act: read `(await page.snapshotForAI()).full` to see the full
@@ -448,16 +470,17 @@ last-opened tab and binds it to that step in the report. So:
 <!-- dailies:snippet rule-fail-fast cli=npx-cli -->
 - End each script by logging the state you need for the next decision — stdout is your
   observation channel.
-- Use short timeouts (`npx dailies-cli run --timeout 10`) so a step fails fast instead of hanging on a
-  missing element.
+- A missing element fails its action after 10s, not Playwright's 30s. Don't raise that globally;
+  pass `{ timeout }` to the one wait you know is slow (a long server job). `run --timeout` caps
+  the whole step, which a long `humanFill` can legitimately need.
 - In assertion / extraction steps, degrade gracefully — log a `WARN` / `FAIL` line instead of
   crashing, so the step still records its evidence. While exploring, a missed selector means
-  look again (snapshot, fix, retry as a new step), not a silent fallback.
+  look again (peek, fix, retry as a new step), not a silent fallback.
 - End before you stop: `npx dailies-cli stop` shuts the daemon down and aborts any live session,
   skipping its report.html — always `npx dailies-cli session end <id>` first.
 <!-- dailies:end rule-fail-fast -->
 
-- **Name every step by intent** (`observe-cart`, `submit-login-form`), not mechanics (`step-3`) —
-  the report timeline should read as a QA narrative.
+- **Name every step by intent** (`fill-shipping-address`, `submit-login-form`), not mechanics
+  (`step-3`) — the report timeline should read as a QA narrative.
 - Don't invent API shapes; use the dailies-scripting reference.
 - Use `session abort <id>` only to salvage a broken run.

@@ -45,9 +45,11 @@ ${sandboxReference()}`;
 // passing, and step discipline come from the shared doc snippets so this help
 // cannot drift from the skills/REFERENCE.md versions of the same rules.
 export const USAGE_GUIDE = `SESSION WORKFLOW GUIDE:
-  Structure a session as a sequence of small steps — one script per step (open, act, assert).
-  Each \`dailies run --step <name>\` is one step in the report, with its own trace group and ONE
-  auto-captured screenshot.
+  Structure a session as a sequence of steps a viewer would name — one script per step (sign in,
+  fill in the form and submit it, assert). Each \`dailies run --step <name>\` is one step in the
+  report, with its own trace group and ONE auto-captured screenshot. Read the page between steps
+  with \`dailies run --session <id> --peek\`, which records nothing; mark setup and detours with
+  \`--skim\` so the finished video fast-forwards through them.
 
 ${indent(RULE_SCREENSHOT, "  ")}
 
