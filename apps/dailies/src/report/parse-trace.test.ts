@@ -75,6 +75,30 @@ describe("parseTraceActions", () => {
     expect(byStep.submit?.[0]?.durationMs).toBe(20);
   });
 
+  it("pairs a call id reused by a later step with its own after-event", () => {
+    // Each step runs a fresh sandbox client, so call ids restart every step.
+    const zip = makeTraceZip([
+      {
+        callId: "c1",
+        class: "Frame",
+        method: "click",
+        startTime: 100,
+        type: "before",
+      },
+      { callId: "c1", endTime: 120, type: "after" },
+      {
+        callId: "c1",
+        class: "Frame",
+        method: "fill",
+        startTime: 5000,
+        type: "before",
+      },
+      { callId: "c1", endTime: 5030, type: "after" },
+    ]);
+    const actions = parseTraceActions(zip).byStep["(setup)"];
+    expect(actions?.map((a) => a.durationMs)).toEqual([20, 30]);
+  });
+
   it("redacts a value typed into a credential field, but not other typing", () => {
     // These summaries are rendered into report.html, the artifact documented as
     // shareable — a sign-in step must not carry the password into it.

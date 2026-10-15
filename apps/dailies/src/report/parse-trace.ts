@@ -78,6 +78,7 @@ function summarizeParams(params: unknown, method?: string): string | undefined {
 }
 
 interface BeforeEvent {
+  after?: AfterInfo;
   callId?: string;
   class?: string;
   method?: string;
@@ -116,30 +117,41 @@ function beforeEvent(event: Record<string, unknown>): BeforeEvent {
   };
 }
 
-// Split the JSONL trace into before-events (in start order) and an after-map.
-function parseEvents(text: string): {
-  afters: Map<string, AfterInfo>;
-  befores: BeforeEvent[];
-} {
+// Read the JSONL trace into before-events (in start order), each paired with
+// its after-event. Call ids are NOT unique across a session: every step runs a
+// fresh sandbox client whose ids restart at call@1, so a session-wide id map
+// paired a call with the LAST step that reused its id and reported 48-minute
+// clicks. An after always follows its own before in the file, so it belongs to
+// the latest before with that id still waiting for one.
+function parseEvents(text: string): BeforeEvent[] {
   const befores: BeforeEvent[] = [];
-  const afters = new Map<string, AfterInfo>();
+  const open = new Map<string, BeforeEvent>();
   for (const event of parseJsonLines(text)) {
     if (event.type === "before") {
-      befores.push(beforeEvent(event));
+      const before = beforeEvent(event);
+      befores.push(before);
+      if (before.callId) {
+        open.set(before.callId, before);
+      }
     } else if (event.type === "after" && typeof event.callId === "string") {
+      const before = open.get(event.callId);
+      if (!before) {
+        continue;
+      }
+      open.delete(event.callId);
       const err = event.error as { message?: string } | undefined;
-      afters.set(event.callId, {
+      before.after = {
         endTime:
           typeof event.endTime === "number" && Number.isFinite(event.endTime)
             ? event.endTime
             : undefined,
         error: typeof err?.message === "string" ? err.message : undefined,
-      });
+      };
     }
   }
   // Events are appended in start order, but sort defensively before segmenting.
   befores.sort((a, b) => (a.startTime ?? 0) - (b.startTime ?? 0));
-  return { afters, befores };
+  return befores;
 }
 
 // Fuse a before-event with its paired after-info into one readable action.
@@ -172,7 +184,7 @@ function toAction(
 // Reuses the already-captured trace (only the `trace.trace` entry is inflated).
 // Any malformed / missing / unexpected input yields an empty result, never throws.
 export function parseTraceActions(zip: Uint8Array): TraceActions {
-  const { befores, afters } = parseEvents(readTraceText(zip));
+  const befores = parseEvents(readTraceText(zip));
   // Step names are user supplied, including names such as "constructor".
   const byStep: Record<string, TraceAction[]> = Object.create(null);
   let currentStep = "(setup)";
@@ -188,10 +200,9 @@ export function parseTraceActions(zip: Uint8Array): TraceActions {
     if (!(before.class || before.method)) {
       continue;
     }
-    const after = before.callId ? afters.get(before.callId) : undefined;
     const bucket = byStep[currentStep] ?? [];
     byStep[currentStep] = bucket;
-    bucket.push(toAction(before, after));
+    bucket.push(toAction(before, before.after));
     total += 1;
   }
   return { byStep, total };
