@@ -17,6 +17,14 @@
   Navigation keeps 30s.
 - **Balanced caption lines.** Burned captions wrap like `text-wrap: balance` instead of leaving a
   word stranded on the second line.
+- **The report reads in chapters.** Each step that showed a caption opens a chapter titled by it,
+  collapsed to one line, so a 197-step run reads as 59 lines. Failed attempts fold behind the step
+  that got past them, runs of `--skim` steps fold shut, and a chapter with an unrecovered failure
+  opens by itself.
+- **Smaller reports.** Screenshots are embedded as lossless WebP instead of PNG when ffmpeg is
+  available: same pixels, and a 38 MB report is now 16.5 MB.
+- **A shorter `cut render` timeline.** On a long run it lists only the edits, each with the step
+  on screen, instead of every step and caption. `--json` still has every one.
 
 - **Current browser and build dependencies.** Playwright/Chromium move to **1.63.0**,
   with the sandbox bridge adapted to the new protocol. The CLI now requires **Node 22.12.0+**;

@@ -1,11 +1,20 @@
 import path from "node:path";
 import { formatDurationMs } from "dailies-cli-kit";
-import { sessionStepSlug } from "dailies-protocol";
+import { type CaptionEvent, sessionStepSlug } from "dailies-protocol";
+import {
+  buildChapters,
+  type Chapter,
+  type ChapterItem,
+  isUnrecoveredFailure,
+  itemSteps,
+} from "./chapters.js";
 import type { SessionManifest } from "./manifest.js";
 import type { ConsoleEntry } from "./parse-console.js";
 import type { HarSummary } from "./parse-har.js";
 
 export interface RenderContext {
+  // What the run showed on screen. Each caption opens a chapter in the Steps tab.
+  captions?: CaptionEvent[];
   consoleEntries: ConsoleEntry[];
   parsedHar: HarSummary;
   screenshots: Record<string, string>;
@@ -105,7 +114,7 @@ h2{font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
   border:1px solid var(--line);border-radius:var(--r-full);padding:3px}
 .card-h .viewtoggle+.count{margin-left:0}
 .vbtn{appearance:none;border:0;background:transparent;font:inherit;font-size:12px;font-weight:600;
-  color:var(--muted);padding:3px 12px;border-radius:var(--r-full);cursor:pointer}
+  color:var(--muted);padding:3px 12px;border-radius:var(--r-full);cursor:pointer;white-space:nowrap}
 .vbtn:hover{color:var(--ink)}
 .vbtn.is-active{background:var(--card);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line-2)}
 /* steps (merged list/timeline + expandable detail) */
@@ -129,11 +138,37 @@ h2{font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
 @keyframes stepflash{0%{background:rgba(228,242,34,.45)}100%{background:transparent}}
 .sbody{border-top:1px dashed var(--line);background:var(--surface)}
 .sbody .empty{padding:18px 24px}
+/* chapters: one per caption, folding the steps the caption narrated */
+.chapter{border-bottom:1px solid var(--line)}
+.chapter:last-child{border-bottom:0}
+.chapter>summary,.fold>summary{list-style:none;cursor:pointer}
+.chapter>summary::-webkit-details-marker,.fold>summary::-webkit-details-marker{display:none}
+.crow{display:flex;align-items:center;gap:14px;padding:16px 24px}
+.crow:hover,.frow:hover{background:rgba(228,242,34,.06)}
+.ctitle{font-weight:600;min-width:0;word-break:break-word}
+.ctitle.untitled{color:var(--muted);font-style:italic;font-weight:500}
+.cnote{padding:0 24px 12px 47px;margin-top:-8px;color:var(--muted);font-size:14px}
+.chapter[open] .crow .chev,.fold[open]>summary .chev{transform:rotate(180deg)}
+.cbody{border-top:1px solid var(--line);box-shadow:inset 3px 0 0 var(--line-2)}
+.cbody .step,.cbody .fold{border-bottom:1px solid var(--line)}
+.cbody>:last-child{border-bottom:0}
+.dot.retry,.bar.retry{background:var(--warn)}
+/* folds: retries and skimmed steps, shut until asked for */
+.frow{display:flex;align-items:center;gap:14px;padding:11px 24px;color:var(--muted);font-size:14px}
+.fname{font-weight:500;min-width:0}
+.frow .dot{width:7px;height:7px}
+.fbody{border-top:1px dashed var(--line);box-shadow:inset 3px 0 0 var(--well-2)}
+.fbody .step:last-child{border-bottom:0}
+.attempts{border-bottom:1px solid var(--line)}
+.attempts>.fold,.attempts>.step{border-bottom:0}
+.stag{flex:0 0 auto;color:var(--muted);background:var(--well-2);border-radius:var(--r-full);
+  padding:1px 8px;font-size:11px;font-weight:600;letter-spacing:.02em}
 /* timeline mode: same rows, bars instead of plain labels */
 .steps .track{display:none}
-.steps.view-timeline .sname{flex:0 0 200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.steps.view-timeline .sname,.steps.view-timeline .ctitle{flex:0 0 200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .steps.view-timeline .track{display:block;position:relative;flex:1;height:14px;background:var(--well);border-radius:var(--r-full)}
 .steps.view-timeline .smeta{margin-left:0;flex:0 0 auto;width:84px;text-align:right}
+.steps.view-timeline .crow .smeta,.steps.view-timeline .frow .smeta{width:170px}
 .bar{position:absolute;top:0;height:14px;border-radius:var(--r-full);min-width:4px}
 .bar.pass{background:var(--primary)}
 .bar.fail{background:var(--fail)}
@@ -209,8 +244,8 @@ code{background:var(--well-2);border:1px solid var(--line);border-radius:var(--r
   .tabs{gap:18px;justify-content:flex-start;flex-wrap:nowrap;overflow-x:auto}
   .tab{white-space:nowrap}
   .kpis{grid-template-columns:repeat(2,1fr)}
-  .steps.view-timeline .sname{flex-basis:120px}
-  .card-h,thead th,tbody td,.srow,.vids,.art,.scriptbox{padding-left:16px;padding-right:16px}
+  .steps.view-timeline .sname,.steps.view-timeline .ctitle{flex-basis:120px}
+  .card-h,thead th,tbody td,.srow,.crow,.frow,.vids,.art,.scriptbox{padding-left:16px;padding-right:16px}
 }
 @media (max-width:480px){
   .kpis{grid-template-columns:1fr}
@@ -293,7 +328,8 @@ const TAB_SCRIPT = `
       var step=document.getElementById(this.getAttribute('data-goto-step')||'');
       if(!step){return;}
       show('steps');history.replaceState(null,'','#steps');
-      step.open=true;
+      // Open the step and every chapter or fold around it, or it stays hidden.
+      for(var d=step;d;d=d.parentElement){if(d.tagName==='DETAILS'){d.open=true;}}
       step.classList.remove('flash');
       void step.offsetWidth;
       step.classList.add('flash');
@@ -446,51 +482,87 @@ function renderStepBody(step: SessionManifest["steps"][number]): string {
   return `${error}${scriptBlock}${actions}`;
 }
 
-// One panel for the whole run: every step as an expandable row that carries
-// both representations — the flat list line and the proportional timeline bar
-// (toggled via the List/Timeline switch) — and opens to the step's script and
-// Playwright actions.
-function renderSteps(
-  m: SessionManifest,
-  screenshots: Record<string, string>
-): string {
+type Step = SessionManifest["steps"][number];
+
+interface StepsView {
+  // Each step's timeline bar, as percentages of the run.
+  bars: { off: number; w: number }[];
+  m: SessionManifest;
+  screenshots: Record<string, string>;
+}
+
+// Where each step's bar sits on the run's timeline. A step with an unparseable
+// start falls back to the summed durations before it.
+function stepBars(m: SessionManifest): { off: number; w: number }[] {
   const t0 = Date.parse(m.createdAt);
   const span = Math.max(m.durationMs, 1);
   const MIN_W = 1.5;
   let cursor = 0;
-  const rows = m.steps
-    .map((step, i) => {
-      const start = Date.parse(step.startedAt);
-      let off: number;
-      if (Number.isNaN(start) || Number.isNaN(t0)) {
-        off = (cursor / span) * 100;
-      } else {
-        off = ((start - t0) / span) * 100;
-      }
-      // Advance the fallback cursor for EVERY step (not just invalid ones)
-      // so an invalid-timestamp step following valid ones lands after them,
-      // not stacked at offset 0.
-      cursor += step.durationMs;
-      off = Math.min(Math.max(off, 0), 100);
-      let w = Math.max((step.durationMs / span) * 100, MIN_W);
-      if (off + w > 100) {
-        w = Math.max(100 - off, MIN_W);
-      }
-      const slug = sessionStepSlug(step.name);
-      const n = step.actions.length;
-      const note = n > 0 ? ` · ${n} action${n === 1 ? "" : "s"}` : "";
-      const shotBtn = screenshots[slug]
-        ? `<button class="shotlink" data-goto-shot="${escapeHtml(slug)}" title="View screenshot" aria-label="View screenshot">${CAMERA_ICON}</button>`
-        : "";
-      const vtime =
-        typeof step.videoTime === "number" ? step.videoTime.toFixed(3) : "";
-      return `
+  return m.steps.map((step) => {
+    const start = Date.parse(step.startedAt);
+    let off: number;
+    if (Number.isNaN(start) || Number.isNaN(t0)) {
+      off = (cursor / span) * 100;
+    } else {
+      off = ((start - t0) / span) * 100;
+    }
+    // Advance the fallback cursor for EVERY step (not just invalid ones)
+    // so an invalid-timestamp step following valid ones lands after them,
+    // not stacked at offset 0.
+    cursor += step.durationMs;
+    off = Math.min(Math.max(off, 0), 100);
+    let w = Math.max((step.durationMs / span) * 100, MIN_W);
+    if (off + w > 100) {
+      w = Math.max(100 - off, MIN_W);
+    }
+    return { off, w };
+  });
+}
+
+function bar(cls: string, off: number, w: number): string {
+  return `<span class="track"><span class="bar ${cls}" style="left:${off.toFixed(2)}%;width:${w.toFixed(2)}%"></span></span>`;
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+// How long a group of steps took on the wall clock, first start to last end —
+// including the time between steps, which is most of a long run. Falls back to
+// the summed step durations when a timestamp won't parse.
+function wallMs(steps: Step[]): number {
+  const first = steps[0];
+  const last = steps.at(-1);
+  const start = Date.parse(first?.startedAt ?? "");
+  const end = Date.parse(last?.startedAt ?? "") + (last?.durationMs ?? 0);
+  if (Number.isNaN(start) || Number.isNaN(end)) {
+    return steps.reduce((sum, s) => sum + s.durationMs, 0);
+  }
+  return Math.max(0, end - start);
+}
+
+function renderStepRow(view: StepsView, i: number): string {
+  const step = view.m.steps[i];
+  const at = view.bars[i];
+  if (!(step && at)) {
+    return "";
+  }
+  const slug = sessionStepSlug(step.name);
+  const n = step.actions.length;
+  const note = n > 0 ? ` · ${plural(n, "action")}` : "";
+  const shotBtn = view.screenshots[slug]
+    ? `<button class="shotlink" data-goto-shot="${escapeHtml(slug)}" title="View screenshot" aria-label="View screenshot">${CAMERA_ICON}</button>`
+    : "";
+  const skim = step.skim ? '<span class="stag">skim</span>' : "";
+  const vtime =
+    typeof step.videoTime === "number" ? step.videoTime.toFixed(3) : "";
+  return `
       <details class="step" id="step-${i}" data-vtime="${vtime}">
         <summary>
           <div class="srow">
             <span class="dot ${step.status}"></span>
-            <span class="sname">${escapeHtml(step.name)}</span>
-            <span class="track"><span class="bar ${step.status}" style="left:${off.toFixed(2)}%;width:${w.toFixed(2)}%"></span></span>
+            <span class="sname">${escapeHtml(step.name)}</span>${skim}
+            ${bar(step.status, at.off, at.w)}
             <span class="smeta">exit ${step.exitCode} · ${fmtMs(step.durationMs)}${note}</span>
             ${shotBtn}
             <span class="chev">${CHEVRON_ICON}</span>
@@ -498,10 +570,146 @@ function renderSteps(
         </summary>
         <div class="sbody">${renderStepBody(step)}</div>
       </details>`;
-    })
+}
+
+// A folded run of rows: its summary stands in for every row inside it.
+function renderFold(
+  cls: string,
+  dot: string,
+  label: string,
+  meta: string,
+  body: string
+): string {
+  return `
+      <details class="fold ${cls}">
+        <summary>
+          <div class="frow">
+            <span class="dot ${dot}"></span>
+            <span class="fname">${label}</span>
+            <span class="smeta">${meta}</span>
+            <span class="chev">${CHEVRON_ICON}</span>
+          </div>
+        </summary>
+        <div class="fbody">${body}</div>
+      </details>`;
+}
+
+function renderItem(view: StepsView, item: ChapterItem): string {
+  const stepsOf = (indices: number[]) =>
+    indices.flatMap((i) => view.m.steps[i] ?? []);
+  switch (item.kind) {
+    case "step":
+      return renderStepRow(view, item.index);
+    case "attempts": {
+      const failed = stepsOf(item.failed);
+      const fold = renderFold(
+        "retries",
+        "fail",
+        `${plural(failed.length, "failed attempt")} before this step`,
+        fmtMs(wallMs(failed)),
+        item.failed.map((i) => renderStepRow(view, i)).join("")
+      );
+      return `<div class="attempts">${fold}${renderStepRow(view, item.outcome)}</div>`;
+    }
+    default: {
+      const inner = item.items.flatMap(itemSteps);
+      return renderFold(
+        "skimmed",
+        "",
+        `${plural(inner.length, "skimmed step")}`,
+        fmtMs(wallMs(stepsOf(inner))),
+        item.items.map((it) => renderItem(view, it)).join("")
+      );
+    }
+  }
+}
+
+function hasRetries(items: ChapterItem[]): boolean {
+  return items.some(
+    (it) =>
+      it.kind === "attempts" || (it.kind === "skim" && hasRetries(it.items))
+  );
+}
+
+// A chapter is a collapsed header — its caption, how many steps, how long —
+// over its rows. It opens on its own only when it holds a failure nothing
+// recovered from, since that is what a reviewer came to find.
+function renderChapter(view: StepsView, chapter: Chapter): string {
+  const steps = chapter.steps.flatMap((i) => view.m.steps[i] ?? []);
+  const failed = chapter.items.filter((it) =>
+    isUnrecoveredFailure(it, view.m.steps)
+  ).length;
+  const retried = hasRetries(chapter.items);
+  let status = "pass";
+  if (failed > 0) {
+    status = "fail";
+  } else if (retried) {
+    status = "retry";
+  }
+  const first = view.bars[chapter.steps[0] ?? -1];
+  const last = view.bars[chapter.steps.at(-1) ?? -1];
+  const track =
+    first && last
+      ? bar(status, first.off, Math.max(last.off + last.w - first.off, 1.5))
+      : "";
+  const start = steps.find((s) => typeof s.videoTime === "number")?.videoTime;
+  const ctime =
+    typeof start === "number" ? ` data-ctime="${start.toFixed(3)}"` : "";
+  const extras = [
+    failed > 0 ? `${failed} failed` : "",
+    retried && failed === 0 ? "retried" : "",
+  ].filter(Boolean);
+  const meta = [plural(steps.length, "step"), fmtMs(wallMs(steps)), ...extras]
+    .map(escapeHtml)
+    .join(" · ");
+  const notes = chapter.notes
+    .map((n) => `<div class="cnote">${escapeHtml(n)}</div>`)
     .join("");
-  const body =
-    m.steps.length === 0 ? '<div class="empty">No steps recorded.</div>' : rows;
+  const title = chapter.title ?? "Before the first caption";
+  return `
+    <details class="chapter"${ctime}${failed > 0 ? " open" : ""}>
+      <summary>
+        <div class="crow">
+          <span class="dot ${status}"></span>
+          <span class="ctitle${chapter.title ? "" : " untitled"}">${escapeHtml(title)}</span>
+          ${track}
+          <span class="smeta">${meta}</span>
+          <span class="chev">${CHEVRON_ICON}</span>
+        </div>${notes}
+      </summary>
+      <div class="cbody">${chapter.items.map((it) => renderItem(view, it)).join("")}</div>
+    </details>`;
+}
+
+// One panel for the whole run. A step that showed a caption opens a chapter
+// titled by it, so a long run reads as the handful of things it set out to
+// show; retries and skimmed setup fold shut inside their chapter. Every step is
+// still an expandable row carrying both the list line and its timeline bar
+// (toggled via the List/Timeline switch) and opens to its script, error and
+// Playwright actions.
+function renderSteps(
+  m: SessionManifest,
+  screenshots: Record<string, string>,
+  captions: CaptionEvent[]
+): string {
+  const view: StepsView = { bars: stepBars(m), m, screenshots };
+  const chapters = buildChapters(m.steps, captions);
+  const titled = chapters.some((c) => c.title);
+  let body: string;
+  if (m.steps.length === 0) {
+    body = '<div class="empty">No steps recorded.</div>';
+  } else if (titled) {
+    body = chapters.map((c) => renderChapter(view, c)).join("");
+  } else {
+    body = chapters
+      .flatMap((c) => c.items)
+      .map((it) => renderItem(view, it))
+      .join("");
+  }
+  const chapterToggle = titled
+    ? '<button class="vbtn" id="chapters-toggle" type="button">Expand all</button>'
+    : "";
+  const chapterCount = titled ? ` · ${plural(chapters.length, "chapter")}` : "";
   return `
   <section class="panel is-hidden" id="panel-steps">
     <div class="card">
@@ -511,8 +719,9 @@ function renderSteps(
           <button class="vbtn is-active" data-view="list">List</button>
           <button class="vbtn" data-view="timeline">Timeline</button>
         </div>
+        ${chapterToggle}
         <button class="vbtn" id="scripts-toggle" type="button">Show scripts</button>
-        <span class="count">${m.summary.stepsPassed}/${m.summary.stepsTotal} passed · ${fmtMs(m.durationMs)}</span>
+        <span class="count">${m.summary.stepsPassed}/${m.summary.stepsTotal} passed · ${fmtMs(m.durationMs)}${chapterCount}</span>
       </div>
       <div class="steps" id="steps-list">${body}</div>
     </div>
@@ -689,7 +898,8 @@ const LAYOUT_STYLE = `
 .leftcol .vid{margin:0}
 .leftcol video{display:block;width:100%;border:1px solid var(--line);border-radius:var(--r-md);background:#000}
 .leftcol .vmeta{display:flex;justify-content:space-between;gap:12px;color:var(--faint);font-size:12px;margin-top:8px}
-.step.is-playing>summary .srow{background:rgba(228,242,34,.18)}
+.step.is-playing>summary .srow,.chapter.is-playing>summary .crow,.fold.is-playing>summary .frow{background:rgba(228,242,34,.18)}
+.chapter[data-ctime]>summary{cursor:pointer}
 .step[data-vtime]>summary{cursor:pointer}
 @media(max-width:900px){.layout{flex-direction:column}.leftcol{position:static;flex-basis:auto;max-width:none;width:100%;padding:16px}}
 `;
@@ -703,22 +913,40 @@ const SYNC_SCRIPT = `(function(){
   var steps=[].slice.call(document.querySelectorAll('.step[data-vtime]'));
   var marks=steps.map(function(s){return {el:s,t:parseFloat(s.getAttribute('data-vtime'))};})
     .filter(function(m){return !isNaN(m.t);});
+  function seek(t){
+    if(isNaN(t))return;
+    try{video.currentTime=t;}catch(e){}
+    if(video.play){var p=video.play();if(p&&p.catch)p.catch(function(){});}
+  }
   if(video){
     steps.forEach(function(s){
       var sum=s.querySelector('summary');
       if(!sum)return;
-      sum.addEventListener('click',function(){
-        var t=parseFloat(s.getAttribute('data-vtime'));
-        if(isNaN(t))return;
-        try{video.currentTime=t;}catch(e){}
-        if(video.play){var p=video.play();if(p&&p.catch)p.catch(function(){});}
-      });
+      sum.addEventListener('click',function(){seek(parseFloat(s.getAttribute('data-vtime')));});
     });
+    // Opening a chapter plays it from its first step; closing it leaves the video alone.
+    [].slice.call(document.querySelectorAll('.chapter[data-ctime]')).forEach(function(c){
+      var sum=c.querySelector('summary');
+      if(!sum)return;
+      sum.addEventListener('click',function(){if(!c.open)seek(parseFloat(c.getAttribute('data-ctime')));});
+    });
+    // Highlight the playing step, and the chapter and fold around it, since those may be shut.
+    var lit=[];
     video.addEventListener('timeupdate',function(){
       var ct=video.currentTime,cur=null;
       for(var i=0;i<marks.length;i++){if(marks[i].t<=ct+0.05)cur=marks[i];else break;}
-      for(var j=0;j<steps.length;j++)steps[j].classList.remove('is-playing');
-      if(cur)cur.el.classList.add('is-playing');
+      for(var j=0;j<lit.length;j++)lit[j].classList.remove('is-playing');
+      lit=[];
+      for(var d=cur&&cur.el;d;d=d.parentElement){if(d.tagName==='DETAILS'){d.classList.add('is-playing');lit.push(d);}}
+    });
+  }
+  var chapterToggle=document.getElementById('chapters-toggle');
+  if(chapterToggle){
+    chapterToggle.addEventListener('click',function(){
+      var chapters=[].slice.call(document.querySelectorAll('.chapter'));
+      var open=chapters.some(function(c){return !c.open;});
+      chapters.forEach(function(c){c.open=open;});
+      chapterToggle.textContent=open?'Collapse all':'Expand all';
     });
   }
   var toggle=document.getElementById('scripts-toggle');
@@ -756,7 +984,7 @@ ${renderHeader(manifest)}
 ${renderTabs()}
 <main>
 ${renderSummary(manifest)}
-${renderSteps(manifest, ctx.screenshots)}
+${renderSteps(manifest, ctx.screenshots, ctx.captions ?? [])}
 ${renderScreenshots(manifest, ctx.screenshots)}
 ${renderConsole(ctx.consoleEntries)}
 ${renderNetwork(ctx.parsedHar)}

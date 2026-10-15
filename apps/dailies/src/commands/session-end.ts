@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, readFile, stat } from "node:fs/promises";
+import { copyFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { formatDurationMs, requestId } from "dailies-cli-kit";
 import {
@@ -8,18 +8,17 @@ import {
   sessionReportPath,
   sessionResultsPath,
 } from "dailies-daemon-client";
-import {
-  type ArtifactInfo,
-  type CaptionEvent,
-  CaptionEventSchema,
-  SESSION_CAPTIONS_FILE,
-  type SessionEndRequest,
-  type SessionEndResult,
+import type {
+  ArtifactInfo,
+  CaptionEvent,
+  SessionEndRequest,
+  SessionEndResult,
 } from "dailies-protocol";
 import { type Cut, mapTime, seedCut } from "../edit/cut.js";
 import { cutPath, readCut, writeCut } from "../edit/cut-file.js";
 import { renderCutVideo } from "../edit/render.js";
 import { logger } from "../logger.js";
+import { readCaptions } from "../report/captions.js";
 import { writeSessionReport } from "../report/load-and-render.js";
 import { endResultFromDisk } from "../session/artifacts.js";
 import { attachFiles } from "../session/attach.js";
@@ -144,24 +143,6 @@ export function stepKeepWindows(record: SessionRecord): Segment[] {
     });
   }
   return windows;
-}
-
-// The captions this session showed, as timed data. Read from disk rather than
-// held from the run so a re-finalize (re-rendering a report, re-cutting a video)
-// sees exactly what the original run did. Missing or malformed is not an error:
-// a session that never called showCaption has no file, and a caption is
-// presentation — it must never be the reason a report fails to build.
-async function readCaptions(artifactsDir: string): Promise<CaptionEvent[]> {
-  try {
-    const raw = await readFile(
-      path.join(artifactsDir, SESSION_CAPTIONS_FILE),
-      "utf8"
-    );
-    const parsed = CaptionEventSchema.array().safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data : [];
-  } catch {
-    return [];
-  }
 }
 
 // Reading speed used to guarantee a caption stays on screen long enough to be

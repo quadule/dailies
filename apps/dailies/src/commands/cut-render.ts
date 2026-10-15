@@ -1,5 +1,5 @@
 import { sessionReportPath } from "dailies-daemon-client";
-import { renderCut } from "../edit/render.js";
+import { type CutRenderResult, renderCut } from "../edit/render.js";
 
 // m:ss.s — a timeline position someone can scrub a player to.
 export function at(sec: number): string {
@@ -7,6 +7,74 @@ export function at(sec: number): string {
   const minutes = Math.floor(tenths / 600);
   const seconds = (tenths % 600) / 10;
   return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
+}
+
+function count(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+// Up to this many entries, the timeline lists everything. Past it (a long run
+// has hundreds of steps and dozens of captions), it lists only the edits, each
+// with the step on screen, and counts the rest — `--json` still has every one.
+const FULL_TIMELINE_MAX = 40;
+
+// The timeline `cut render` prints, in output time. Each edit names its source
+// time ("written at") so it can be matched back to its line in cut.json.
+export function timelineLines(result: CutRenderResult): string[] {
+  const edits = [
+    ...result.cuts.map((c) => ({
+      t: c.outAt,
+      label: `cut      ${(c.end - c.start).toFixed(1)}s removed (written at ${c.start.toFixed(2)}–${c.end.toFixed(2)})`,
+    })),
+    ...result.holds.map((h) => ({
+      t: h.outAt,
+      label: `hold     ${h.seconds.toFixed(1)}s freeze (written at ${h.at.toFixed(2)})`,
+    })),
+    ...result.speedups.map((v) => ({
+      t: v.outAt,
+      label: `speedup  ${v.rate}x until ${at(v.outEnd)} (written at ${v.start.toFixed(2)}–${v.end.toFixed(2)})`,
+    })),
+    ...result.lines.map((l) => ({
+      t: l.outStart,
+      label: `line     "${l.text}" (${l.durationSec.toFixed(1)}s, written at ${l.at.toFixed(2)})`,
+    })),
+  ];
+  const steps = result.steps.map((s) => ({
+    t: s.at,
+    label: `step     ${s.name}`,
+  }));
+  const captions = result.captions.map((c) => ({
+    t: c.start,
+    label: `caption  "${c.text}" until ${at(c.end)}`,
+  }));
+  const row = (e: { t: number; label: string }) =>
+    `${at(e.t).padStart(8)}  ${e.label}`;
+  const byTime = (a: { t: number }, b: { t: number }) => a.t - b.t;
+  const all = [...steps, ...edits, ...captions];
+  if (all.length <= FULL_TIMELINE_MAX) {
+    return all.sort(byTime).map(row);
+  }
+  // The step on screen at an output time: the last one to have started by then.
+  const onScreen = (t: number) => {
+    let shown: { name: string; at: number } | undefined;
+    for (const step of result.steps) {
+      if (step.at <= t + 0.05 && (!shown || step.at >= shown.at)) {
+        shown = step;
+      }
+    }
+    return shown?.name;
+  };
+  const lines = [
+    `${count(result.steps.length, "step")} and ${count(result.captions.length, "caption")} placed (--json lists each). Edits:`,
+  ];
+  if (edits.length === 0) {
+    lines.push("  (none — the video plays the cut as recorded)");
+  }
+  for (const edit of edits.sort(byTime)) {
+    const step = onScreen(edit.t);
+    lines.push(`  ${row(edit)}${step ? `   · during ${step}` : ""}`);
+  }
+  return lines;
 }
 
 // `dailies cut render <id>`: rebuild the session video from its cut.json and
@@ -41,35 +109,11 @@ export async function cutRender(id: string, json: boolean): Promise<number> {
   for (const warning of result.warnings) {
     out.write(`  ⚠ ${warning}\n`);
   }
-  // Every edit, in output time. Each entry names its source time ("written at")
-  // so it can be matched back to its line in cut.json.
-  const timeline = [
-    ...result.steps.map((s) => ({ t: s.at, label: `step     ${s.name}` })),
-    ...result.cuts.map((c) => ({
-      t: c.outAt,
-      label: `cut      ${(c.end - c.start).toFixed(1)}s removed (written at ${c.start.toFixed(2)}–${c.end.toFixed(2)})`,
-    })),
-    ...result.holds.map((h) => ({
-      t: h.outAt,
-      label: `hold     ${h.seconds.toFixed(1)}s freeze (written at ${h.at.toFixed(2)})`,
-    })),
-    ...result.speedups.map((v) => ({
-      t: v.outAt,
-      label: `speedup  ${v.rate}x until ${at(v.outEnd)} (written at ${v.start.toFixed(2)}–${v.end.toFixed(2)})`,
-    })),
-    ...result.lines.map((l) => ({
-      t: l.outStart,
-      label: `line     "${l.text}" (${l.durationSec.toFixed(1)}s, written at ${l.at.toFixed(2)})`,
-    })),
-    ...result.captions.map((c) => ({
-      t: c.start,
-      label: `caption  "${c.text}" until ${at(c.end)}`,
-    })),
-  ].sort((a, b) => a.t - b.t);
+  const timeline = timelineLines(result);
   if (timeline.length > 0) {
     out.write("\nIn the rendered video:\n");
-    for (const entry of timeline) {
-      out.write(`  ${at(entry.t).padStart(8)}  ${entry.label}\n`);
+    for (const line of timeline) {
+      out.write(`  ${line}\n`);
     }
   }
   process.stdout.write(`${result.videoPath}\n`);

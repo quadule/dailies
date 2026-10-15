@@ -38,6 +38,9 @@ export interface ManifestStep {
   name: string;
   screenshot?: string;
   script?: string;
+  // Recorded with `run --skim` (setup or a detour). The report folds runs of
+  // these shut.
+  skim?: boolean;
   startedAt: string;
   status: "pass" | "fail";
   // Position of this step in the condensed video, in seconds (when known) — the
@@ -182,6 +185,7 @@ export function buildManifest(input: BuildManifestInput): SessionManifest {
       name: step.name,
       screenshot: shot?.path,
       script: step.script,
+      ...(step.skim ? { skim: true } : {}),
       startedAt: step.startedAt,
       status: step.ok ? "pass" : "fail",
       videoTime: step.videoTime,

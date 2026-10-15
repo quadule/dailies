@@ -236,4 +236,28 @@ describe("renderReport", () => {
     expect(html).not.toContain(INJECT);
     expect(html).toContain("&lt;script&gt;");
   });
+
+  it("groups steps into chapters titled by the captions they showed", () => {
+    const empty = {
+      consoleEntries: [],
+      parsedHar: { entries: [], failed: 0, slowest: [], total: 0 },
+      screenshots: {},
+    };
+    const html = renderReport(fixtureManifest({ withVideo: true }), {
+      ...empty,
+      captions: [
+        { at: "2026-06-02T10:00:01.080Z", durationMs: 3000, text: INJECT },
+      ],
+    });
+    expect(html).toContain('class="chapter" data-ctime="1.000" open');
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).toContain('id="chapters-toggle"');
+    // The step ids the screenshot gallery links to survive the nesting.
+    expect(html).toContain('id="step-0"');
+    expect(html).toContain('id="step-1"');
+
+    const flat = renderReport(fixtureManifest(), empty);
+    expect(flat).not.toContain('class="chapter"');
+    expect(flat).not.toContain('id="chapters-toggle"');
+  });
 });

@@ -6,6 +6,9 @@ import {
   type SessionEndResult,
 } from "dailies-protocol";
 import type { SessionRecord } from "../session/registry.js";
+import { findFfmpeg } from "../video/condense.js";
+import { readCaptions } from "./captions.js";
+import { screenshotDataUris } from "./encode-screenshots.js";
 import { buildManifest, type SessionManifest } from "./manifest.js";
 import { countConsoleErrors, parseConsole } from "./parse-console.js";
 import { parseHar } from "./parse-har.js";
@@ -57,21 +60,18 @@ export async function finalizeReport(
     record,
   });
 
-  const screenshots: Record<string, string> = {};
-  for (const artifact of endResult.artifacts) {
-    if (artifact.kind !== "screenshot") {
-      continue;
-    }
-    try {
-      const buf = await readFile(artifact.path);
-      const slug = path.basename(artifact.path, SESSION_SCREENSHOT_EXT);
-      screenshots[slug] = `data:image/png;base64,${buf.toString("base64")}`;
-    } catch {
-      // missing screenshot — skip
-    }
-  }
+  const screenshots = await screenshotDataUris(
+    endResult.artifacts
+      .filter((a) => a.kind === "screenshot")
+      .map((a) => ({
+        key: path.basename(a.path, SESSION_SCREENSHOT_EXT),
+        path: a.path,
+      })),
+    await findFfmpeg()
+  );
 
   const html = renderReport(manifest, {
+    captions: await readCaptions(endResult.session.artifactsDir),
     consoleEntries,
     parsedHar,
     screenshots,
