@@ -92,7 +92,10 @@ describe("previewModel", () => {
   it("lists the removed footage, the holds and the fast stretches", () => {
     const model = previewModel(planCut(mixed, source));
     expect(model.gaps).toEqual([{ start: 2, end: 4 }]);
-    expect(model.holds).toEqual([{ at: 6, seconds: 1.5 }]);
+    // The hold ends the piece 4–6, so the render freezes its last frame.
+    expect(model.holds).toEqual([
+      { at: 6, frame: 5.9, seconds: 1.5, side: "end" },
+    ]);
     expect(model.fast).toEqual([{ start: 7, end: 9, rate: 2 }]);
     expect(model.plan.outDurationSec).toBeCloseTo(8.5);
   });
@@ -132,9 +135,9 @@ describe("tick", () => {
     expect(shown.some((f) => f.now > 2 + 1e-6 && f.now < 4 - 1e-6)).toBe(false);
   });
 
-  it("freezes on the hold for its length", () => {
+  it("freezes on the frame the render freezes, for the hold's length", () => {
     const held = frames.filter((f) => f.action === "hold");
-    expect(held.every((f) => Math.abs(f.now - 6) < 1e-9)).toBe(true);
+    expect(held.every((f) => Math.abs(f.now - 5.9) < 1e-9)).toBe(true);
     const lasted = (held.at(-1)?.wall ?? 0) - (held[0]?.wall ?? 0);
     expect(lasted).toBeGreaterThan(1.5 - 2 / 60);
     expect(lasted).toBeLessThan(1.5 + 2 / 60);
@@ -186,7 +189,7 @@ describe("tick", () => {
     );
     const run = simulate(edge, { from: 1.5 });
     const firstHold = run.findIndex((f) => f.action === "hold");
-    expect(run[firstHold]?.now).toBe(2);
+    expect(run[firstHold]?.now).toBeCloseTo(1.9, 9);
     const after = run.slice(firstHold).find((f) => f.action === "play");
     expect(after?.now).toBe(4);
     expect(after?.out).toBeCloseTo(3);
@@ -204,7 +207,9 @@ describe("tick", () => {
         source
       )
     );
-    expect(twice.holds).toEqual([{ at: 5, seconds: 3 }]);
+    expect(twice.holds).toEqual([
+      { at: 5, frame: 4.9, seconds: 3, side: "end" },
+    ]);
     const held = simulate(twice, { from: 4.5 }).filter(
       (f) => f.action === "hold"
     );
@@ -217,7 +222,9 @@ describe("tick", () => {
       planCut(cutOf({ holds: [{ at: 10, seconds: 1 }] }), source)
     );
     const run = simulate(tail, { from: 9.5 });
-    expect(run.some((f) => f.action === "hold" && f.now === 10)).toBe(true);
+    expect(
+      run.some((f) => f.action === "hold" && Math.abs(f.now - 9.9) < 1e-9)
+    ).toBe(true);
     expect(run.at(-1)?.action).toBe("end");
     expect(run.at(-1)?.out).toBeCloseTo(11);
   });
@@ -229,19 +236,137 @@ describe("tick", () => {
     expect(simulate(none)[0]?.action).toBe("end");
   });
 
-  it("counts a finished hold in the output clock while on its frame", () => {
+  it("counts a finished hold in the output clock, and plays on from its place", () => {
     const step = tick(
       model,
-      { hold: { at: 6, seconds: 1.5, elapsed: 1.49 } },
       {
-        now: 6,
+        hold: { at: 6, frame: 5.9, seconds: 1.5, side: "end", elapsed: 1.49 },
+      },
+      {
+        now: 5.9,
         since: 6,
         dt: 0.02,
       }
     );
     expect(step.action).toBe("play");
+    expect(step.seekTo).toBe(6);
     expect(step.out).toBeCloseTo(5.5);
     expect(step.state.after).toEqual({ at: 6, seconds: 1.5 });
+  });
+
+  it("holds a piece's first frame for a hold at its start", () => {
+    const start = previewModel(
+      planCut(
+        cutOf({ cuts: [{ start: 2, end: 4 }], holds: [{ at: 4, seconds: 1 }] }),
+        source
+      )
+    );
+    expect(start.holds).toEqual([
+      { at: 4, frame: 4, seconds: 1, side: "start" },
+    ]);
+    const held = simulate(start, { from: 1.5 }).filter(
+      (f) => f.action === "hold"
+    );
+    expect(held.length).toBeGreaterThan(0);
+    expect(held.every((f) => f.now === 4)).toBe(true);
+  });
+});
+
+// The frame on screen during a hold must be the one the render freezes:
+// cutVideoFilter loops a piece's first kept frame for a start hold and its
+// last KEPT frame for an end hold (loop … start=out+length-1). And the output
+// clock must run as before: never backwards, never jumping, in step with the
+// wall clock.
+describe("tick, on the frame the render freezes", () => {
+  function expectSteadyClock(frames: Frame[], dt = 1 / 60): void {
+    for (let i = 1; i < frames.length; i++) {
+      const step = (frames[i]?.out ?? 0) - (frames[i - 1]?.out ?? 0);
+      expect(step).toBeGreaterThanOrEqual(-1e-9);
+      expect(step).toBeLessThan(dt + 0.1 + 1e-9);
+    }
+  }
+
+  it.each([25, 30_000 / 1001])(
+    "freezes the frame before a cut for a hold on the cut's start (%d fps)",
+    (fps) => {
+      // Cuts [10,12] and a hold at 10. At 25 fps the render freezes frame 249
+      // (9.96s); 10.0 is frame 250, the first removed one.
+      const grid = { durationSec: 20, fps };
+      const model = previewModel(
+        planCut(
+          cutOf({
+            cuts: [{ start: 10, end: 12 }],
+            holds: [{ at: 10, seconds: 1 }],
+          }),
+          grid
+        )
+      );
+      const at = Math.round(10 * fps) / fps;
+      const frame = (Math.round(10 * fps) - 1) / fps;
+      expect(model.holds).toHaveLength(1);
+      expect(model.holds[0]).toMatchObject({ at, frame, side: "end" });
+      if (fps === 25) {
+        expect(frame).toBeCloseTo(9.96, 9);
+      }
+      const frames = simulate(model, { from: 9.5 });
+      const held = frames.filter((f) => f.action === "hold");
+      expect(held.length).toBeGreaterThan(50);
+      expect(held.every((f) => Math.abs(f.now - frame) < 1e-9)).toBe(true);
+      // Then on past the cut, where the render goes next.
+      const resumeAt = Math.round(12 * fps) / fps;
+      const next = frames.at(frames.indexOf(held.at(-1) as Frame) + 1);
+      expect(next?.now).toBeCloseTo(resumeAt, 9);
+      expect(next?.out).toBeCloseTo(mapTime(model.plan, resumeAt).out, 9);
+      expectSteadyClock(frames);
+    }
+  );
+
+  it("freezes the last frame kept when the tail is extended for the last line", () => {
+    // The last line overruns the picture, which ends at a cut: the render
+    // holds the frame before the cut, never the trimmed tail after it.
+    const words =
+      "one two three four five six seven eight nine ten eleven twelve thirteen";
+    const { plan } = analyze(
+      cutOf({
+        cuts: [{ start: 9, end: 10 }],
+        narration: [{ at: 7, text: words }],
+      }),
+      { source, lineMax: 20, recordings: [], rendered: [] }
+    );
+    const model = previewModel(plan);
+    expect(model.holds).toHaveLength(1);
+    expect(model.holds[0]).toMatchObject({ at: 9, side: "end" });
+    expect(model.holds[0]?.frame).toBeCloseTo(8.9, 9);
+    const frames = simulate(model, { from: 8 });
+    const held = frames.filter((f) => f.action === "hold");
+    expect(held.length).toBeGreaterThan(0);
+    expect(held.every((f) => Math.abs(f.now - 8.9) < 1e-9)).toBe(true);
+    expect(frames.at(-1)?.action).toBe("end");
+    expect(frames.at(-1)?.out).toBeCloseTo(plan.outDurationSec, 9);
+    expectSteadyClock(frames);
+  });
+
+  it("freezes the stride's last kept frame at the end of a sped-up piece", () => {
+    // 2–4 at 3x keeps frames 20, 23, … 38; the render freezes 38 (3.8s), not
+    // 39 (3.9s, never shown) or 40 (4.0s, the next piece).
+    const model = previewModel(
+      planCut(
+        cutOf({
+          speedups: [{ start: 2, end: 4, rate: 3 }],
+          holds: [{ at: 4, seconds: 1 }],
+        }),
+        source
+      )
+    );
+    expect(model.holds).toHaveLength(1);
+    expect(model.holds[0]?.frame).toBeCloseTo(3.8, 9);
+    const frames = simulate(model, { from: 1.5 });
+    const held = frames.filter((f) => f.action === "hold");
+    expect(held.length).toBeGreaterThan(0);
+    expect(held.every((f) => Math.abs(f.now - 3.8) < 1e-9)).toBe(true);
+    const next = frames.at(frames.indexOf(held.at(-1) as Frame) + 1);
+    expect(next?.now).toBe(4);
+    expectSteadyClock(frames);
   });
 });
 

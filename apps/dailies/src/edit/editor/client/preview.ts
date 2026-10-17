@@ -11,6 +11,7 @@ import {
   type Cut,
   type CutCaption,
   type CutLine,
+  type CutPiece,
   type CutPlan,
   extendTail,
   layoutLines,
@@ -192,8 +193,16 @@ export function analyze(cut: Cut, ctx: AnalysisContext): Analysis {
 // ---------------------------------------------------------------------------
 
 export interface HoldPoint {
+  // Where playback reaches the hold: the source time of its piece's edge.
   at: number;
+  // The frame the render freezes (its source time). A hold at a piece's start
+  // freezes the piece's first frame, `at` itself; one at its end freezes the
+  // piece's last KEPT frame — a frame before `at`, which is the first frame
+  // after the piece (removed footage, when the hold sits on a cut's start),
+  // and up to rate-1 frames before that on a sped-up piece.
+  frame: number;
   seconds: number;
+  side: "start" | "end";
 }
 
 export interface SourceSpan {
@@ -215,6 +224,17 @@ export interface PreviewModel {
 
 const EPS = 1e-6;
 
+// The source time of a piece's last kept frame, as cutVideoFilter keeps them:
+// every frame of a real-speed piece, every rate-th from its first on a
+// sped-up one.
+function lastKeptFrame(p: CutPiece, fps: number): number {
+  const first = Math.round(p.srcStart * fps);
+  const span = Math.round(p.srcEnd * fps) - first;
+  const rate = p.rate ?? 1;
+  const kept = Math.ceil(span / rate);
+  return (first + Math.max(0, kept - 1) * rate) / fps;
+}
+
 export function previewModel(plan: CutPlan): PreviewModel {
   const holds: HoldPoint[] = [];
   const gaps: SourceSpan[] = [];
@@ -226,10 +246,20 @@ export function previewModel(plan: CutPlan): PreviewModel {
     }
     cursor = p.srcEnd;
     if (p.startHoldSec > 0) {
-      holds.push({ at: p.srcStart, seconds: p.startHoldSec });
+      holds.push({
+        at: p.srcStart,
+        frame: p.srcStart,
+        seconds: p.startHoldSec,
+        side: "start",
+      });
     }
     if (p.endHoldSec > 0) {
-      holds.push({ at: p.srcEnd, seconds: p.endHoldSec });
+      holds.push({
+        at: p.srcEnd,
+        frame: lastKeptFrame(p, plan.fps),
+        seconds: p.endHoldSec,
+        side: "end",
+      });
     }
     if (p.rate) {
       fast.push({ start: p.srcStart, end: p.srcEnd, rate: p.rate });
@@ -245,7 +275,7 @@ export function previewModel(plan: CutPlan): PreviewModel {
 export interface EngineState {
   // The hold that just finished, while playback still sits on its frame — the
   // output clock has already counted it.
-  after?: HoldPoint;
+  after?: { at: number; seconds: number };
   // The hold being played, and how many seconds of it have passed.
   hold?: HoldPoint & { elapsed: number };
 }
@@ -301,6 +331,8 @@ export function tick(
   const half = model.frame / 2;
   let { now, since } = input;
   let after = state.after;
+  // Where playback picks up after a hold that showed another frame.
+  let resume: number | undefined;
   if (state.hold) {
     const { hold } = state;
     const elapsed = hold.elapsed + input.dt;
@@ -313,14 +345,18 @@ export function tick(
         state: { hold: { ...hold, elapsed } },
       };
     }
-    // Done: play on from the held frame.
+    // Done: play on from the hold's place. An end hold froze the frame
+    // before it, so that is a seek forward.
+    if (Math.abs(input.now - hold.at) > EPS) {
+      resume = hold.at;
+    }
     now = hold.at;
     since = hold.at;
     after = { at: hold.at, seconds: hold.seconds };
   }
 
   // A hold reached since the last step. Within half a frame counts: that is
-  // the frame on screen.
+  // the frame on screen. It shows the frame the render freezes.
   const hold = model.holds.find(
     (h) => h.at > since + EPS && h.at <= now + half
   );
@@ -329,7 +365,7 @@ export function tick(
       action: "hold",
       out: mapTime(model.plan, hold.at).out,
       rate: 1,
-      ...(Math.abs(now - hold.at) > EPS ? { seekTo: hold.at } : {}),
+      ...(Math.abs(now - hold.frame) > EPS ? { seekTo: hold.frame } : {}),
       since: hold.at,
       state: { hold: { ...hold, elapsed: 0 } },
     };
@@ -369,6 +405,7 @@ export function tick(
     action: "play",
     out,
     rate: rateAt(model, now),
+    ...(resume === undefined ? {} : { seekTo: resume }),
     since: Math.max(since, now),
     state: after ? { after } : {},
   };
