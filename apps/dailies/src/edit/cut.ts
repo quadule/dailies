@@ -658,6 +658,11 @@ export function planCut(
   };
 }
 
+// Breathing room after the last line when the picture has to be extended to fit
+// it, so the voice doesn't stop on the final frame. The render and the
+// editor's preview both extend by the overrun plus this.
+export const TAIL_PAD_SEC = 0.5;
+
 // Extend the final frame by `seconds` — used when a spoken line would otherwise
 // run past the end of the picture and be cut off.
 export function extendTail(plan: CutPlan, seconds: number): CutPlan {

@@ -69,6 +69,7 @@ import {
   type OutputCue,
   outputCaptions,
   planCut,
+  TAIL_PAD_SEC,
 } from "./cut.js";
 import { readCut, writeCut } from "./cut-file.js";
 
@@ -80,10 +81,6 @@ export const CUT_CACHE_DIR = "cut";
 // recorded on a laptop mic sit at the same level. -16 LUFS is the usual target
 // for speech meant to be played on a laptop or phone.
 const LOUDNORM = "loudnorm=I=-16:TP=-1.5:LRA=11";
-
-// Breathing room after the last line when the picture has to be extended to fit
-// it, so the voice doesn't stop on the final frame.
-const TAIL_PAD_SEC = 0.5;
 
 // The environment variable each narrator reads its voice from.
 const VOICE_ENV: Record<NarratorChoice, string> = {
