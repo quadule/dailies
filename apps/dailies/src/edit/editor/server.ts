@@ -37,7 +37,13 @@ import { audioDurationSec } from "../../video/ffmpeg.js";
 import { NARRATOR_CHOICES } from "../../video/media-preferences.js";
 import { captionBandPx, captionFontPx } from "../../video/narrate.js";
 import { captionLineMax } from "../../video/srt.js";
-import { type Cut, type CutStep, formatCut, parseCut } from "../cut.js";
+import {
+  type Cut,
+  type CutLine,
+  type CutStep,
+  formatCut,
+  parseCut,
+} from "../cut.js";
 import { readCut, writeCut } from "../cut-file.js";
 import {
   type CutRenderResult,
@@ -872,14 +878,7 @@ class Editor {
     const relative = `${RECORDINGS_DIR}/${path.basename(file)}`;
     const read = await readCut(this.sessionId);
     const user =
-      "cut" in read
-        ? read.cut.narration.find(
-            (line) =>
-              line.audio !== undefined &&
-              path.posix.normalize(line.audio.replaceAll("\\", "/")) ===
-                relative
-          )
-        : undefined;
+      "cut" in read ? await this.audioUser(read.cut, file) : undefined;
     if (user) {
       sendError(
         res,
@@ -896,6 +895,27 @@ class Editor {
     await rm(file, { force: true });
     this.durations.delete(file);
     send(res, 204, {});
+  }
+
+  // The narration line whose audio is `file`, resolved the way the render
+  // resolves it — against the session directory, so "recordings/x.wav",
+  // "./recordings/x.wav" and an absolute path all name the same file — with
+  // symlinks followed.
+  private async audioUser(
+    cut: Cut,
+    file: string
+  ): Promise<CutLine | undefined> {
+    const real = await realpath(file).catch(() => file);
+    for (const line of cut.narration) {
+      if (line.audio === undefined) {
+        continue;
+      }
+      const used = path.resolve(this.dir, line.audio);
+      if (used === file || (await realpath(used).catch(() => used)) === real) {
+        return line;
+      }
+    }
+    return;
   }
 }
 

@@ -725,8 +725,23 @@ describe.skipIf(!ffmpeg)("editor server", () => {
     });
     expect(traversal.status).toBe(400);
     expect(existsSync(path.join(dir, "cut.json"))).toBe(true);
+    // Any spelling the render would resolve to the same file counts.
+    for (const audio of [
+      path.join(dir, upload.file),
+      `./recordings/../${upload.file}`,
+    ]) {
+      await putCut({
+        ...current,
+        narration: [{ at: 0.5, text: "Here it is", audio }],
+      });
+      const spelled = await call(`/api/recordings/${name}`, {
+        method: "DELETE",
+      });
+      expect(spelled.status, audio).toBe(409);
+    }
     await putCut({ ...current, narration: [] });
     await call(`/api/recordings/${name}`, { method: "DELETE" });
+    expect(existsSync(path.join(dir, upload.file))).toBe(false);
   });
 
   it("renders in-process, keeps foreign files in cut/, and bumps the video URL", async () => {
