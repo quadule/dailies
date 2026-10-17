@@ -167,6 +167,12 @@ fallback with a note instead of failing the run:
 
 - `omlx.ts` (local TTS), `acestep.ts` (local music), `local-image.ts` (a local image server) —
   probed, on when reachable.
+- `piper.ts` (local TTS, a binary plus a voice model) — on when the binary and a voice are found.
+  A bare `piper` on PATH must answer `--help` with Piper's ONNX flag (Arch's `piper` is a mouse
+  configurator). It never downloads: the binary with no voice degrades with a note naming the
+  `piper.download_voices` command and folder. The voice pins through `$DAILIES_PIPER_VOICE` like
+  every narrator's, and a voice given by `.onnx` path keeps the path in its label so a re-render
+  finds the same file.
 - `elevenlabs.ts` (TTS + Eleven Music; the image flow is opt-in) and `providers.ts` (Gemini via an
   AI Studio key or a Vertex service account) — on when their key is set.
 - `archive.ts` (Creative-Commons music) and `wikimedia.ts` (openly-licensed photos) — free stock
@@ -209,7 +215,10 @@ finalize and a render of the untouched seed are the same video.
   resolution, and pins the first voice it resolves the same way; it prunes nothing. A pinned voice reaches the provider through its narrator's
   environment variable, set only while the voice resolves (`withPinnedVoice`) — every provider,
   a `$DAILIES_SAY_COMMAND` included, reads its voice when it is made — so a later render in the
-  same process (`cut edit`) never inherits it.
+  same process (`cut edit`) never inherits it. A cut that names no narrator takes the
+  `$DAILIES_NARRATOR` pin (`cutNarrator`); the cut's own narrator always wins. When nothing can
+  voice the lines, the error names each configured narrator's problem (`narratorProblems`, e.g.
+  Piper's missing voice and its download command).
 - `writeCut` (`edit/cut-file.ts`) writes `cut.json.tmp.<pid>.<n>` and renames it into place, so a
   reader never sees half a cut and a process killed mid-write leaves the old one whole.
 - **Speed-ups are whole-number strides**: a `speedups` range at rate k keeps every k-th frame,

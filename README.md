@@ -55,7 +55,7 @@ and the script.
 - **Nightly demos of your pull requests.** Label a PR and wake up to a video on it. A model reads the diff and decides whether the change is even worth filming.
 - **Teach it your app once.** Commit a `.dailies/flows.md` and every run starts knowing how to sign in and where things are, instead of rediscovering it.
 - **Bring your own model.** The `claude` CLI by default, any OpenAI-compatible endpoint, or Apple Intelligence fully on-device.
-- **Bring your own voice, score and title art.** Narration, music and the title card come from whatever you have — a local oMLX or ACE-Step server, an ElevenLabs or Gemini key, free Creative-Commons stock — picked automatically, or pinned per slot with `--narrator` / `--music` / `--image`.
+- **Bring your own voice, score and title art.** Narration, music and the title card come from whatever you have — a local oMLX or ACE-Step server, Piper, an ElevenLabs or Gemini key, free Creative-Commons stock — picked automatically, or pinned per slot with `--narrator` / `--music` / `--image`.
 - **Built for agents.** Drop-in plugins for Claude Code, Cursor, and Codex.
 - **Sandboxed.** Scripts run in a QuickJS WASM sandbox with the full Playwright `Page` API — no Node, no host access.
 
@@ -451,7 +451,7 @@ first, then hosted keys, then free stock sources, so a bare install still produc
 
 | Slot | Order | Needs |
 | --- | --- | --- |
-| **Narrator** | oMLX → ElevenLabs → Gemini → macOS `say` | `$DAILIES_OMLX_URL` (+ key) · `$ELEVENLABS_API_KEY` · `$GEMINI_API_KEY` or `$GOOGLE_APPLICATION_CREDENTIALS` · a Mac (or `$DAILIES_SAY_COMMAND`) |
+| **Narrator** | oMLX → Piper → ElevenLabs → Gemini → macOS `say` | `$DAILIES_OMLX_URL` (+ key) · `piper-tts` and a voice · `$ELEVENLABS_API_KEY` · `$GEMINI_API_KEY` or `$GOOGLE_APPLICATION_CREDENTIALS` · a Mac (or `$DAILIES_SAY_COMMAND`) |
 | **Music** | ACE-Step → ElevenLabs → Gemini (Lyria) → archive.org | `$DAILIES_ACESTEP_URL` · `$ELEVENLABS_API_KEY` · a Gemini key · nothing (free, Creative Commons, attribution in the credits) |
 | **Title art** | local image server → Gemini (Nano Banana) → Wikimedia Commons → themed gradient | `$DAILIES_IMAGE_URL` · a Gemini key · nothing · nothing |
 
@@ -460,6 +460,21 @@ any of the models it relays such as `gemini-3.1-flash-image`) is opt-in because 
 plan. `$DAILIES_ELEVENLABS_VOICE` pins a voice by name or id — otherwise one of your voices is
 drawn per run, like the theme. `$DAILIES_ELEVENLABS_MODEL`, `_MUSIC_MODEL` and `_IMAGE_MODEL`
 override the models (`eleven_multilingual_v2`, `music_v2_5`, `gemini-3.1-flash-image`).
+
+**On Linux**, [Piper](https://github.com/OHF-Voice/piper1-gpl) is the local voice: one binary
+and one voice model, run on the CPU, with nothing sent anywhere. Install it with
+`pip install piper-tts` (on Arch, `piper-tts` from the AUR, plus `piper-voices-en-us` for every
+US-English voice), then fetch a voice:
+
+```bash
+python3 -m piper.download_voices en_US-lessac-medium --data-dir ~/.local/share/piper-voices
+```
+
+Dailies finds `piper-tts` (or `piper`) on `PATH` and looks for voices in
+`~/.local/share/piper-voices`, then `/usr/share/piper-voices`. It reads with
+`en_US-lessac-medium` when that is installed, else the first US-English medium voice;
+`$DAILIES_PIPER_VOICE` picks another by name or `.onnx` path, `$DAILIES_PIPER_VOICES` names the
+folder to search instead, and `$DAILIES_PIPER` the command.
 
 **Pin a slot** when you want a specific one — on the command line, or in a prompt to your agent
 ("narrate it with ElevenLabs, no music"), which passes it through:

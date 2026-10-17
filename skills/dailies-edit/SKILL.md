@@ -55,9 +55,10 @@ positions. Change it, then run `npx dailies-cli cut render <id>` to rebuild the 
   or `"caption": ""` to show none. To use a recorded voice instead of TTS, add
   `"audio": "<file>"` (a path relative to the session directory, e.g. `recordings/line1.m4a`);
   `text` is then what the line says, for the caption.
-- `voice`: `{ "narrator", "name", "speed" }` — who reads the TTS lines (`say`, `omlx`,
+- `voice`: `{ "narrator", "name", "speed" }` — who reads the TTS lines (`say`, `omlx`, `piper`,
   `elevenlabs` or `gemini`), which of their voices, and a pace from 0.5 to 2. Left empty, the
-  first render picks a voice and writes it back here, so later renders keep sounding the same.
+  first render picks a voice (from `$DAILIES_NARRATOR` when set) and writes it back here, so
+  later renders keep sounding the same.
 - Lines don't move the picture. If a line is still speaking when the next one starts, the render
   warns and names the hold that would fix it; if the last line runs past the end, the final
   frame is held for it automatically.

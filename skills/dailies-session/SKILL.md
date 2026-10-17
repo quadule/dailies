@@ -184,7 +184,7 @@ last-opened tab and binds it to that step in the report. So:
   transcribers and environment variables.
 - Dailies picks who voices, scores and paints the cut from what's configured. When the user names a
   provider for a slot, pass it through on `session end`: `--narrator
-  <elevenlabs|gemini|omlx|say>`, `--music <elevenlabs|gemini|acestep|archive|none>` (also the
+  <elevenlabs|gemini|omlx|piper|say>`, `--music <elevenlabs|gemini|acestep|archive|none>` (also the
   singer with `--song`), `--image <elevenlabs|gemini|local|wikimedia|gradient|none>`. Each pins
   that slot (names like "Lyria" or "ACE-Step" work as aliases) and implies `--cinematic`. Leave off
   any provider the user didn't mention — a pinned provider that isn't set up fails loudly.

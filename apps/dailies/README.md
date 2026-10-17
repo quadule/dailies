@@ -98,8 +98,9 @@ text back as `--prompt` reproduces the same cut.
 
 **Prerequisites:** a full `ffmpeg` build (`brew install ffmpeg` / `apt install ffmpeg`); a text
 provider — the `claude` CLI (the default; no key), any OpenAI-compatible endpoint via
-`$DAILIES_LLM_URL`, or Apple Intelligence on-device; and a voice — macOS `say`, or
-`ELEVENLABS_API_KEY` / `GEMINI_API_KEY`, or a local oMLX server.
+`$DAILIES_LLM_URL`, or Apple Intelligence on-device; and a voice — macOS `say`, Piper
+(`pip install piper-tts` plus a voice, the local choice on Linux), `ELEVENLABS_API_KEY` /
+`GEMINI_API_KEY`, or a local oMLX server.
 
 Music and title art fill themselves in from whatever you have, ending at free Creative-Commons
 stock, so a bare install still produces a complete cut. Pin any slot with `--narrator <provider>`,

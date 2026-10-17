@@ -69,6 +69,15 @@
 
 ### Added
 
+- **Piper narrates on Linux.** [Piper](https://github.com/OHF-Voice/piper1-gpl), a neural
+  text-to-speech engine that runs on the CPU, is a narrator: `--narrator piper` (or
+  `$DAILIES_NARRATOR=piper`), and unpinned it is tried after oMLX and before the hosted keys, so a
+  Linux machine without a key still gets a voice. It finds `piper-tts` or `piper` on `PATH`
+  (`$DAILIES_PIPER` names another command) and voices in `~/.local/share/piper-voices`, then
+  `/usr/share/piper-voices` (`$DAILIES_PIPER_VOICES` replaces the search), reading with
+  `en_US-lessac-medium` when installed and `$DAILIES_PIPER_VOICE` naming another. Dailies never
+  downloads a voice; with Piper and no voice it says which `piper.download_voices` command would.
+  A cut that names no narrator now also takes `$DAILIES_NARRATOR` on `dailies cut render`.
 - **`dailies cut edit <id>`** serves a browser editor for a finished recording from a local server
   (127.0.0.1 only) and opens it, until Ctrl-C. `--port <n>` picks the port and `--no-open` just
   prints the URL.
