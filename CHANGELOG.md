@@ -86,6 +86,20 @@
     the model's warnings (a line running into the next, a caption inside cut footage) show as
     hints. Undo and redo cover every edit, Render saves first and follows the render's progress,
     and closing the tab with unsaved changes asks first.
+  - **Narration recorded from your microphone.** Record (or R) plays the preview from the
+    playhead with every voice muted, so you narrate over the picture as it will be cut, and
+    attaches the take where it started; Record on a line re-records it from its start. A red
+    dot, a clock and a level meter show while it records; Stop or R keeps the take, Escape
+    throws it away, and the end of the video stops it. A blocked or missing microphone says so
+    in place, and attaching a file still works.
+  - **Takes you replace don't pile up.** Save deletes the recordings the page uploaded that the
+    saved cut no longer uses. If an undo brings one back, its line says the file is gone and
+    offers Record or Replace. Recordings no line uses, such as files left from an earlier visit,
+    are listed under Unused recordings to play or delete.
+  - Scrubbing the ruler pauses playback; a start typed after its end (or an end before its
+    start) is refused on the field with the parser's message; "Rendered video" says when the
+    video it shows was rendered; and each timeline track is a single tab stop, with ↑/↓ moving
+    between its items.
 - **`run --peek`** reads a session's live page without recording a step: snapshots and reads
   work, while clicks, typing, navigation, tabs, captions and effects are refused.
 - **`run --skim` and cut speed-ups.** `cut.json` takes `speedups` (`{ start, end, rate }`). The

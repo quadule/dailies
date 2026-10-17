@@ -489,9 +489,12 @@ skipped, holds frozen, speed-ups sped up, and the captions and recorded lines wh
 will put them, with a clock for the source and one for the finished video. On its timeline you
 drag and resize captions, cuts, speed-ups and holds (they snap to frames), place narration lines,
 and double-click a caption to retype it; mark an in and an out point (I and O) to cut or speed up
-the stretch between them. A narration line can use your own recording from an audio file. Save
-writes `cut.json` (Ctrl/⌘ S, with the parser's message shown if the cut can't be saved), undo
-covers every edit, and Render rebuilds the video and lets you watch the result in place.
+the stretch between them. Record narration from your microphone: press R (or Record) and the
+preview plays from the playhead, muted, so you speak over the picture as it will be cut — cuts
+skipped, holds held, speed-ups fast — and the take lands where you started. Re-record a line from
+its start the same way, or use an audio file instead. Save writes `cut.json` (Ctrl/⌘ S, with the
+parser's message shown if the cut can't be saved) and deletes the takes you replaced; undo covers
+every edit, and Render rebuilds the video and lets you watch the result in place.
 
 ## One CLI, one runtime
 

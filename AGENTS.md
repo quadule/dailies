@@ -247,8 +247,8 @@ recording, no `cut.json`, no ffmpeg — and, like a render, copies the video to 
   `compile`, `test`, `dev` and `prepack`, so a client change needs a rebuild (and a restarted
   `cut edit`) to show. The CLI's tsconfig includes the DOM libs for it.
   - `main.ts` boots and lays out the page: the top bar (Undo/Redo, Save, Render and its latest
-    progress message, the report's path), the validation line, then wires the views and the
-    keyboard shortcuts and owns saving and rendering.
+    progress message, the report's path), the validation line, then wires the views, the
+    recorder and the keyboard shortcuts and owns saving and rendering.
   - `state.ts` (DOM-free) holds the cut, the selection, the in/out marks and the undo history
     (JSON snapshots; a drag or a field's focus-to-blur is one step via `begin()`/`end()`).
     "Unsaved" compares `formatCut` output, so a change that rounds away isn't one.
@@ -257,12 +257,13 @@ recording, no `cut.json`, no ffmpeg — and, like a render, copies the video to 
     `format.ts` (DOM-free) formats, parses and frame-snaps times; `api.ts` is the typed fetch
     layer; `dom.ts` has the element builder, icons and a keyed list that updates elements in
     place (so a drag's pointer capture and a focused field survive a re-render).
-  - `recorder.ts` holds `attachRecording(blob, atSec, lineIndex?)` — upload to `/api/recordings`,
-    then set the line's `audio` or add a line — and `recordingControls`, whose elements the
-    inspector shows in a narration line's audio box. Today that is a file picker; microphone
-    capture goes here and ends in `attachRecording` the same way.
+  - `recorder.ts` brings audio into narration lines: `attachRecording(blob, atSec, lineIndex?)`
+    (upload to `/api/recordings`, then set the line's `audio` or add a line), microphone capture,
+    the views (the Record buttons, the file picker, the banner over the picture), and deleting
+    recordings. See **Recording narration** below.
   - The pure modules have vitest tests beside them (`format.test.ts`, `preview.test.ts`,
-    `state.test.ts`). They run under node, so nothing in them may touch the DOM at import time.
+    `state.test.ts`, `recorder.test.ts`). They run under node, so nothing in them may touch the
+    DOM at import time.
 - The client imports the cut model straight from `edit/cut.ts` (and the burn's `wrapCaption`
   from `video/srt.ts`), so the editor computes output times, captions and line placement exactly
   as the render will. That makes `cut.ts` and everything it imports (`video/segments.ts`,
@@ -281,11 +282,58 @@ recording, no `cut.json`, no ffmpeg — and, like a render, copies the video to 
   "Rendered video" on the stage plays `session.video.url` and maps its time back with
   `sourceTime` (the inverse of `mapTime` over `plan.pieces`), the tail fitted to the video's real
   length. Every time the editor stores is source time, snapped to frames.
-- **QA handle.** `window.dailiesEditor` is `{ getCut, setCut, addRecording, save, render, seek }`
-  (`addRecording` is `attachRecording`; `save` and `render` resolve when the request answers;
-  `seek` takes source seconds). The stage's clocks carry `data-clock="source"` and
-  `data-clock="output"`, and `.stage[data-holding]` says whether a hold is playing — drive it
-  with `dailies exec` scripts, never another browser tool.
+- **Recording narration** (`recorder.ts`). Record in a line's audio box (or R with that line
+  selected) re-records the line from its `at`; Record narration in the Add section (or R with no
+  line selected) records a new line at the playhead — moved to the next kept frame when the
+  playhead is in cut footage. One take at a time runs through `NarrationRecorder`'s phases,
+  idle → requesting (getUserMedia) → recording → uploading → idle. While it records, the
+  stage's `playSilently` plays the preview
+  from the start time — cuts skip, holds freeze, speed-ups run fast — with the video and every
+  recorded line muted, so nothing from the speakers reaches the microphone; the banner over the
+  picture shows a red dot, the elapsed time and an AnalyserNode level meter (with reduced motion
+  it redraws four times a second instead of every frame). Any pause of the stage ends the take,
+  which is how the end of the video stops it; Stop or R stop it too, and all of them upload it
+  through `attachRecording` at the SOURCE time it started, select the line, focus its text and
+  put the playhead on it. Escape (wherever the focus is) throws the take away and uploads nothing.
+  `MicCapture` asks for the microphone once and keeps the stream (`pagehide` stops its tracks),
+  and picks the first MediaRecorder type the browser supports from `MIME_TYPES` (WebM/Opus,
+  WebM, Ogg/Opus, MP4), else the default. It takes `getUserMedia` and the `MediaRecorder`
+  constructor from its caller, defaulting to the browser's and looked up at call time, so
+  `recorder.test.ts` drives the capture and the phases under node with fakes. A refused or
+  missing microphone (`micProblem`: NotAllowedError, NotFoundError, no `mediaDevices`…) is an
+  inline message where Record was pressed that also points at the file picker; nothing else in
+  the editor changes.
+- **Orphan recordings.** The page deletes only recordings it uploaded itself, and only after a
+  successful save: `deleteOrphans` sends `DELETE` for each of them that neither the saved cut
+  nor the one being edited names (a 404 counts as deleted; a 409 leaves the file). Undo can still
+  point a line back at a deleted file, so `recordingGone` marks it and the audio box says the
+  file is gone and offers Record, Replace from file and Remove; `analyze` adds a hint that the
+  render would fail on it. Recordings in `recordings/` that no line uses — files an earlier visit
+  left behind — are listed under **Unused recordings** in the Voice panel to play or delete.
+- **Testing the microphone headless.** Chrome without a microphone can still record: give
+  `dailies exec --inject-script <file>` (or `$DAILIES_INJECT_SCRIPT`) an init script that
+  replaces `navigator.mediaDevices.getUserMedia` with one returning
+  `ctx.createMediaStreamDestination().stream` fed by an `AudioContext` oscillator — MediaRecorder
+  records that stream for real, and the server measures the upload. A script that rejects with
+  `new DOMException("…", "NotAllowedError")` tests a refused microphone. Init scripts are deduped
+  per browser, so use a separate `--browser` name for each fake. `run --session` takes no
+  `--inject-script`; because the recorder looks `getUserMedia` up when Record is pressed, a
+  recorded step can install the same fake with `page.evaluate` first (and should say so in a
+  caption).
+- **Smaller behaviours worth knowing.** Scrubbing the ruler pauses playback. A Start or End field
+  refuses a time that would put a range's end at or before its start, with the parser's wording,
+  instead of applying it. "Rendered video" is disabled until there is a render, and says "as last
+  rendered <time>" from the video's mtime (the `v` in `session.video.url`), warning in its title
+  that a video from before the editor opened may not match the cut on disk. Each timeline track
+  is one tab stop (a roving tabindex: the focused item, else the selected one, else the first at
+  or after the playhead); ↑/↓ move between a track's items in time order, ←/→ still nudge.
+- **QA handle.** `window.dailiesEditor` is `{ getCut, setCut, addRecording, recording, save,
+  render, seek }` (`addRecording` is `attachRecording`; `recording()` is the recorder's `{ phase,
+  problem? }`; `save` and `render` resolve when the request answers, `save` after the orphan
+  deletes; `seek` takes source seconds). The stage's clocks carry `data-clock="source"` and
+  `data-clock="output"`, `.stage[data-holding]` says whether a hold is playing, and
+  `.editor[data-recording]` is the recorder's phase — drive it with `dailies exec` scripts, never
+  another browser tool.
 - Recordings live in the session's `recordings/` (`rec-<UTC timestamp>.<ext>`), never in `cut/`
   or `video/`: the artifact scanner (`packages/runtime/src/artifacts.ts`) doesn't read it, and
   the render's cache prune removes only its own `tts-*` / `rec-*` clips from `cut/`.
