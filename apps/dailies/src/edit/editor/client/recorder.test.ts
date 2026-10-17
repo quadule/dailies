@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { type Cut, planCut } from "../../cut.js";
-import type { UploadRecordingResponse } from "../contract.js";
+import { type Cut, type CutLine, planCut } from "../../cut.js";
 import { previewModel } from "./preview.js";
 import {
+  type AttachedTake,
+  findLine,
   levelOf,
   type MediaRecorderClass,
   MIME_TYPES,
@@ -15,6 +16,7 @@ import {
   NarrationRecorder,
   nextPhase,
   pickMimeType,
+  placeTake,
   type RecordTarget,
   recordStart,
 } from "./recorder.js";
@@ -191,6 +193,81 @@ describe("nextPhase", () => {
   });
 });
 
+describe("where a take lands", () => {
+  function lines(): Cut {
+    return {
+      ...seed(),
+      narration: [
+        { at: 1, text: "A" },
+        { at: 5, text: "B", audio: "recordings/b-old.webm" },
+        { at: 8, text: "C", audio: "recordings/c.webm" },
+      ],
+    };
+  }
+
+  it("finds a line by itself, wherever it moved", () => {
+    const cut = lines();
+    const b = cut.narration[1] as CutLine;
+    expect(findLine(cut.narration, b)).toBe(1);
+    cut.narration.splice(0, 1);
+    expect(findLine(cut.narration, b)).toBe(0);
+    b.text = "B, edited while recording";
+    expect(findLine(cut.narration, b)).toBe(0);
+  });
+
+  it("finds a line an undo rebuilt from a snapshot by what it says", () => {
+    const cut = lines();
+    const b = cut.narration[1] as CutLine;
+    const rebuilt = JSON.parse(JSON.stringify(cut)) as Cut;
+    expect(findLine(rebuilt.narration, b)).toBe(1);
+  });
+
+  it("doesn't mistake the next line for one that was deleted", () => {
+    const cut = lines();
+    const b = cut.narration[1] as CutLine;
+    cut.narration.splice(1, 1);
+    expect(findLine(cut.narration, b)).toBeUndefined();
+  });
+
+  it("attaches a take to its line after an earlier line was deleted", () => {
+    const cut = lines();
+    const b = cut.narration[1] as CutLine;
+    cut.narration.splice(0, 1);
+    expect(placeTake(cut, "recordings/take.webm", 5, b)).toEqual({
+      index: 0,
+      gone: false,
+    });
+    expect(cut.narration.map((l) => l.audio)).toEqual([
+      "recordings/take.webm",
+      "recordings/c.webm",
+    ]);
+  });
+
+  it("keeps a take whose line was deleted as a new line at its time, not on the next line", () => {
+    // Lines [A, B, C]; Record on B; B is deleted while it records.
+    const cut = lines();
+    const b = cut.narration[1] as CutLine;
+    cut.narration.splice(1, 1);
+    expect(placeTake(cut, "recordings/take.webm", 5, b)).toEqual({
+      index: 2,
+      gone: true,
+    });
+    expect(cut.narration).toEqual([
+      { at: 1, text: "A" },
+      { at: 8, text: "C", audio: "recordings/c.webm" },
+      { at: 5, text: "", audio: "recordings/take.webm" },
+    ]);
+  });
+
+  it("adds a take recorded for no line as a new line", () => {
+    const cut = lines();
+    expect(placeTake(cut, "recordings/take.webm", 3)).toEqual({
+      index: 3,
+      gone: false,
+    });
+  });
+});
+
 describe("recordStart", () => {
   const model = previewModel(planCut(seed(), { durationSec: 10, fps: 25 }));
 
@@ -299,10 +376,9 @@ function harness(getUserMedia: () => Promise<MediaStream>) {
   const hooks: NarrationHooks = {
     attach: async (blob, target) => {
       attached.push({ blob, target });
-      return { file: "recordings/rec-1.webm", durationSec: 2 };
+      return { file: "recordings/rec-1.webm", durationSec: 2, index: 0 };
     },
-    attached: (saved: UploadRecordingResponse) =>
-      calls.push(`attached ${saved.file}`),
+    attached: (saved: AttachedTake) => calls.push(`attached ${saved.file}`),
     changed: () => phases.push(rec?.phase ?? ""),
     now: () => 1000,
     pause: () => {
@@ -322,14 +398,16 @@ function harness(getUserMedia: () => Promise<MediaStream>) {
 describe("NarrationRecorder", () => {
   it("records over the preview and attaches the take where it started", async () => {
     const { rec, calls, attached, phases } = harness(async () => fakeStream());
-    await rec.start({ at: 3, lineIndex: 0 });
+    const line = { at: 3, text: "hello" };
+    await rec.start({ at: 3, line });
     expect(rec.phase).toBe("recording");
     expect(rec.startedAt).toBe(1000);
     expect(calls).toEqual(["play 3"]);
     const saved = await rec.stop();
     expect(saved?.file).toBe("recordings/rec-1.webm");
     expect(attached).toHaveLength(1);
-    expect(attached[0]?.target).toEqual({ at: 3, lineIndex: 0 });
+    expect(attached[0]?.target.at).toBe(3);
+    expect(attached[0]?.target.line).toBe(line);
     expect(await attached[0]?.blob.text()).toBe("voice");
     expect(calls).toEqual([
       "play 3",
@@ -382,9 +460,11 @@ describe("NarrationRecorder", () => {
         name: "NotAllowedError",
       });
     });
-    await rec.start({ at: 1, lineIndex: 2 });
+    const line = { at: 1, text: "third" };
+    await rec.start({ at: 1, line });
     expect(rec.phase).toBe("idle");
-    expect(rec.problem).toMatchObject({ where: 2, mic: true });
+    expect(rec.problem?.where).toBe(line);
+    expect(rec.problem?.mic).toBe(true);
     expect(rec.problem?.message).toMatch(/blocked/);
     expect(calls).toEqual([]);
     await rec.start({ at: 1 });

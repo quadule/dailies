@@ -12,6 +12,12 @@
 // playback stopping, as it does at the end of the video) uploads the take at
 // the SOURCE time it started; Escape throws it away.
 //
+// A take belongs to the narration line it was recorded for — the object, not
+// its index: Delete, undo and the inspector stay live while it records and
+// uploads, so by the time it lands its index may name another line. If the
+// line is gone by then, the take becomes a new line at the time it was
+// recorded from, and the status says so (findLine, placeTake).
+//
 // MicCapture holds the stream and the MediaRecorder. It takes getUserMedia and
 // the MediaRecorder constructor from its caller, defaulting to the browser's
 // (looked up when called, so a page can swap them), which lets
@@ -23,7 +29,7 @@
 // the Voice panel to delete by hand. A line that an undo points back at a
 // deleted file says so in its audio box (recordingGone).
 
-import type { Cut } from "../../cut.js";
+import type { Cut, CutLine } from "../../cut.js";
 import {
   RECORDING_TYPES,
   RECORDINGS_DIR,
@@ -200,6 +206,42 @@ export function recordStart(
   const gap = model.gaps.find((g) => sec >= g.start - EPS && sec < g.end - EPS);
   const at = gap ? gap.end : sec;
   return at < end - model.frame + EPS ? at : undefined;
+}
+
+// Where narration line `line` is in `narration` now: the object itself, or —
+// when an undo or a redo rebuilt the cut from a snapshot, so every line is a
+// new object — the first line exactly like it. Undefined when it is gone.
+export function findLine(
+  narration: readonly CutLine[],
+  line: CutLine
+): number | undefined {
+  const index = narration.indexOf(line);
+  if (index >= 0) {
+    return index;
+  }
+  const same = JSON.stringify(line);
+  const found = narration.findIndex((l) => JSON.stringify(l) === same);
+  return found >= 0 ? found : undefined;
+}
+
+// Put a take (`file`, a recordings/ path) into the cut: as the audio of
+// `line`, wherever that line is now, else as a new line at `at` (source
+// seconds, on the frame grid). `gone` says a line was asked for and isn't
+// there any more. Returns the index of the line that has the take.
+export function placeTake(
+  cut: Cut,
+  file: string,
+  at: number,
+  line?: CutLine
+): { index: number; gone: boolean } {
+  const index = line ? findLine(cut.narration, line) : undefined;
+  const target = index === undefined ? undefined : cut.narration[index];
+  if (target && index !== undefined) {
+    target.audio = file;
+    return { index, gone: false };
+  }
+  cut.narration.push({ at, text: "", audio: file });
+  return { index: cut.narration.length - 1, gone: line !== undefined };
 }
 
 // ---------------------------------------------------------------------------
@@ -387,8 +429,9 @@ export class MicCapture {
 export interface RecordTarget {
   // Source seconds the recording starts at.
   at: number;
-  // The narration line whose audio it replaces; a new line when absent.
-  lineIndex?: number;
+  // The narration line whose audio it replaces (the object in the cut being
+  // edited); a new line when absent.
+  line?: CutLine;
 }
 
 // Why the last Record press didn't record, shown where it was pressed: a
@@ -397,13 +440,21 @@ export interface RecorderProblem {
   message: string;
   // A microphone problem, so the message adds that a file still works.
   mic: boolean;
-  where: number | "new";
+  where: CutLine | "new";
+}
+
+// A take in the cut: the saved file, and the line that has it now.
+export interface AttachedTake extends UploadRecordingResponse {
+  // Its index in cut.narration.
+  index: number;
+  // The line it was meant for was gone, so it became a new line.
+  lineGone?: true;
 }
 
 export interface NarrationHooks {
-  attach(blob: Blob, target: RecordTarget): Promise<UploadRecordingResponse>;
+  attach(blob: Blob, target: RecordTarget): Promise<AttachedTake>;
   // A take was attached: show it.
-  attached(saved: UploadRecordingResponse, target: RecordTarget): void;
+  attached(saved: AttachedTake, target: RecordTarget): void;
   // The phase, target or problem changed: redraw.
   changed(): void;
   // Milliseconds, for the elapsed clock.
@@ -463,7 +514,7 @@ export class NarrationRecorder {
         this.move("refused");
         this.target = undefined;
         this.problem = {
-          where: target.lineIndex ?? "new",
+          where: target.line ?? "new",
           message: micMessage(micProblem(err), errorText(err)),
           mic: true,
         };
@@ -489,7 +540,7 @@ export class NarrationRecorder {
 
   // Stop and attach the take. Resolves with the saved file, or undefined
   // when there was nothing to stop or the upload failed.
-  async stop(): Promise<UploadRecordingResponse | undefined> {
+  async stop(): Promise<AttachedTake | undefined> {
     const target = this.target;
     if (!(target && this.move("stop"))) {
       return;
@@ -584,8 +635,8 @@ const uploaded = new Set<string>();
 const deleted = new Set<string>();
 
 export interface RecorderUi {
-  // A take was attached to line `lineIndex` (selected now): show it.
-  attached(saved: UploadRecordingResponse, lineIndex: number | undefined): void;
+  // A take was attached to line `saved.index` (selected now): show it.
+  attached(saved: AttachedTake): void;
   changed(): void;
   pause(): void;
   play(sec: number): void;
@@ -599,12 +650,8 @@ export function bindRecorder(
   bound = ctx;
   active?.release();
   active = new NarrationRecorder(new MicCapture(deps), {
-    attach: (blob, target) =>
-      attachRecording(blob, target.at, target.lineIndex),
-    attached: (saved) => {
-      const sel = ctx.state.selection;
-      ui.attached(saved, sel?.kind === "line" ? sel.index : undefined);
-    },
+    attach: (blob, target) => attachRecording(blob, target.at, target.line),
+    attached: (saved) => ui.attached(saved),
     changed: () => ui.changed(),
     now: () => performance.now(),
     pause: () => ui.pause(),
@@ -645,26 +692,25 @@ export function pressRecord(lineIndex?: number): void {
   }
   const ctx = context();
   const model = previewModel(ctx.analysis.plan);
-  const where = lineIndex ?? "new";
   const line =
     lineIndex === undefined ? undefined : ctx.state.cut.narration[lineIndex];
   if (line) {
     if (recordStart(model, line.at) !== line.at) {
       rec.refuse({
-        where,
+        where: line,
         mic: false,
         message:
           "This line is in cut footage or at the very end, so there is no picture to narrate over — move it first.",
       });
       return;
     }
-    void rec.start({ at: line.at, lineIndex });
+    void rec.start({ at: line.at, line });
     return;
   }
   const at = recordStart(model, snapTime(ctx.playhead(), ctx.grid));
   if (at === undefined) {
     rec.refuse({
-      where,
+      where: "new",
       mic: false,
       message:
         "There's no footage after the playhead to narrate over — move the playhead back.",
@@ -720,16 +766,20 @@ export function uploadType(type: string, name = ""): string | undefined {
   return name.includes(".") ? BY_EXTENSION[ext] : undefined;
 }
 
-// Upload `blob` and attach it: to narration line `lineIndex` when given (its
-// text stays, as the caption and the record of what it says), else as a new
-// line at `atSec` (source seconds). One undo step; the new or changed line is
-// selected. Resolves with the saved file and its length.
+// Upload `blob` and attach it: to a narration line when given — its index or
+// the line itself, looked up before the upload starts — keeping the line's
+// text as the caption and the record of what it says; else as a new line at
+// `atSec` (source seconds). A line deleted while the upload ran gets a new
+// line at `atSec` instead (`lineGone`). One undo step; the new or changed line
+// is selected. Resolves with the saved file, its length and where it went.
 export async function attachRecording(
   blob: Blob,
   atSec: number,
-  lineIndex?: number
-): Promise<UploadRecordingResponse> {
+  target?: number | CutLine
+): Promise<AttachedTake> {
   const ctx = context();
+  const line =
+    typeof target === "number" ? ctx.state.cut.narration[target] : target;
   const name = blob instanceof File ? blob.name : "";
   const type = uploadType(blob.type, name);
   if (!type) {
@@ -746,20 +796,16 @@ export async function attachRecording(
     ...ctx.session.recordings.filter((r) => r.file !== saved.file),
     saved,
   ];
+  let placed = { index: 0, gone: false };
   ctx.state.edit((cut) => {
-    const line = lineIndex === undefined ? undefined : cut.narration[lineIndex];
-    if (line && lineIndex !== undefined) {
-      line.audio = saved.file;
-      return { kind: "line", index: lineIndex };
-    }
-    cut.narration.push({
-      at: snapTime(atSec, ctx.grid),
-      text: "",
-      audio: saved.file,
-    });
-    return { kind: "line", index: cut.narration.length - 1 };
+    placed = placeTake(cut, saved.file, snapTime(atSec, ctx.grid), line);
+    return { kind: "line", index: placed.index };
   });
-  return saved;
+  return {
+    ...saved,
+    index: placed.index,
+    ...(placed.gone ? { lineGone: true as const } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -844,10 +890,14 @@ async function attachPicked(
     return;
   }
   ctx.status(`Uploading ${file.name}…`);
+  const line =
+    lineIndex === undefined ? undefined : ctx.state.cut.narration[lineIndex];
   try {
-    const saved = await attachRecording(file, ctx.playhead(), lineIndex);
+    const saved = await attachRecording(file, line?.at ?? ctx.playhead(), line);
     ctx.status(
-      `Attached ${saved.file} (${saved.durationSec.toFixed(1)}s) — save to keep it`
+      saved.lineGone
+        ? `Attached ${saved.file} (${saved.durationSec.toFixed(1)}s) as a new line at ${clock(line?.at ?? 0)} — the line it was for was deleted meanwhile. Save to keep it`
+        : `Attached ${saved.file} (${saved.durationSec.toFixed(1)}s) — save to keep it`
     );
   } catch (err) {
     ctx.status(`Couldn't attach ${file.name}: ${errorText(err)}`, "error");
@@ -864,6 +914,22 @@ function fallbackFor(lineIndex: number | undefined, hasAudio: boolean): string {
     : "“Attach file…” still works.";
 }
 
+// Whether `where` — a narration line, or "new" for the Add section — is the
+// place a Record button for `lineIndex` (undefined: the new-line button)
+// stands for.
+function isHere(
+  where: CutLine | "new" | undefined,
+  lineIndex: number | undefined
+): boolean {
+  if (where === undefined || where === "new") {
+    return where === "new" && lineIndex === undefined;
+  }
+  return (
+    lineIndex !== undefined &&
+    findLine(context().state.cut.narration, where) === lineIndex
+  );
+}
+
 // How a Record button looks for line `lineIndex` (undefined: the new-line
 // button) while the recorder is in `rec`'s state.
 function recordLook(
@@ -871,7 +937,8 @@ function recordLook(
   lineIndex: number | undefined,
   idle: string
 ): { disabled: boolean; live: boolean; text: string } {
-  const mine = rec.target !== undefined && rec.target.lineIndex === lineIndex;
+  const mine =
+    rec.target !== undefined && isHere(rec.target.line ?? "new", lineIndex);
   if (!mine) {
     return { text: idle, live: false, disabled: rec.busy };
   }
@@ -896,7 +963,7 @@ function problemText(
   hasAudio: boolean
 ): string {
   const problem = rec.problem;
-  if (!problem || rec.busy || problem.where !== (lineIndex ?? "new")) {
+  if (!problem || rec.busy || !isHere(problem.where, lineIndex)) {
     return "";
   }
   return problem.mic

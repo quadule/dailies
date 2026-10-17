@@ -11,11 +11,7 @@
 // window.dailiesEditor is a small handle for QA scripts (see AGENTS.md).
 
 import type { Cut } from "../../cut.js";
-import type {
-  EditorSession,
-  RenderStatus,
-  UploadRecordingResponse,
-} from "../contract.js";
+import type { EditorSession, RenderStatus } from "../contract.js";
 import { api } from "./api.js";
 import type { EditorContext } from "./context.js";
 import { button, h, isTyping } from "./dom.js";
@@ -23,10 +19,12 @@ import { clock, endOf, span } from "./format.js";
 import { createInspector } from "./inspector.js";
 import { analyze } from "./preview.js";
 import {
+  type AttachedTake,
   attachRecording,
   bindRecorder,
   cancelRecording,
   deleteOrphans,
+  findLine,
   pressRecord,
   type RecorderPhase,
   type RecorderProblem,
@@ -46,8 +44,11 @@ export interface DailiesEditor {
   addRecording: typeof attachRecording;
   getCut(): Cut;
   // The narration recorder: its phase, and why the last Record press didn't
-  // record.
-  recording(): { phase: RecorderPhase; problem?: RecorderProblem };
+  // record — `where` is the narration line's index, or "new".
+  recording(): {
+    phase: RecorderPhase;
+    problem?: Omit<RecorderProblem, "where"> & { where: number | "new" };
+  };
   render(): Promise<RenderStatus | undefined>;
   save(): Promise<boolean>;
   seek(sec: number): void;
@@ -137,14 +138,17 @@ function start(session: EditorSession, initial: RenderStatus): void {
 
   // A take was attached and its line selected: put the cursor in its text
   // and the playhead on it, to review it by playing.
-  function recorded(saved: UploadRecordingResponse, line?: number): void {
+  function recorded(saved: AttachedTake): void {
     inspector.focusText();
-    const at = line === undefined ? undefined : state.cut.narration[line]?.at;
+    const at = state.cut.narration[saved.index]?.at;
     if (at !== undefined) {
       stage.seek(at);
     }
+    const where = saved.lineGone
+      ? ` as a new line at ${clock(at ?? 0)} — the line it was for was deleted meanwhile`
+      : "";
     ctx.status(
-      `Recorded ${span(saved.durationSec)} — type what you said for the caption, or leave it blank. Play to review it; save to keep it.`
+      `Recorded ${span(saved.durationSec)}${where} — type what you said for the caption, or leave it blank. Play to review it; save to keep it.`
     );
   }
 
@@ -606,10 +610,19 @@ function start(session: EditorSession, initial: RenderStatus): void {
       });
     },
     addRecording: attachRecording,
-    recording: () => ({
-      phase: recorder.phase,
-      ...(recorder.problem ? { problem: { ...recorder.problem } } : {}),
-    }),
+    recording: () => {
+      const problem = recorder.problem;
+      const where =
+        problem?.where === "new"
+          ? "new"
+          : problem && findLine(state.cut.narration, problem.where);
+      return {
+        phase: recorder.phase,
+        ...(problem && where !== undefined
+          ? { problem: { ...problem, where } }
+          : {}),
+      };
+    },
     save,
     render,
     seek: (sec) => stage.seek(sec),
