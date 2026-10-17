@@ -511,6 +511,20 @@ describe.skipIf(!ffmpeg)("editor server", () => {
     expect(await readFile(path.join(dir, "cut.json"), "utf8")).toBe(before);
   });
 
+  it("refuses a cut whose times round to an invalid one on disk", async () => {
+    const before = await readFile(path.join(dir, "cut.json"), "utf8");
+    const res = await putCut({
+      ...cut,
+      cuts: [{ start: 1.0001, end: 1.0004 }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.json<{ error: string }>().error).toContain(
+      "cuts[0].end must be after its start"
+    );
+    expect(await readFile(path.join(dir, "cut.json"), "utf8")).toBe(before);
+    expect((await call("/api/session")).status).toBe(200);
+  });
+
   it("refuses a cut for another video or version", async () => {
     const video = await putCut({ ...cut, video: "other.webm" });
     expect(video.status).toBe(400);

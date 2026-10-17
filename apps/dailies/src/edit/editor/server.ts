@@ -711,6 +711,14 @@ class Editor {
       sendError(res, 400, parsed.error);
       return;
     }
+    // What goes to disk is formatCut's form, times rounded to the
+    // millisecond, and that has to parse too: a range a fraction of a
+    // millisecond long parses here and rounds to nothing there.
+    const saved = parseCut(JSON.parse(formatCut(parsed.cut)));
+    if ("error" in saved) {
+      sendError(res, 400, `${saved.error} (times are kept to the millisecond)`);
+      return;
+    }
     const existing = await readCut(this.sessionId);
     const video =
       "cut" in existing ? existing.cut.video : this.source.cut.video;
@@ -723,9 +731,8 @@ class Editor {
       return;
     }
     await writeCut(this.sessionId, parsed.cut);
-    // What is on disk now: formatCut rounds times to the millisecond.
-    const saved = parseCut(JSON.parse(formatCut(parsed.cut)));
-    sendJson(res, 200, { cut: "cut" in saved ? saved.cut : parsed.cut });
+    // What is on disk now.
+    sendJson(res, 200, { cut: saved.cut });
   }
 
   private startRender(res: ServerResponse): void {
