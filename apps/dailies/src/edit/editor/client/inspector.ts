@@ -1,5 +1,6 @@
 // The inspector (right column): the selected item's fields, the Add section,
-// the voice, the last render, and the keyboard shortcuts.
+// the voice (and the recordings no line uses), the last render, and the
+// keyboard shortcuts.
 //
 // The selected item's panel is rebuilt only when the selection (or the shape
 // of the item, like a line gaining audio) changes; otherwise each field
@@ -14,9 +15,15 @@ import {
 } from "../../cut.js";
 import type { RenderStatus } from "../contract.js";
 import type { EditorContext } from "./context.js";
-import { button, h, setIcon } from "./dom.js";
+import { button, h, keyed, setIcon } from "./dom.js";
 import { clock, endOf, parseSeconds, snapTime, span } from "./format.js";
-import { recordButton, recordingControls } from "./recorder.js";
+import {
+  deleteRecording,
+  recordButton,
+  recordingControls,
+  recordingGone,
+  unusedRecordings,
+} from "./recorder.js";
 import type { Selection } from "./state.js";
 
 export interface Inspector {
@@ -435,7 +442,9 @@ export function createInspector(
   }
 
   // A narration line's recording: what it is, Play, and the ways to replace
-  // or drop it — Record (from the microphone), a file, or text to speech.
+  // or drop it — Record (from the microphone), a file, or text to speech. A
+  // file that is gone (deleted after a save, then brought back by an undo)
+  // says so and offers the same ways back.
   function audioBlock(i: number): HTMLElement {
     const line = state.cut.narration[i];
     const audio = line?.audio;
@@ -471,6 +480,24 @@ export function createInspector(
         title: "Voice this line with text to speech instead",
       }
     );
+    const gone = recordingGone(audio);
+    if (gone) {
+      block.classList.add("gone");
+      block.append(
+        h("p", { class: "audio-file" }, h("code", { text: audio }), " · gone"),
+        h("p", {
+          class: "mic-problem",
+          attrs: { role: "status" },
+          text:
+            gone === "deleted"
+              ? "This recording was deleted as unused after a save. Record the line again, replace it from a file, or remove it."
+              : "This recording isn't in the session's recordings/ folder, or can't be read. Record the line again, replace it from a file, or remove it.",
+        }),
+        h("div", { class: "audio-actions" }, ...controls.buttons, removeButton),
+        controls.message
+      );
+      return block;
+    }
     const recording = ctx.session.recordings.find((r) => r.file === audio);
     const player = h("audio", { src: `/${audio}`, preload: "none" });
     const play = button(
@@ -779,7 +806,8 @@ export function createInspector(
     const line =
       sel.kind === "line" ? state.cut.narration[sel.index] : undefined;
     const audio = line?.audio ?? "";
-    return `${sel.kind}:${sel.index}:${audio}`;
+    const gone = audio ? (recordingGone(audio) ?? "") : "";
+    return `${sel.kind}:${sel.index}:${audio}:${gone}`;
   }
 
   function buildSelected(): void {
@@ -921,6 +949,113 @@ export function createInspector(
       : "Set in and out points (I and O) to add a cut or a speed-up.";
   }
 
+  // ----- recordings no line uses -----
+
+  const unusedList = h("ul", { class: "unused-list" });
+  const unused = h(
+    "div",
+    { class: "unused", hidden: true },
+    h("h3", { id: "unused-title", text: "Unused recordings" }),
+    h("p", {
+      class: "note",
+      text: "In the session's recordings/ folder, on no line. Delete the ones you don't need.",
+    }),
+    unusedList
+  );
+  unusedList.setAttribute("aria-labelledby", "unused-title");
+  const listen = new Audio();
+  let listening: string | undefined;
+
+  function drawListen(): void {
+    for (const row of unusedList.children) {
+      const file = (row as HTMLElement).dataset.file;
+      const play = row.querySelector<HTMLElement>(".unused-play");
+      if (!play) {
+        continue;
+      }
+      const on = file === listening && !listen.paused;
+      setIcon(play, on ? "stop" : "play");
+      const text = play.querySelector("span");
+      if (text) {
+        text.textContent = on ? "Stop" : "Play";
+      }
+    }
+  }
+  listen.addEventListener("play", drawListen);
+  listen.addEventListener("pause", drawListen);
+  listen.addEventListener("ended", drawListen);
+
+  function playUnused(file: string): void {
+    if (listening === file && !listen.paused) {
+      listen.pause();
+      return;
+    }
+    listening = file;
+    listen.src = `/${file}`;
+    listen.currentTime = 0;
+    listen.play().catch(() => ctx.status(`Couldn't play ${file}`, "error"));
+  }
+
+  async function deleteUnused(file: string): Promise<void> {
+    if (listening === file) {
+      listen.pause();
+    }
+    try {
+      await deleteRecording(file);
+      ctx.status(`Deleted ${file}`);
+      ctx.refresh();
+    } catch (err) {
+      ctx.status(
+        `Couldn't delete ${file}: ${err instanceof Error ? err.message : String(err)}`,
+        "error"
+      );
+    }
+  }
+
+  function drawUnused(): void {
+    const files = unusedRecordings(state.cut);
+    unused.hidden = files.length === 0;
+    keyed(
+      unusedList,
+      files.map((r) => r.file),
+      (file) => {
+        const id = nextId("unused");
+        const named = (node: HTMLElement) => {
+          node.setAttribute("aria-describedby", id);
+          return node;
+        };
+        return h(
+          "li",
+          { class: "unused-row", attrs: { "data-file": file } },
+          h("code", { id, class: "unused-name", text: file.split("/").pop() }),
+          h("span", { class: "unused-length" }),
+          named(
+            button("Play", () => playUnused(file), {
+              class: "btn sm unused-play",
+              icon: "play",
+              title: `Listen to ${file}`,
+            })
+          ),
+          named(
+            button("Delete", () => void deleteUnused(file), {
+              class: "btn sm ghost unused-delete",
+              icon: "trash",
+              title: `Delete ${file} from the session`,
+            })
+          )
+        );
+      },
+      (row, file) => {
+        const length = row.querySelector(".unused-length");
+        const found = files.find((r) => r.file === file);
+        if (length && found) {
+          length.textContent = span(found.durationSec);
+        }
+      }
+    );
+    drawListen();
+  }
+
   // ----- voice -----
 
   const narratorId = nextId("narrator");
@@ -1017,7 +1152,8 @@ export function createInspector(
           { class: "btn sm ghost", title: "Speak at the normal pace" }
         )
       )
-    )
+    ),
+    unused
   );
 
   function drawVoice(): void {
@@ -1138,6 +1274,7 @@ export function createInspector(
       }
       drawAdd();
       drawVoice();
+      drawUnused();
     },
     showRender(status) {
       const label = {

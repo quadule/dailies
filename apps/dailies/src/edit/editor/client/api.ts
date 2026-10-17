@@ -68,4 +68,7 @@ export const api = {
   renderStatus: () => call<RenderStatus>("GET", "/api/render"),
   uploadRecording: (blob: Blob, type: string) =>
     call<UploadRecordingResponse>("POST", "/api/recordings", { blob, type }),
+  // `name` is the bare file name in recordings/.
+  deleteRecording: (name: string) =>
+    call<undefined>("DELETE", `/api/recordings/${encodeURIComponent(name)}`),
 };

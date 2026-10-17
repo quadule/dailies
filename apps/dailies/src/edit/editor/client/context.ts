@@ -14,6 +14,9 @@ export interface EditorContext {
   pause(): void;
   // The playhead, in source seconds.
   playhead(): number;
+  // The session changed under the views (a recording deleted): recompute
+  // and redraw.
+  refresh(): void;
   // Voiced lines from the last render, for line durations.
   rendered: RenderedLine[];
   seek(sec: number): void;

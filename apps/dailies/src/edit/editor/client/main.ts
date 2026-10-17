@@ -26,6 +26,7 @@ import {
   attachRecording,
   bindRecorder,
   cancelRecording,
+  deleteOrphans,
   pressRecord,
   type RecorderPhase,
   type RecorderProblem,
@@ -111,6 +112,10 @@ function start(session: EditorSession, initial: RenderStatus): void {
     }),
     pause: () => stage.pause(),
     playhead: () => stage.time(),
+    refresh: () => {
+      recompute();
+      refreshAll();
+    },
     seek: (sec) => stage.seek(sec),
     status(text, tone) {
       invalidNotice = false;
@@ -336,7 +341,19 @@ function start(session: EditorSession, initial: RenderStatus): void {
     try {
       const saved = await api.saveCut(state.cut);
       state.markSaved(saved.cut, sent);
-      ctx.status("Saved cut.json");
+      // Takes this page uploaded that the saved cut no longer uses (replaced,
+      // removed, undone) are deleted now. An undo can still bring one back;
+      // its line then says the file is gone.
+      const removed = await deleteOrphans(saved.cut, state.cut);
+      if (removed.length > 0) {
+        recompute();
+        refreshAll();
+      }
+      ctx.status(
+        removed.length > 0
+          ? `Saved cut.json and deleted ${removed.length === 1 ? "1 unused recording" : `${removed.length} unused recordings`}`
+          : "Saved cut.json"
+      );
       return true;
     } catch (err) {
       ctx.status(`Not saved: ${message(err)}`, "error");

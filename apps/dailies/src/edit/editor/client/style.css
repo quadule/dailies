@@ -653,6 +653,14 @@ textarea {
   display: none;
 }
 
+.audio.gone {
+  border-color: var(--fail);
+}
+
+.audio.gone .mic-problem {
+  margin: 0 0 8px;
+}
+
 .toggle-note {
   font-size: 12px;
   color: var(--faint);
@@ -922,6 +930,46 @@ textarea {
   overflow: hidden;
   border: 0;
   clip-path: inset(50%);
+}
+
+.unused {
+  padding-top: 12px;
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.unused h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.unused-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.unused-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 0;
+}
+
+.unused-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.unused-length {
+  font-size: 12px;
+  color: var(--faint);
 }
 
 .speed-row {

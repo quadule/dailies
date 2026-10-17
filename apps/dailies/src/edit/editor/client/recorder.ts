@@ -16,9 +16,20 @@
 // the MediaRecorder constructor from its caller, defaulting to the browser's
 // (looked up when called, so a page can swap them), which lets
 // recorder.test.ts drive the capture and the state machine under node.
+//
+// Files: the page deletes only recordings it uploaded itself, and only after a
+// save leaves them unreferenced (deleteOrphans); the server refuses to delete
+// a file the cut on disk still names. Recordings no line uses are listed in
+// the Voice panel to delete by hand. A line that an undo points back at a
+// deleted file says so in its audio box (recordingGone).
 
-import { RECORDING_TYPES, type UploadRecordingResponse } from "../contract.js";
-import { api } from "./api.js";
+import type { Cut } from "../../cut.js";
+import {
+  RECORDING_TYPES,
+  RECORDINGS_DIR,
+  type UploadRecordingResponse,
+} from "../contract.js";
+import { ApiError, api } from "./api.js";
 import type { EditorContext } from "./context.js";
 import { button, h, icon, setIcon } from "./dom.js";
 import { clock, snapTime } from "./format.js";
@@ -568,6 +579,10 @@ export class NarrationRecorder {
 let bound: EditorContext | undefined;
 let active: NarrationRecorder | undefined;
 
+// What the page uploaded this visit, and what it has since deleted.
+const uploaded = new Set<string>();
+const deleted = new Set<string>();
+
 export interface RecorderUi {
   // A take was attached to line `lineIndex` (selected now): show it.
   attached(saved: UploadRecordingResponse, lineIndex: number | undefined): void;
@@ -723,6 +738,8 @@ export async function attachRecording(
     );
   }
   const saved = await api.uploadRecording(blob, type);
+  uploaded.add(saved.file);
+  deleted.delete(saved.file);
   // A file got in after all: the last Record press's problem is moot.
   active?.clearProblem();
   ctx.session.recordings = [
@@ -743,6 +760,67 @@ export async function attachRecording(
     return { kind: "line", index: cut.narration.length - 1 };
   });
   return saved;
+}
+
+// ---------------------------------------------------------------------------
+// Deleting.
+// ---------------------------------------------------------------------------
+
+// Delete a recording ("recordings/rec-….webm"). One that is already gone
+// counts as deleted; the server's 409 for one the cut on disk still uses is
+// thrown as an ApiError with its message.
+export async function deleteRecording(file: string): Promise<void> {
+  const ctx = context();
+  const name = file.slice(file.lastIndexOf("/") + 1);
+  try {
+    await api.deleteRecording(name);
+  } catch (err) {
+    if (!(err instanceof ApiError && err.status === 404)) {
+      throw err;
+    }
+  }
+  uploaded.delete(file);
+  deleted.add(file);
+  ctx.session.recordings = ctx.session.recordings.filter(
+    (r) => r.file !== file
+  );
+}
+
+// After a save: delete what this page uploaded that none of `cuts` (the saved
+// cut, and the one being edited if it moved on meanwhile) uses — a take that
+// was replaced, removed or undone. Resolves with the files deleted. A 409
+// (the cut on disk still uses it) leaves the file alone; any other failure
+// leaves it for the next save.
+export async function deleteOrphans(...cuts: Cut[]): Promise<string[]> {
+  const used = new Set(
+    cuts.flatMap((cut) => cut.narration.map((line) => line.audio ?? ""))
+  );
+  const removed: string[] = [];
+  for (const file of [...uploaded]) {
+    if (used.has(file)) {
+      continue;
+    }
+    try {
+      await deleteRecording(file);
+      removed.push(file);
+    } catch {
+      // Kept: in use on disk (409), or the server didn't answer.
+    }
+  }
+  return removed;
+}
+
+// Whether a line's audio file is known to be gone: deleted by this page
+// ("deleted"), or a recordings/ file the server doesn't list ("missing").
+export function recordingGone(file: string): "deleted" | "missing" | undefined {
+  if (deleted.has(file)) {
+    return "deleted";
+  }
+  const ctx = context();
+  const listed = ctx.session.recordings.some((r) => r.file === file);
+  return !listed && file.startsWith(`${RECORDINGS_DIR}/`)
+    ? "missing"
+    : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,4 +1155,13 @@ export function recordingBanner(): RecorderView & { element: HTMLElement } {
       }
     },
   };
+}
+
+// The recordings in recordings/ that no narration line uses, with their
+// length. Files a page left behind, or takes replaced since the last save.
+export function unusedRecordings(
+  cut: Cut
+): { durationSec: number; file: string }[] {
+  const used = new Set(cut.narration.map((line) => line.audio));
+  return context().session.recordings.filter((r) => !used.has(r.file));
 }

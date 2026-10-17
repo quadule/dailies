@@ -467,4 +467,23 @@ describe("analyze", () => {
     expect(result.durations).toHaveLength(2);
     expect(result.placed.map((p) => p.index)).toEqual([0]);
   });
+
+  it("flags a line whose recording is gone from recordings/", () => {
+    const cut = cutOf({
+      narration: [
+        { at: 1, text: "", audio: "recordings/rec-gone.webm" },
+        { at: 3, text: "", audio: "recordings/rec-here.webm" },
+        { at: 5, text: "", audio: "voice/elsewhere.wav" },
+      ],
+    });
+    const result = analyze(cut, {
+      ...ctx,
+      recordings: [{ file: "recordings/rec-here.webm", durationSec: 1 }],
+    });
+    const gone = result.hints.filter((h) => h.includes("is gone"));
+    expect(gone).toHaveLength(1);
+    expect(gone[0]).toMatch(
+      /line at 1\.00s: its recording recordings\/rec-gone\.webm/
+    );
+  });
 });

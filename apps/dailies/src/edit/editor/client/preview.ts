@@ -21,7 +21,7 @@ import {
   planCut,
   TAIL_PAD_SEC,
 } from "../../cut.js";
-import type { EditorRecording } from "../contract.js";
+import { type EditorRecording, RECORDINGS_DIR } from "../contract.js";
 
 // ---------------------------------------------------------------------------
 // The cut, analysed: what the parser says, where everything lands, and what
@@ -124,6 +124,24 @@ function captionHints(cut: Cut, lineMax: number): string[] {
   return hints;
 }
 
+// Lines whose recording, a recordings/ file, isn't among the session's: the
+// render would fail on them ("narration audio … was not found").
+function missingRecordingHints(
+  cut: Cut,
+  recordings: readonly EditorRecording[]
+): string[] {
+  const known = new Set(recordings.map((r) => r.file));
+  return cut.narration
+    .filter(
+      (line) =>
+        line.audio?.startsWith(`${RECORDINGS_DIR}/`) && !known.has(line.audio)
+    )
+    .map(
+      (line) =>
+        `line at ${at(line.at)}: its recording ${line.audio} is gone — the render fails until you record it again, replace it or remove it`
+    );
+}
+
 // Everything the editor shows about a cut, computed the way the render does
 // (render.ts renderCutVideo): plan, place the lines, extend the tail for an
 // overrunning last line, then the captions.
@@ -159,7 +177,11 @@ export function analyze(cut: Cut, ctx: AnalysisContext): Analysis {
     placed: placed.map((p) => ({ ...p, index: cut.narration.indexOf(p.line) })),
     cues,
     durations,
-    hints: [...warnings, ...captionHints(cut, ctx.lineMax)],
+    hints: [
+      ...missingRecordingHints(cut, ctx.recordings),
+      ...warnings,
+      ...captionHints(cut, ctx.lineMax),
+    ],
   };
 }
 
