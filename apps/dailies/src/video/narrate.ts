@@ -71,6 +71,12 @@ import {
 } from "./media-preferences.js";
 import { resolveOmlxProviders } from "./omlx.js";
 import {
+  PIPER_TTS_ID,
+  type PiperResolution,
+  piperVoiceName,
+  resolvePiperProviders,
+} from "./piper.js";
+import {
   type MediaProviders,
   type MusicProvider,
   resolveMediaProviders,
@@ -682,6 +688,9 @@ export function voiceCredit(
   const label = voiceLabel.trim();
   if (ttsId === "omlx-tts") {
     return `Voice — oMLX ${label.replace(/^omlx:/, "")}`.trim();
+  }
+  if (ttsId === PIPER_TTS_ID) {
+    return `Voice — ${piperVoiceName(label)} (Piper)`;
   }
   if (ttsId === "gemini-tts") {
     return `Voice — ${label.replace(/^gemini:/, "")} (Google Gemini)`;
@@ -2554,6 +2563,7 @@ export interface MediaCandidates {
     elevenlabs?: TtsProvider;
     gemini?: TtsProvider;
     omlx?: TtsProvider;
+    piper?: TtsProvider;
   };
   // Why a CONFIGURED provider still isn't a candidate (a rejected key, an
   // unreachable server), by provider name — shown instead of the generic
@@ -2562,6 +2572,10 @@ export interface MediaCandidates {
 }
 
 export interface MediaSelection {
+  // Why each configured narrator that isn't a candidate can't speak ("piper is
+  // not available — it has no voice in …"), for the error when nothing at all
+  // can voice the lines.
+  narratorProblems: string[];
   // `--image none`: a solid card, not even the local gradient.
   noTitleBackground: boolean;
   // Degradation/selection notes for the user (a pin that couldn't be honored).
@@ -2590,8 +2604,14 @@ const UNAVAILABLE_HINT: Record<string, string> = {
     "set GEMINI_API_KEY (or GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account)",
   local: "set DAILIES_IMAGE_URL to an OpenAI-images-compatible server",
   omlx: "run an oMLX server with a TTS model loaded (DAILIES_OMLX_URL / DAILIES_OMLX_API_KEY)",
+  piper:
+    "install Piper (pip install piper-tts, or piper-tts from the AUR) and a voice, or point DAILIES_PIPER at it",
   wikimedia: "Wikimedia Commons needs network access",
 };
+
+// The narrators that come from TTS candidates, in the unpinned order (`say`
+// is the fallback resolved later, not a candidate).
+const TTS_NARRATORS = ["omlx", "piper", "elevenlabs", "gemini"] as const;
 
 function unavailable(
   name: string,
@@ -2603,7 +2623,7 @@ function unavailable(
 
 // Pick ONE provider per slot from the candidates. Without a preference the
 // order is local-first, then hosted keys, then the free/stock fallbacks:
-//   narrator    oMLX → ElevenLabs → Gemini → (macOS `say`, chosen later)
+//   narrator    oMLX → Piper → ElevenLabs → Gemini → (macOS `say`, chosen later)
 //   music       archive.org when forced on → ACE-Step → ElevenLabs → Gemini
 //               → archive.org as the no-model fallback
 //   title art   local image server → Gemini → Wikimedia → (local gradient,
@@ -2625,7 +2645,11 @@ export function selectMediaProviders(args: {
   const notes = [narrator.note, score.note, art.note].filter((n): n is string =>
     Boolean(n)
   );
+  const narratorProblems = TTS_NARRATORS.filter(
+    (name) => !candidates.tts[name] && candidates.unavailable?.[name]
+  ).map((name) => unavailable(name, candidates.unavailable));
   return {
+    narratorProblems,
     noTitleBackground: art.noTitleBackground,
     notes,
     providers: {
@@ -2665,7 +2689,9 @@ function selectNarrator(
           skip: `narrator pinned to ${p.narrator} but ${unavailable(p.narrator, c.unavailable)}`,
         };
   }
-  return { tts: c.tts.omlx ?? c.tts.elevenlabs ?? c.tts.gemini };
+  return {
+    tts: c.tts.omlx ?? c.tts.piper ?? c.tts.elevenlabs ?? c.tts.gemini,
+  };
 }
 
 // Music slot (the score under narration; the credits swell).
@@ -2767,10 +2793,10 @@ export async function resolveMedia(args: {
   echo: Echo;
   notes: string[];
   preferences?: MediaPreferences;
-  // Song mode has no spoken narration, so oMLX (TTS-only) is neither used nor
-  // relevant — skip it so its "no TTS model / using fallback narration" notes
-  // don't surface on a cut that has no voice-over. Song's vocals come from the
-  // singing music model (ACE-Step / ElevenLabs / Lyria) resolved below.
+  // Song mode has no spoken narration, so oMLX and Piper (TTS-only) are
+  // neither used nor relevant — skip them so their "no TTS model / no voice"
+  // notes don't surface on a cut that has no voice-over. Song's vocals come
+  // from the singing music model (ACE-Step / ElevenLabs / Lyria) resolved below.
   song?: boolean;
 }): Promise<MediaSelection> {
   const { ffmpeg, log, echo, notes, preferences, song = false } = args;
@@ -2781,10 +2807,13 @@ export async function resolveMedia(args: {
   }
   const musicPin = preferences?.music;
   const imagePin = preferences?.image;
-  const [omlx, acestep, elevenlabs] = await Promise.all([
+  const [omlx, piper, acestep, elevenlabs] = await Promise.all([
     song
       ? Promise.resolve({ tts: undefined, notes: [] as string[] })
       : resolveOmlxProviders({ env, log, echo }),
+    song
+      ? Promise.resolve<PiperResolution>({ notes: [] })
+      : resolvePiperProviders({ env, log, echo }),
     resolveAceStepMusic({ env, log, echo }),
     // The ElevenLabs image flow is opt-in (Pro plan, async job) — only built
     // when the user asked for it by name.
@@ -2814,6 +2843,11 @@ export async function resolveMedia(args: {
   if (!song && omlxConfigured && !omlx.tts) {
     unavailable.omlx =
       "oMLX is configured but unreachable or has no TTS model loaded (see the notes)";
+  }
+  // Piper says exactly what's wrong: no voice (with the download command), an
+  // unknown voice name, or a $DAILIES_PIPER that isn't there.
+  if (piper.unavailable) {
+    unavailable.piper = piper.unavailable;
   }
   // Stock/free fallbacks: archive.org music and Wikimedia images turn ON
   // automatically when no corresponding AI MODEL is configured (and no slot is
@@ -2847,7 +2881,12 @@ export async function resolveMedia(args: {
   });
   const selection = selectMediaProviders({
     candidates: {
-      tts: { omlx: omlx.tts, elevenlabs: elevenlabs.tts, gemini: gemini.tts },
+      tts: {
+        omlx: omlx.tts,
+        piper: piper.tts,
+        elevenlabs: elevenlabs.tts,
+        gemini: gemini.tts,
+      },
       music: {
         archive: archive.music,
         acestep: acestep.music,
@@ -2866,11 +2905,16 @@ export async function resolveMedia(args: {
     preferences,
     song,
   });
-  notes.push(...omlx.notes, ...acestep.notes, ...elevenlabs.notes);
+  notes.push(
+    ...omlx.notes,
+    ...piper.notes,
+    ...acestep.notes,
+    ...elevenlabs.notes
+  );
   // Surface Gemini's notes only when Gemini is actually active, or when there's
   // genuinely no hosted/local alternative — otherwise its "no key → using say"
   // note contradicts the oMLX/ElevenLabs/ACE-Step/archive providers above.
-  const anyTts = Boolean(omlx.tts || elevenlabs.tts || gemini.tts);
+  const anyTts = Boolean(omlx.tts || piper.tts || elevenlabs.tts || gemini.tts);
   if (gemini.tts || !(anyTts || selection.providers.music)) {
     notes.push(...gemini.notes);
   }
@@ -3094,7 +3138,7 @@ async function runNarrationPass(
   const speech = await resolveSpeech(providers, notes, echo);
   if (!speech) {
     return notApplied(
-      "cinematic narration needs macOS `say` or a TTS provider — set ELEVENLABS_API_KEY or GEMINI_API_KEY (GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account), run an oMLX TTS server, or point DAILIES_SAY_COMMAND at a say-compatible tool"
+      "cinematic narration needs macOS `say` or a TTS provider — install Piper and a voice, set ELEVENLABS_API_KEY or GEMINI_API_KEY (GOOGLE_APPLICATION_CREDENTIALS for a Vertex service account), run an oMLX TTS server, or point DAILIES_SAY_COMMAND at a say-compatible tool"
     );
   }
 

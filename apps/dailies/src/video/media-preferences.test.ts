@@ -58,6 +58,9 @@ describe("parseMediaPreferences", () => {
     expect(parseMediaPreferences({ narrator: "macOS" }, {})).toEqual({
       preferences: { narrator: "say" },
     });
+    expect(parseMediaPreferences({ narrator: "piper-tts" }, {})).toEqual({
+      preferences: { narrator: "piper" },
+    });
   });
 
   it("reads the env vars, and lets a flag beat them", () => {
@@ -82,7 +85,7 @@ describe("parseMediaPreferences", () => {
     const fromFlag = parseMediaPreferences({ narrator: "polly" }, {});
     expect(fromFlag).toEqual({
       error:
-        '--narrator "polly" is not a narration voice provider; valid: elevenlabs, gemini, omlx, say',
+        '--narrator "polly" is not a narration voice provider; valid: elevenlabs, gemini, omlx, piper, say',
     });
     const fromEnv = parseMediaPreferences({}, { DAILIES_IMAGE: "dalle" });
     expect("error" in fromEnv && fromEnv.error).toContain(

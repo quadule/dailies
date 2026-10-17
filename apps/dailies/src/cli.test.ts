@@ -189,7 +189,7 @@ describe("media provider pins", () => {
     expect(err).toContain(
       '--narrator "polly" is not a narration voice provider'
     );
-    expect(err).toContain("elevenlabs, gemini, omlx, say");
+    expect(err).toContain("elevenlabs, gemini, omlx, piper, say");
   });
 
   it("checks every slot, naming the one that is wrong", async () => {

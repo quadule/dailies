@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { Cut } from "./cut.js";
 import {
+  cutNarrator,
   narratorOf,
   singlePassArgs,
   staleCacheFiles,
@@ -65,7 +67,44 @@ describe("narratorOf", () => {
     expect(narratorOf("gemini-tts")).toBe("gemini");
     expect(narratorOf("elevenlabs-tts")).toBe("elevenlabs");
     expect(narratorOf("omlx-tts")).toBe("omlx");
+    expect(narratorOf("piper-tts")).toBe("piper");
     expect(narratorOf("mystery-tts")).toBeUndefined();
+    // `say` is the fallback voice, never a TTS provider's id.
+    expect(narratorOf("say-tts")).toBeUndefined();
+  });
+});
+
+describe("cutNarrator", () => {
+  const cut = (voice: Cut["voice"]): Cut => ({
+    version: 1,
+    video: "page@main.webm",
+    voice,
+    steps: [],
+    cuts: [],
+    holds: [],
+    speedups: [],
+    captions: [],
+    narration: [],
+  });
+
+  it("keeps the narrator the cut names over the environment's pin", () => {
+    expect(
+      cutNarrator(cut({ narrator: "say" }), { DAILIES_NARRATOR: "piper" })
+    ).toEqual({ narrator: "say" });
+  });
+
+  it("takes $DAILIES_NARRATOR for a cut that names none", () => {
+    expect(cutNarrator(cut({}), { DAILIES_NARRATOR: "Piper" })).toEqual({
+      narrator: "piper",
+    });
+    expect(cutNarrator(cut({}), {})).toEqual({ narrator: undefined });
+  });
+
+  it("refuses a pin that names no narrator", () => {
+    const result = cutNarrator(cut({}), { DAILIES_NARRATOR: "polly" });
+    expect("error" in result && result.error).toContain(
+      '$DAILIES_NARRATOR "polly"'
+    );
   });
 });
 
@@ -74,6 +113,15 @@ describe("voiceFromLabel", () => {
     expect(voiceFromLabel("gemini:Charon")).toBe("Charon");
     expect(voiceFromLabel("elevenlabs:Aria")).toBe("Aria");
     expect(voiceFromLabel("omlx:kokoro/af_heart")).toBe("af_heart");
+    expect(voiceFromLabel("piper:en_US-lessac-medium")).toBe(
+      "en_US-lessac-medium"
+    );
+  });
+
+  it("keeps a Piper voice given by path whole, so a re-render finds that file", () => {
+    expect(voiceFromLabel("piper:/opt/voices/en_GB-alba-medium.onnx")).toBe(
+      "/opt/voices/en_GB-alba-medium.onnx"
+    );
   });
 
   it("names no voice for a model that uses its default", () => {

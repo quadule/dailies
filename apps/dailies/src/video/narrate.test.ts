@@ -662,6 +662,13 @@ describe("voiceCredit", () => {
     expect(voiceCredit("gemini-tts", "gemini:Charon")).toBe(
       "Voice — Charon (Google Gemini)"
     );
+    expect(voiceCredit("piper-tts", "piper:en_US-lessac-medium")).toBe(
+      "Voice — en_US-lessac-medium (Piper)"
+    );
+    // A voice given by its model path is credited by name, not by path.
+    expect(
+      voiceCredit("piper-tts", "piper:/opt/voices/en_GB-alba-medium.onnx")
+    ).toBe("Voice — en_GB-alba-medium (Piper)");
     expect(voiceCredit(undefined, "Ava (Premium)")).toBe(
       "Voice — Ava (Premium)"
     );

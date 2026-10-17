@@ -15,6 +15,7 @@ export const NARRATOR_CHOICES = [
   "elevenlabs",
   "gemini",
   "omlx",
+  "piper",
   "say",
 ] as const;
 export const MUSIC_CHOICES = [
@@ -72,6 +73,7 @@ const ALIASES: Record<string, string> = {
   stock: "archive",
   "wikimedia-commons": "wikimedia",
   commons: "wikimedia",
+  "piper-tts": "piper",
   macos: "say",
   system: "say",
   apple: "say",

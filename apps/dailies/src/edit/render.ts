@@ -39,7 +39,10 @@ import {
   run,
   VP8_ENCODE_ARGS,
 } from "../video/ffmpeg.js";
-import type { NarratorChoice } from "../video/media-preferences.js";
+import {
+  type NarratorChoice,
+  parseMediaPreferences,
+} from "../video/media-preferences.js";
 import {
   buildAudioMix,
   captionBandPx,
@@ -87,20 +90,29 @@ const LOUDNORM = "loudnorm=I=-16:TP=-1.5:LRA=11";
 const VOICE_ENV: Record<NarratorChoice, string> = {
   say: "DAILIES_SAY_VOICE",
   omlx: "DAILIES_OMLX_TTS_VOICE",
+  piper: "DAILIES_PIPER_VOICE",
   elevenlabs: "DAILIES_ELEVENLABS_VOICE",
   gemini: "DAILIES_TTS_VOICE",
 };
 
+// The narrators that are TTS providers (`say` is the fallback, not a provider).
+const TTS_NARRATORS = new Set<string>([
+  "omlx",
+  "piper",
+  "elevenlabs",
+  "gemini",
+]);
+
 // Which narrator a TTS provider is, from its id ("gemini-tts" → gemini).
 export function narratorOf(ttsId: string): NarratorChoice | undefined {
-  const prefix = ttsId.split("-")[0];
-  return prefix === "omlx" || prefix === "elevenlabs" || prefix === "gemini"
-    ? prefix
-    : undefined;
+  const prefix = ttsId.split("-")[0] ?? "";
+  return TTS_NARRATORS.has(prefix) ? (prefix as NarratorChoice) : undefined;
 }
 
 // The voice a provider label names: "gemini:Charon" → Charon,
-// "omlx:model/voice" → voice, "omlx:model" → none (the model's default).
+// "piper:en_US-lessac-medium" → en_US-lessac-medium (or the .onnx path a
+// voice was given by), "omlx:model/voice" → voice, "omlx:model" → none (the
+// model's default).
 export function voiceFromLabel(label: string): string | undefined {
   const afterColon = label.includes(":")
     ? label.slice(label.indexOf(":") + 1)
@@ -161,15 +173,39 @@ function resolveVoice(
   );
 }
 
+// Who voices a cut: the narrator it names, else the pin in $DAILIES_NARRATOR
+// (the same one `session end` reads), else the default order.
+export function cutNarrator(
+  cut: Cut,
+  env: NodeJS.ProcessEnv = process.env
+): { narrator?: NarratorChoice } | { error: string } {
+  if (cut.voice.narrator) {
+    return { narrator: cut.voice.narrator };
+  }
+  const parsed = parseMediaPreferences(
+    {},
+    { DAILIES_NARRATOR: env.DAILIES_NARRATOR }
+  );
+  return "error" in parsed ? parsed : { narrator: parsed.preferences.narrator };
+}
+
+const VOICE_FIXES =
+  "use macOS, install Piper and a voice, set ELEVENLABS_API_KEY or GEMINI_API_KEY, run an oMLX TTS server, or point DAILIES_SAY_COMMAND at a say-compatible tool";
+
 async function resolveVoiceNow(
   cut: Cut,
   ffmpeg: string,
   notes: string[],
   echo: Echo
 ): Promise<Voice | { error: string }> {
-  const { narrator } = cut.voice;
-  // resolveMedia's notes are about music and title art, which a cut doesn't
-  // use; only the voice notes from resolveSpeech below are worth showing.
+  const pin = cutNarrator(cut);
+  if ("error" in pin) {
+    return pin;
+  }
+  const { narrator } = pin;
+  // resolveMedia's notes are mostly about music and title art, which a cut
+  // doesn't use; a narrator that can't speak reaches the error below through
+  // narratorProblems, and the voice notes come from resolveSpeech.
   const selection = await resolveMedia({
     ffmpeg,
     log: logger,
@@ -194,9 +230,12 @@ async function resolveVoiceNow(
   }
   const speech = await resolveSpeech(selection.providers, notes, echo);
   if (!speech?.say) {
+    const problems = selection.narratorProblems;
     return {
       error:
-        "no voice available for the narration — use macOS, set ELEVENLABS_API_KEY or GEMINI_API_KEY, run an oMLX TTS server, or point DAILIES_SAY_COMMAND at a say-compatible tool",
+        problems.length > 0
+          ? `no voice available for the narration: ${problems.join("; ")}. Otherwise ${VOICE_FIXES}`
+          : `no voice available for the narration — ${VOICE_FIXES}`,
     };
   }
   // A custom $DAILIES_SAY_COMMAND labels itself with its own command line; that

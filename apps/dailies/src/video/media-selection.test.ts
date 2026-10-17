@@ -32,6 +32,7 @@ function image(id: string): TitleBackgroundProvider {
 const everything: MediaCandidates = {
   tts: {
     omlx: tts("omlx-tts"),
+    piper: tts("piper-tts"),
     elevenlabs: tts("elevenlabs-tts"),
     gemini: tts("gemini-tts"),
   },
@@ -66,6 +67,14 @@ describe("selectMediaProviders (no preference)", () => {
     expect(s.skip).toBeUndefined();
     expect(s.notes).toEqual([]);
     expect(s.noTitleBackground).toBe(false);
+  });
+
+  it("voices with Piper after oMLX and before the hosted keys", () => {
+    const { omlx: _omlx, ...rest } = everything.tts;
+    const s = selectMediaProviders({
+      candidates: { ...everything, tts: rest },
+    });
+    expect(s.providers.tts?.id).toBe("piper-tts");
   });
 
   it("puts ElevenLabs ahead of Gemini once the local servers are gone", () => {
@@ -145,6 +154,39 @@ describe("selectMediaProviders (pinned)", () => {
     });
     expect(s.providers.tts).toBeUndefined();
     expect(s.skip).toBeUndefined();
+  });
+
+  it("takes Piper when it is pinned, over a local oMLX server", () => {
+    const s = selectMediaProviders({
+      candidates: everything,
+      preferences: { narrator: "piper" },
+    });
+    expect(s.providers.tts?.id).toBe("piper-tts");
+  });
+
+  it("a pinned Piper with no voice skips the pass with the download command", () => {
+    const reason =
+      "it has no voice in /voices; download one with: python3 -m piper.download_voices en_US-lessac-medium --data-dir /voices";
+    const s = selectMediaProviders({
+      candidates: {
+        ...everything,
+        tts: { gemini: tts("gemini-tts") },
+        unavailable: { piper: reason },
+      },
+      preferences: { narrator: "piper" },
+    });
+    expect(s.providers.tts).toBeUndefined();
+    expect(s.skip).toBe(
+      `narrator pinned to piper but piper is not available — ${reason}`
+    );
+  });
+
+  it("a pinned Piper that isn't installed says how to install it", () => {
+    const s = selectMediaProviders({
+      candidates: nothing,
+      preferences: { narrator: "piper" },
+    });
+    expect(s.skip).toContain("pip install piper-tts");
   });
 
   it("skips the pass (never a silent switch) when the pinned narrator is missing", () => {
@@ -322,5 +364,34 @@ describe("writer credit", () => {
         song: true,
       })[0]
     ).toBe("Lyrics — Claude (Anthropic)");
+  });
+});
+
+describe("selectMediaProviders narratorProblems", () => {
+  it("names each configured narrator that can't speak, in the narrator order", () => {
+    const s = selectMediaProviders({
+      candidates: {
+        ...nothing,
+        unavailable: {
+          piper: "it has no voice in /voices",
+          omlx: "oMLX is unreachable",
+          acestep: "the ACE-Step server is unreachable",
+        },
+      },
+    });
+    expect(s.narratorProblems).toEqual([
+      "omlx is not available — oMLX is unreachable",
+      "piper is not available — it has no voice in /voices",
+    ]);
+  });
+
+  it("leaves out a narrator that is a candidate after all", () => {
+    const s = selectMediaProviders({
+      candidates: {
+        ...everything,
+        unavailable: { elevenlabs: "rejected for music" },
+      },
+    });
+    expect(s.narratorProblems).toEqual([]);
   });
 });
