@@ -16,12 +16,13 @@ import type { RenderStatus } from "../contract.js";
 import type { EditorContext } from "./context.js";
 import { button, h, setIcon } from "./dom.js";
 import { clock, endOf, parseSeconds, snapTime, span } from "./format.js";
-import { recordingControls } from "./recorder.js";
+import { recordButton, recordingControls } from "./recorder.js";
 import type { Selection } from "./state.js";
 
 export interface Inspector {
   element: HTMLElement;
-  // Focus the selected item's main text field (after adding a line).
+  // Focus the selected item's main text field (after adding a line, or
+  // recording one).
   focusText(): void;
   refresh(): void;
   showRender(status: RenderStatus): void;
@@ -36,6 +37,9 @@ const DEFAULT_CAPTION_SEC = 3;
 const DEFAULT_HOLD_SEC = 2;
 const DEFAULT_RATE = 4;
 const LOG_LINES = 6;
+// The spoken-text field of a recorded line with no text yet.
+const RECORDED_PLACEHOLDER =
+  "Type what you said for the caption, or leave it blank";
 
 let ids = 0;
 function nextId(base: string): string {
@@ -430,6 +434,8 @@ export function createInspector(
     };
   }
 
+  // A narration line's recording: what it is, Play, and the ways to replace
+  // or drop it — Record (from the microphone), a file, or text to speech.
   function audioBlock(i: number): HTMLElement {
     const line = state.cut.narration[i];
     const audio = line?.audio;
@@ -437,16 +443,34 @@ export function createInspector(
       class: "field audio",
       attrs: { role: "group", "aria-label": "Recording" },
     });
+    const controls = recordingControls(i, Boolean(audio));
+    fields.push({ node: block, update: () => controls.update() });
     if (!audio) {
       block.append(
         h("p", {
           class: "note",
-          text: "Voiced by text to speech. Attach a recording to use your own voice.",
+          text: "Voiced by text to speech. Record it from your microphone, or attach a recording.",
         }),
-        h("div", { class: "audio-actions" }, ...recordingControls(i, false))
+        h("div", { class: "audio-actions" }, ...controls.buttons),
+        controls.message
       );
       return block;
     }
+    const removeButton = button(
+      "Remove recording",
+      () =>
+        edit((c) => {
+          const l = c.narration[i];
+          if (l) {
+            const { audio: _drop, ...rest } = l;
+            c.narration[i] = rest;
+          }
+        }),
+      {
+        class: "btn sm ghost",
+        title: "Voice this line with text to speech instead",
+      }
+    );
     const recording = ctx.session.recordings.find((r) => r.file === audio);
     const player = h("audio", { src: `/${audio}`, preload: "none" });
     const play = button(
@@ -486,23 +510,10 @@ export function createInspector(
         "div",
         { class: "audio-actions" },
         play,
-        ...recordingControls(i, true),
-        button(
-          "Remove recording",
-          () =>
-            edit((c) => {
-              const l = c.narration[i];
-              if (l) {
-                const { audio: _drop, ...rest } = l;
-                c.narration[i] = rest;
-              }
-            }),
-          {
-            class: "btn sm ghost",
-            title: "Voice this line with text to speech instead",
-          }
-        )
-      )
+        ...controls.buttons,
+        removeButton
+      ),
+      controls.message
     );
     return block;
   }
@@ -519,7 +530,10 @@ export function createInspector(
             line.text = v;
           }
         }),
-      { placeholder: "What the line says", rows: 3 }
+      {
+        placeholder: get()?.audio ? RECORDED_PLACEHOLDER : "What the line says",
+        rows: 3,
+      }
     );
     mainText = text.input;
     const duration = note(() => {
@@ -552,6 +566,7 @@ export function createInspector(
       duration,
       mode,
     ];
+    const nodes = fields.map((f) => f.node);
     return [
       header(
         "Narration line",
@@ -559,7 +574,7 @@ export function createInspector(
         state.cut.narration.length,
         () => get()?.at ?? 0
       ),
-      ...fields.map((f) => f.node),
+      ...nodes,
       audioBlock(i),
     ];
   }
@@ -867,6 +882,7 @@ export function createInspector(
     });
   }
 
+  const recordNew = recordButton(undefined, false);
   const add = h(
     "section",
     { class: "panel add", attrs: { "aria-labelledby": "add-title" } },
@@ -887,12 +903,15 @@ export function createInspector(
         title: `Freeze the frame for ${DEFAULT_HOLD_SEC}s`,
       })
     ),
+    h("div", { class: "button-row" }, recordNew.button),
+    recordNew.message,
     h("p", { class: "sub", text: "From the in point to the out point" }),
     h("div", { class: "button-row" }, addCut, addSpeedup),
     addNote
   );
 
   function drawAdd(): void {
+    recordNew.update();
     const { in: start, out: end } = state.marks;
     const ready = start !== undefined && end !== undefined && end > start;
     addCut.disabled = !ready;
@@ -1066,6 +1085,11 @@ export function createInspector(
         ["← →", "One frame (Shift: one second)"],
         ["Home End", "Start / end"],
         ["I O", "In / out point"],
+        [
+          "R",
+          "Record narration — the selected line, else a new one at the playhead; again to stop",
+        ],
+        ["Esc", "While recording: cancel, keeping nothing"],
         ["Delete", "Delete the selection"],
         ["Esc", "Clear the selection, then the in/out points"],
         ["Ctrl/⌘ S", "Save"],

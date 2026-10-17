@@ -94,7 +94,11 @@ const ICONS = {
   copy: "M5.5 5.5V3h7.5v7.5h-2.5M3 5.5h7.5V13H3z",
   stop: "M4.5 4.5h7v7h-7z",
   upload: "M8 10.5V3M5 6l3-3 3 3M3 10.5V13h10v-2.5",
+  record: "M8 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
 } as const;
+
+// Icons drawn as a filled shape rather than a stroke.
+const FILLED: ReadonlySet<IconName> = new Set(["play", "record"]);
 
 export type IconName = keyof typeof ICONS;
 
@@ -108,7 +112,7 @@ export function icon(name: IconName): SVGSVGElement {
   svg.classList.add("ico");
   const path = document.createElementNS(SVG, "path");
   path.setAttribute("d", ICONS[name]);
-  if (name === "play") {
+  if (FILLED.has(name)) {
     path.setAttribute("fill", "currentColor");
   } else {
     path.setAttribute("fill", "none");

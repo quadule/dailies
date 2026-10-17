@@ -479,6 +479,7 @@ textarea {
 }
 
 .screen-area {
+  position: relative;
   display: flex;
   flex: 1;
   align-items: center;
@@ -536,6 +537,120 @@ textarea {
   color: #fff;
   background: rgb(0 0 0 / 0.72);
   border-radius: var(--r);
+}
+
+/* ---------- recording narration ---------- */
+
+.rec-banner {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  z-index: 2;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 6px 5px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  background: rgb(0 0 0 / 0.8);
+  border-radius: var(--r-full);
+  box-shadow: var(--shadow);
+  translate: -50% 0;
+}
+
+.rec-banner[hidden] {
+  display: none;
+}
+
+.rec-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  background: #ff453a;
+  border-radius: var(--r-full);
+}
+
+.rec-banner:not([data-phase="recording"]) .rec-dot {
+  background: #8c8d7c;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .rec-banner[data-phase="recording"] .rec-dot {
+    animation: rec-pulse 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes rec-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.rec-clock {
+  min-width: 46px;
+}
+
+.rec-meter {
+  position: relative;
+  width: 96px;
+  height: 6px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 0.22);
+  border-radius: var(--r-full);
+}
+
+.rec-meter[hidden],
+.rec-clock[hidden] {
+  display: none;
+}
+
+.rec-meter-fill {
+  position: absolute;
+  inset: 0;
+  background: #4cd964;
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+
+.rec-banner .btn {
+  color: #fff;
+  background: transparent;
+  border-color: rgb(255 255 255 / 0.4);
+  border-radius: var(--r-full);
+}
+
+.rec-banner .btn:hover:not(:disabled) {
+  border-color: #fff;
+}
+
+.rec-banner .btn.ghost {
+  border-color: transparent;
+}
+
+.rec-btn .ico {
+  color: var(--fail);
+}
+
+.rec-btn.live {
+  color: #fff;
+  background: var(--fail);
+  border-color: var(--fail);
+}
+
+.rec-btn.live .ico {
+  color: currentColor;
+}
+
+.mic-problem {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--fail);
+}
+
+.mic-problem[hidden] {
+  display: none;
 }
 
 .toggle-note {

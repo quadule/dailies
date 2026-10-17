@@ -3,21 +3,34 @@
 //
 // main.ts boots the editor and lays it out: the top bar (save, render, undo),
 // the validation line, the stage (stage.ts, a live preview of the edits), the
-// inspector (inspector.ts) and the timeline (timeline.ts). The cut model is
+// inspector (inspector.ts) and the timeline (timeline.ts), and wires the
+// narration recorder (recorder.ts) to the stage. The cut model is
 // edit/cut.ts itself, so every output time shown here is the one the render
 // will produce. Every time in the cut is SOURCE time.
 //
 // window.dailiesEditor is a small handle for QA scripts (see AGENTS.md).
 
 import type { Cut } from "../../cut.js";
-import type { EditorSession, RenderStatus } from "../contract.js";
+import type {
+  EditorSession,
+  RenderStatus,
+  UploadRecordingResponse,
+} from "../contract.js";
 import { api } from "./api.js";
 import type { EditorContext } from "./context.js";
 import { button, h, isTyping } from "./dom.js";
-import { clock, endOf } from "./format.js";
+import { clock, endOf, span } from "./format.js";
 import { createInspector } from "./inspector.js";
 import { analyze } from "./preview.js";
-import { attachRecording, bindRecorder } from "./recorder.js";
+import {
+  attachRecording,
+  bindRecorder,
+  cancelRecording,
+  pressRecord,
+  type RecorderPhase,
+  type RecorderProblem,
+  recordingBanner,
+} from "./recorder.js";
 import { createStage } from "./stage.js";
 import { EditorState } from "./state.js";
 import { createTimeline } from "./timeline.js";
@@ -31,6 +44,9 @@ const POLL_RETRIES = 5;
 export interface DailiesEditor {
   addRecording: typeof attachRecording;
   getCut(): Cut;
+  // The narration recorder: its phase, and why the last Record press didn't
+  // record.
+  recording(): { phase: RecorderPhase; problem?: RecorderProblem };
   render(): Promise<RenderStatus | undefined>;
   save(): Promise<boolean>;
   seek(sec: number): void;
@@ -117,13 +133,39 @@ function start(session: EditorSession, initial: RenderStatus): void {
     });
   };
   recompute();
-  bindRecorder(ctx);
+
+  // A take was attached and its line selected: put the cursor in its text
+  // and the playhead on it, to review it by playing.
+  function recorded(saved: UploadRecordingResponse, line?: number): void {
+    inspector.focusText();
+    const at = line === undefined ? undefined : state.cut.narration[line]?.at;
+    if (at !== undefined) {
+      stage.seek(at);
+    }
+    ctx.status(
+      `Recorded ${span(saved.durationSec)} — type what you said for the caption, or leave it blank. Play to review it; save to keep it.`
+    );
+  }
+
+  const banner = recordingBanner();
+  const recorder = bindRecorder(ctx, {
+    attached: recorded,
+    changed: () => {
+      app.dataset.recording = recorder.phase;
+      banner.update();
+      inspector.refresh();
+    },
+    pause: () => stage.pause(),
+    play: (sec) => stage.playSilently(sec),
+  });
 
   const stage = createStage(ctx);
   const timeline = createTimeline(ctx);
   const inspector = createInspector(ctx, {
     editCaption: (i) => timeline.editCaption(i),
   });
+  stage.addOverlay(banner.element);
+  stage.onPause(() => recorder.playbackStopped());
 
   // ----- top bar -----
 
@@ -447,12 +489,20 @@ function start(session: EditorSession, initial: RenderStatus): void {
     }
   }
 
-  function onKey(event: KeyboardEvent): void {
+  // Keys that work wherever the focus is: Ctrl/⌘ S saves, and Escape throws
+  // a recording away.
+  function anywhereKey(event: KeyboardEvent): boolean {
     const mod = event.ctrlKey || event.metaKey;
-    const key = event.key.toLowerCase();
-    if (mod && key === "s") {
-      event.preventDefault();
+    if (mod && event.key.toLowerCase() === "s") {
       void save();
+      return true;
+    }
+    return event.key === "Escape" && cancelRecording();
+  }
+
+  function onKey(event: KeyboardEvent): void {
+    if (anywhereKey(event)) {
+      event.preventDefault();
       return;
     }
     if (isTyping(event.target)) {
@@ -461,6 +511,8 @@ function start(session: EditorSession, initial: RenderStatus): void {
       }
       return;
     }
+    const mod = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
     if (mod && (key === "z" || key === "y")) {
       event.preventDefault();
       history(key === "y" || event.shiftKey);
@@ -469,10 +521,18 @@ function start(session: EditorSession, initial: RenderStatus): void {
     if (mod || event.altKey) {
       return;
     }
-    const handled = shortcut(event);
+    const handled = key === "r" ? record() : shortcut(event);
     if (handled) {
       event.preventDefault();
     }
+  }
+
+  // R: record the selected narration line, else a new one at the playhead;
+  // again to stop.
+  function record(): boolean {
+    const sel = state.selection;
+    pressRecord(sel?.kind === "line" ? sel.index : undefined);
+    return true;
   }
 
   function shortcut(event: KeyboardEvent): boolean {
@@ -522,10 +582,12 @@ function start(session: EditorSession, initial: RenderStatus): void {
 
   window.addEventListener("keydown", onKey);
   window.addEventListener("beforeunload", (event) => {
-    if (state.dirty) {
+    if (state.dirty || recorder.busy) {
       event.preventDefault();
     }
   });
+  // Let go of the microphone with the page.
+  window.addEventListener("pagehide", () => recorder.release());
 
   window.dailiesEditor = {
     getCut: () => structuredClone(state.cut),
@@ -536,6 +598,10 @@ function start(session: EditorSession, initial: RenderStatus): void {
       });
     },
     addRecording: attachRecording,
+    recording: () => ({
+      phase: recorder.phase,
+      ...(recorder.problem ? { problem: { ...recorder.problem } } : {}),
+    }),
     save,
     render,
     seek: (sec) => stage.seek(sec),

@@ -9,6 +9,10 @@
 // and voices burned in), mapping its time back to source time for the
 // playhead. It is the video as last rendered, which may predate edits, so its
 // label says when that was.
+//
+// While a narration line is recorded the stage plays the preview silently
+// (playSilently): the video and every recorded line muted, so nothing from
+// the speakers reaches the microphone. Any pause ends that.
 
 import {
   type Cut,
@@ -37,12 +41,20 @@ import {
 } from "./preview.js";
 
 export interface Stage {
+  // Lay `node` over the picture (the recording banner).
+  addOverlay(node: HTMLElement): void;
   element: HTMLElement;
   jumpStep(direction: -1 | 1): void;
   // Set the in or out point at the playhead.
   mark(which: "in" | "out"): void;
+  // Playback stopped: a pause, the end of the cut, a seek by frames.
+  onPause(listener: () => void): void;
   onTime(listener: (sourceSec: number, playing: boolean) => void): void;
   pause(): void;
+  // Play the preview from `sec` with the video and every recorded line
+  // muted, switching to "Preview edits" if another mode is on. The next
+  // pause unmutes.
+  playSilently(sec: number): void;
   refresh(): void;
   seek(sec: number): void;
   // The cut the rendered video was made from, so its time maps to source,
@@ -259,7 +271,10 @@ export function createStage(ctx: EditorContext): Stage {
   let lastFrame = 0;
   let shownText: string | undefined;
   let pendingSeek: number | undefined;
+  // Recording narration: no voices, no sound from the video.
+  let silent = false;
   const listeners: ((t: number, playing: boolean) => void)[] = [];
+  const pauseListeners: (() => void)[] = [];
   const voices = new Map<number, HTMLAudioElement>();
   const frame = 1 / ctx.grid.fps;
 
@@ -288,7 +303,7 @@ export function createStage(ctx: EditorContext): Stage {
   }
 
   function startVoice(p: PlacedLine, offset: number): void {
-    if (!p.line.audio) {
+    if (silent || !p.line.audio) {
       return;
     }
     const src = `/${p.line.audio}`;
@@ -570,11 +585,17 @@ export function createStage(ctx: EditorContext): Stage {
   // ----- the API -----
 
   const api: Stage = {
+    addOverlay(node) {
+      area.append(node);
+    },
     element,
     mark,
     time: () => sourceNow,
     onTime(listener) {
       listeners.push(listener);
+    },
+    onPause(listener) {
+      pauseListeners.push(listener);
     },
     toggle() {
       if (playing) {
@@ -601,12 +622,30 @@ export function createStage(ctx: EditorContext): Stage {
     },
     pause() {
       playing = false;
+      silent = false;
       video.pause();
+      video.muted = false;
       stopVoices();
       setIcon(playButton, "play");
       playButton.setAttribute("aria-label", "Play");
       playButton.title = "Play (Space)";
       emit();
+      for (const listener of pauseListeners) {
+        listener();
+      }
+    },
+    playSilently(sec) {
+      if (mode !== "preview") {
+        previewToggle.checked = true;
+        renderedToggle.checked = false;
+        setMode("preview");
+      }
+      silent = true;
+      video.muted = true;
+      api.seek(sec);
+      if (!playing) {
+        api.toggle();
+      }
     },
     seek(sec) {
       const t = Math.min(Math.max(sec, 0), endOf(ctx.grid));
@@ -614,12 +653,17 @@ export function createStage(ctx: EditorContext): Stage {
       engine = {};
       since = t - 2e-6;
       sourceNow = t;
+      let to = t;
       if (mode === "rendered" && renderedPlan) {
         out = mapTime(renderedPlan, t).out;
-        video.currentTime = out;
+        to = out;
       } else {
-        video.currentTime = t;
         mapOut(t);
+      }
+      video.currentTime = to;
+      if (pendingSeek !== undefined) {
+        // The video is still loading after a mode switch: land here instead.
+        pendingSeek = to;
       }
       if (playing && mode === "preview") {
         startVoicesAt(out);
