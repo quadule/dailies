@@ -14,7 +14,7 @@
 // the track's items in time order (←/→ too on the steps track, where nothing
 // nudges), so a long session doesn't take a hundred Tabs to cross.
 
-import type { Cut } from "../../cut.js";
+import type { Cut, CutLine } from "../../cut.js";
 import type { EditorStep } from "../contract.js";
 import type { EditorContext } from "./context.js";
 import { button, h, keyed } from "./dom.js";
@@ -27,7 +27,7 @@ import {
   snapTime,
   span,
 } from "./format.js";
-import { previewModel, sourceTime } from "./preview.js";
+import { type LineDuration, previewModel, sourceTime } from "./preview.js";
 import type { ItemKind } from "./state.js";
 
 export interface Timeline {
@@ -135,6 +135,27 @@ function pointAt(
 
 // A step marker's visible name, tooltip and accessible name. A failed step
 // says so in words and with a ✕, not only in colour.
+// A narration line's label on its bar, and what it says to a screen reader:
+// recorded or text to speech, and its length — "~" (about) while estimated.
+function lineLabel(
+  line: CutLine,
+  dur: LineDuration,
+  placed: boolean
+): [string, string] {
+  const text = line.text.trim() || line.audio || "(no text)";
+  const estimated = dur.source === "estimate";
+  let kind = "text to speech, voiced";
+  if (line.audio) {
+    kind = "recorded";
+  } else if (estimated) {
+    kind = "text to speech, not voiced yet";
+  }
+  return [
+    `${line.audio ? "REC" : "TTS"} ${estimated ? "~" : ""}${span(dur.sec)} · ${text}`,
+    `Narration line at ${clock(line.at)}, ${kind}, ${estimated ? "about " : ""}${span(dur.sec)}${placed ? "" : ", inside cut footage"}: ${text}`,
+  ];
+}
+
 function describeStep(step: EditorStep): {
   aria: string;
   name: string;
@@ -498,15 +519,13 @@ export function createTimeline(ctx: EditorContext): Timeline {
         at(el, line.at);
         selectState(el, "line", i);
         el.classList.toggle("recorded", Boolean(line.audio));
+        el.classList.toggle("voiced", dur.source === "voiced");
         el.classList.toggle("estimate", dur.source === "estimate");
         el.classList.toggle("dropped", !p);
-        const kindLabel = line.audio ? "REC" : "TTS";
-        const text = line.text.trim() || line.audio || "(no text)";
-        label(
-          el,
-          `${kindLabel} ${dur.source === "estimate" ? "~" : ""}${span(dur.sec)} · ${text}`,
-          `Narration line at ${clock(line.at)}, ${line.audio ? "recorded" : "text to speech"}, ${span(dur.sec)}${p ? "" : ", inside cut footage"}: ${text}`
-        );
+        // Where its length comes from: recording, voiced, render or estimate.
+        el.dataset.source = dur.source;
+        const [shown, said] = lineLabel(line, dur, Boolean(p));
+        label(el, shown, said);
       }
     );
   }

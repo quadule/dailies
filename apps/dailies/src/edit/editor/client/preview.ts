@@ -13,6 +13,7 @@ import {
   type CutLine,
   type CutPiece,
   type CutPlan,
+  type CutVoice,
   extendTail,
   layoutLines,
   mapTime,
@@ -43,24 +44,86 @@ export interface RenderedLine {
   text: string;
 }
 
-export type DurationSource = "recording" | "render" | "estimate";
+// The voice a text-to-speech clip was made with, as the render's cache key
+// has it (render.ts ttsClipName): no name is "", no speed is 1.
+export interface ClipVoice {
+  name: string;
+  narrator?: string;
+  speed: number;
+}
+
+export function clipVoice(voice: CutVoice): ClipVoice {
+  return {
+    ...(voice.narrator ? { narrator: voice.narrator } : {}),
+    name: voice.name ?? "",
+    speed: voice.speed ?? 1,
+  };
+}
+
+// A text-to-speech clip in the session's cut/ cache: the words and the voice
+// it was made from, where it is ("cut/tts-….m4a"), and its real length.
+export interface VoicedClip {
+  durationSec: number;
+  file: string;
+  text: string;
+  voice: ClipVoice;
+}
+
+export function sameClipVoice(a: ClipVoice, b: ClipVoice): boolean {
+  return a.narrator === b.narrator && a.name === b.name && a.speed === b.speed;
+}
+
+// The clip a text-to-speech line speaks with now: one made from exactly its
+// text in the cut's voice. A change to either is a new cache key, so the clip
+// no longer applies — and undoing the change makes it apply again. None while
+// no narrator is pinned: the next render or voicing resolves a voice afresh.
+export function voicedClip(
+  line: CutLine,
+  voice: CutVoice,
+  clips: readonly VoicedClip[]
+): VoicedClip | undefined {
+  if (line.audio !== undefined || !voice.narrator) {
+    return;
+  }
+  const want = clipVoice(voice);
+  return clips.find(
+    (c) => c.text === line.text && sameClipVoice(c.voice, want)
+  );
+}
+
+export type DurationSource = "recording" | "voiced" | "render" | "estimate";
 
 export interface KnownDurations {
   recordings: readonly EditorRecording[];
   rendered: readonly RenderedLine[];
+  // Text-to-speech clips already made (EditorSession.voiced, POST /api/voice).
+  voiced?: readonly VoicedClip[];
 }
 
-// How long a line speaks: its recording's length, else what the last render
-// voiced for the same text, else an estimate from its words.
+export interface LineDuration {
+  // The voiced clip the line plays ("cut/tts-….m4a"), when source is "voiced".
+  clip?: string;
+  sec: number;
+  source: DurationSource;
+}
+
+// How long a line speaks: its recording's length, else its voiced clip's
+// (made for its text in the cut's voice), else what the last render voiced
+// for the same text, else an estimate from its words.
 export function lineDuration(
   line: CutLine,
-  known: KnownDurations
-): { sec: number; source: DurationSource } {
+  known: KnownDurations,
+  voice: CutVoice = {}
+): LineDuration {
   if (line.audio) {
     const recording = known.recordings.find((r) => r.file === line.audio);
     if (recording) {
       return { sec: recording.durationSec, source: "recording" };
     }
+  }
+  const clip = voicedClip(line, voice, known.voiced ?? []);
+  if (clip) {
+    return { sec: clip.durationSec, source: "voiced", clip: clip.file };
   }
   const rendered = known.rendered.find((r) => r.text === line.text);
   if (rendered) {
@@ -81,7 +144,7 @@ export interface Analysis {
   // Output-time captions, as the burn will show them.
   cues: OutputCue[];
   // Per cut.narration index.
-  durations: { sec: number; source: DurationSource }[];
+  durations: LineDuration[];
   // parseCut's message when the cut can't be saved.
   error?: string;
   // The model's warnings plus the editor's own checks.
@@ -151,7 +214,9 @@ export function analyze(cut: Cut, ctx: AnalysisContext): Analysis {
   const warnings: string[] = [];
   let plan = planCut(cut, ctx.source);
   warnings.push(...plan.warnings);
-  const durations = cut.narration.map((line) => lineDuration(line, ctx));
+  const durations = cut.narration.map((line) =>
+    lineDuration(line, ctx, cut.voice)
+  );
   const { placed, overrunSec } = layoutLines({
     plan,
     lines: cut.narration.map((line, i) => ({

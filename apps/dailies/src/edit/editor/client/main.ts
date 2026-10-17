@@ -33,6 +33,12 @@ import {
 import { createStage } from "./stage.js";
 import { EditorState } from "./state.js";
 import { createTimeline } from "./timeline.js";
+import {
+  bindVoicer,
+  mergeVoiced,
+  seedVoiced,
+  type VoiceOutcome,
+} from "./voice.js";
 
 const POLL_MS = 1000;
 // A transient status message clears after this long; errors stay.
@@ -53,6 +59,9 @@ export interface DailiesEditor {
   save(): Promise<boolean>;
   seek(sec: number): void;
   setCut(cut: Cut): void;
+  // Voice text-to-speech line `index` (saving first when there are unsaved
+  // edits): the clip and its length, or why it wasn't voiced.
+  voiceLine(index: number): Promise<VoiceOutcome>;
 }
 
 declare global {
@@ -101,6 +110,7 @@ function start(session: EditorSession, initial: RenderStatus): void {
       text: l.text,
       durationSec: l.durationSec,
     })),
+    voiced: seedVoiced(session.cut, session.voiced),
     analysis: analyze(state.cut, {
       source: grid,
       lineMax: session.caption.lineMax,
@@ -132,6 +142,7 @@ function start(session: EditorSession, initial: RenderStatus): void {
       lineMax: session.caption.lineMax,
       recordings: session.recordings,
       rendered: ctx.rendered,
+      voiced: ctx.voiced,
     });
   };
   recompute();
@@ -164,6 +175,43 @@ function start(session: EditorSession, initial: RenderStatus): void {
     play: (sec) => stage.playSilently(sec),
   });
 
+  let rendering = initial.state === "running";
+  let saving = false;
+  let renderNote = "";
+
+  // cut.json changed under the page — a render or a voicing may have pinned
+  // the voice it used: the edits made meanwhile stay, and the history takes
+  // the pinned voice too.
+  function takeDisk(fresh: EditorSession): void {
+    session.video = fresh.video;
+    session.recordings = fresh.recordings;
+    session.steps = fresh.steps;
+    if (state.dirty) {
+      state.setDisk(fresh.cut, { rendered: true });
+    } else {
+      state.load(fresh.cut, { rendered: true });
+    }
+  }
+
+  const voicer = bindVoicer(ctx, {
+    blocked: () => {
+      if (rendering) {
+        return "A render is running — voice the line when it finishes";
+      }
+      if (state.dirty && ctx.analysis.error) {
+        return "Fix the problem in the cut first: a line is voiced from the saved cut";
+      }
+      return;
+    },
+    changed: () => {
+      app.dataset.voicing = voicer.busy ? "true" : "false";
+      inspector.refresh();
+      drawTop();
+    },
+    reload: takeDisk,
+    save,
+  });
+
   const stage = createStage(ctx);
   const timeline = createTimeline(ctx);
   const inspector = createInspector(ctx, {
@@ -173,10 +221,6 @@ function start(session: EditorSession, initial: RenderStatus): void {
   stage.onPause(() => recorder.playbackStopped());
 
   // ----- top bar -----
-
-  let rendering = initial.state === "running";
-  let saving = false;
-  let renderNote = "";
 
   const badge = h("span", { class: "badge sm" });
   const undo = button("Undo", () => state.undo(), {
@@ -261,6 +305,9 @@ function start(session: EditorSession, initial: RenderStatus): void {
     if (rendering) {
       return "Saving waits for the render: it writes the voice it used into cut.json when it finishes";
     }
+    if (voicer.posting) {
+      return "Saving waits for the line being voiced: it can write the voice it used into cut.json";
+    }
     if (ctx.analysis.error) {
       return "Fix the problem in the cut first";
     }
@@ -311,10 +358,16 @@ function start(session: EditorSession, initial: RenderStatus): void {
     const blocker = saveBlocker();
     saveButton.disabled = blocker !== undefined;
     saveButton.title = blocker ?? "Save cut.json (Ctrl/⌘ S)";
-    renderButton.disabled = rendering || Boolean(ctx.analysis.error);
-    renderButton.title = rendering
-      ? "A render is running"
-      : "Save if needed, then render the video from cut.json";
+    renderButton.disabled =
+      rendering || voicer.busy || Boolean(ctx.analysis.error);
+    if (rendering) {
+      renderButton.title = "A render is running";
+    } else if (voicer.busy) {
+      renderButton.title = "Render when the line being voiced is done";
+    } else {
+      renderButton.title =
+        "Save if needed, then render the video from cut.json";
+    }
     const label = renderButton.querySelector("span");
     if (label) {
       label.textContent = rendering ? "Rendering…" : "Render";
@@ -326,7 +379,10 @@ function start(session: EditorSession, initial: RenderStatus): void {
   // ----- saving and rendering -----
 
   async function save(): Promise<boolean> {
-    const blocker = rendering || ctx.analysis.error ? saveBlocker() : undefined;
+    const blocker =
+      rendering || voicer.posting || ctx.analysis.error
+        ? saveBlocker()
+        : undefined;
     if (blocker) {
       ctx.status(
         ctx.analysis.error ? `Can't save: ${ctx.analysis.error}` : blocker,
@@ -385,16 +441,12 @@ function start(session: EditorSession, initial: RenderStatus): void {
       }));
     }
     const fresh = await api.session();
-    session.video = fresh.video;
-    session.recordings = fresh.recordings;
-    session.steps = fresh.steps;
-    // The render may have pinned its voice into cut.json: the edits made
-    // while it ran stay, and the history takes the pinned voice too.
-    if (state.dirty) {
-      state.setDisk(fresh.cut, { rendered: true });
-    } else {
-      state.load(fresh.cut, { rendered: true });
-    }
+    // A render voices every line of the cut and prunes the clips nothing
+    // uses from the cache, so the session's list is the whole truth then.
+    const voiced = seedVoiced(fresh.cut, fresh.voiced);
+    ctx.voiced =
+      status.state === "done" ? voiced : mergeVoiced(ctx.voiced, voiced);
+    takeDisk(fresh);
     recompute();
     if (status.state === "done" && hasRender(session)) {
       stage.setRendered(fresh.cut, { at: renderedAt(session), here: true });
@@ -434,6 +486,10 @@ function start(session: EditorSession, initial: RenderStatus): void {
 
   async function render(): Promise<RenderStatus | undefined> {
     if (rendering) {
+      return;
+    }
+    if (voicer.busy) {
+      ctx.status("Render when the line being voiced is done", "error");
       return;
     }
     if (state.dirty && !(await save())) {
@@ -480,6 +536,7 @@ function start(session: EditorSession, initial: RenderStatus): void {
     inspector.element
   );
   app.className = "editor";
+  app.dataset.voicing = "false";
   app.replaceChildren(header, checks, main, timeline.element);
 
   if (hasRender(session)) {
@@ -594,7 +651,7 @@ function start(session: EditorSession, initial: RenderStatus): void {
 
   window.addEventListener("keydown", onKey);
   window.addEventListener("beforeunload", (event) => {
-    if (state.dirty || recorder.busy) {
+    if (state.dirty || recorder.busy || voicer.busy) {
       event.preventDefault();
     }
   });
@@ -626,6 +683,7 @@ function start(session: EditorSession, initial: RenderStatus): void {
     save,
     render,
     seek: (sec) => stage.seek(sec),
+    voiceLine: (index) => voicer.voice(index),
   };
 }
 

@@ -59,7 +59,8 @@ function sameVoice(a: CutVoice, b: CutVoice): boolean {
 
 // How cut.json came to change under the editor.
 export interface DiskChange {
-  // A render wrote it, pinning the voice it used (render.ts pinVoice).
+  // A render wrote it, pinning the voice it used (render.ts pinVoice) — or a
+  // line voiced ahead of a render (POST /api/voice), which pins the same way.
   rendered?: boolean;
 }
 

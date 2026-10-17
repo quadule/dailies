@@ -2,8 +2,10 @@
 // clocks and the in/out marks. It plays /source.webm and, with "Preview
 // edits" on, simulates the cut as the render will make it — skipping removed
 // footage, freezing on holds, speeding through speed-ups, showing the
-// captions and playing recorded lines in output time. The decisions come
-// from preview.ts; this module only applies them to the media elements.
+// captions and playing the narration in output time: a recorded line's file,
+// a text-to-speech line's clip once it is voiced (voice.ts) — a line not
+// voiced yet is silent. The decisions come from preview.ts; this module only
+// applies them to the media elements.
 //
 // "Rendered video" swaps the picture for the last render (it has the band
 // and voices burned in), mapping its time back to source time for the
@@ -155,7 +157,10 @@ export function createStage(ctx: EditorContext): Stage {
   const bandText = h("p", { class: "band-text" });
   const band = h("div", { class: "band" }, bandText);
   const flag = h("p", { class: "flag", hidden: true });
-  const screen = h("div", { class: "screen" }, video, band, flag);
+  // The narration's <audio> elements, one per line index (data-line), kept
+  // in the page so a QA script can see what plays.
+  const voiceBox = h("div", { class: "voices", hidden: true });
+  const screen = h("div", { class: "screen" }, video, band, flag, voiceBox);
   const area = h("div", { class: "screen-area" }, screen);
 
   const { node: clockNode, parts: clockParts } = clocks();
@@ -302,22 +307,36 @@ export function createStage(ctx: EditorContext): Stage {
     }
   }
 
+  // What a placed line plays: its recording, else the clip its words were
+  // voiced into ("cut/tts-….m4a"); a line with neither is silent.
+  function voiceFile(p: PlacedLine): string | undefined {
+    return p.line.audio ?? ctx.analysis.durations[p.index]?.clip;
+  }
+
   function startVoice(p: PlacedLine, offset: number): void {
-    if (silent || !p.line.audio) {
+    const file = voiceFile(p);
+    if (silent || !file) {
       return;
     }
-    const src = `/${p.line.audio}`;
+    const src = `/${file}`;
     let audio = voices.get(p.index);
     if (!audio) {
-      audio = new Audio();
+      audio = h("audio", {
+        preload: "auto",
+        attrs: { "data-line": String(p.index) },
+      });
+      voiceBox.append(audio);
       voices.set(p.index, audio);
     }
     if (audio.getAttribute("src") !== src) {
       audio.src = src;
     }
     audio.currentTime = Math.max(0, offset);
-    audio.play().catch(() => {
-      ctx.status(`Couldn't play ${p.line.audio}`, "error");
+    audio.play().catch((err: unknown) => {
+      // A pause (a seek, a hold) cut the play() short: nothing failed.
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        ctx.status(`Couldn't play ${file}`, "error");
+      }
     });
   }
 
@@ -508,6 +527,7 @@ export function createStage(ctx: EditorContext): Stage {
         lineMax,
         recordings: session.recordings,
         rendered: ctx.rendered,
+        voiced: ctx.voiced,
       }).plan;
     }
     drawTotals();

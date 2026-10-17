@@ -95,6 +95,8 @@ const ICONS = {
   stop: "M4.5 4.5h7v7h-7z",
   upload: "M8 10.5V3M5 6l3-3 3 3M3 10.5V13h10v-2.5",
   record: "M8 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
+  speak:
+    "M2.5 6.5h2L8 3.5v9l-3.5-3h-2zM10.5 6a2.5 2.5 0 0 1 0 4M12.5 4a5 5 0 0 1 0 8",
 } as const;
 
 // Icons drawn as a filled shape rather than a stroke.

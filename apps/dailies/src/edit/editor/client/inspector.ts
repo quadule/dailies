@@ -1,6 +1,6 @@
 // The inspector (right column): the selected item's fields, the Add section,
-// the voice (and the recordings no line uses), the last render, and the
-// keyboard shortcuts.
+// the voice (voicing the text-to-speech lines, and the recordings no line
+// uses), the last render, and the keyboard shortcuts.
 //
 // The selected item's panel is rebuilt only when the selection (or the shape
 // of the item, like a line gaining audio) changes; otherwise each field
@@ -25,6 +25,7 @@ import {
   unusedRecordings,
 } from "./recorder.js";
 import type { Selection } from "./state.js";
+import { voiceAllControls, voiceLineControls } from "./voice.js";
 
 export interface Inspector {
   element: HTMLElement;
@@ -458,7 +459,7 @@ export function createInspector(
       block.append(
         h("p", {
           class: "note",
-          text: "Voiced by text to speech. Record it from your microphone, or attach a recording.",
+          text: "To use your own voice instead, record it from your microphone or attach a recording.",
         }),
         h("div", { class: "audio-actions" }, ...controls.buttons),
         controls.message
@@ -570,6 +571,7 @@ export function createInspector(
       }
       const from = {
         recording: "the recording's length",
+        voiced: "its voiced clip's length",
         render: "as voiced in the last render",
         estimate: "estimated from its words",
       }[d.source];
@@ -594,6 +596,11 @@ export function createInspector(
       mode,
     ];
     const nodes = fields.map((f) => f.node);
+    // A text-to-speech line can be voiced now, ahead of a render.
+    const tts = get()?.audio === undefined ? voiceLineControls(i) : undefined;
+    if (tts) {
+      fields.push(tts);
+    }
     return [
       header(
         "Narration line",
@@ -602,8 +609,9 @@ export function createInspector(
         () => get()?.at ?? 0
       ),
       ...nodes,
+      tts?.node ?? null,
       audioBlock(i),
-    ];
+    ].filter((n): n is HTMLElement => n !== null);
   }
 
   function cutFields(i: number): HTMLElement[] {
@@ -1108,6 +1116,7 @@ export function createInspector(
     })
   );
   speed.addEventListener("change", () => state.end());
+  const voiceAll = voiceAllControls();
 
   const voice = h(
     "section",
@@ -1153,6 +1162,7 @@ export function createInspector(
         )
       )
     ),
+    voiceAll.node,
     unused
   );
 
@@ -1172,6 +1182,7 @@ export function createInspector(
     }
     speedValue.textContent =
       v.speed === undefined ? "Normal" : `${v.speed.toFixed(2)}×`;
+    voiceAll.update();
   }
 
   // ----- render -----

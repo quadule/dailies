@@ -11,6 +11,8 @@ import {
   type RenderStatus,
   type SaveCutResponse,
   type UploadRecordingResponse,
+  type VoiceLineRequest,
+  type VoiceLineResponse,
 } from "../contract.js";
 
 export class ApiError extends Error {
@@ -71,4 +73,9 @@ export const api = {
   // `name` is the bare file name in recordings/.
   deleteRecording: (name: string) =>
     call<undefined>("DELETE", `/api/recordings/${encodeURIComponent(name)}`),
+  // Voice the text-to-speech line at `index` of the cut on disk.
+  voiceLine: (index: number) =>
+    call<VoiceLineResponse>("POST", "/api/voice", {
+      json: { index } satisfies VoiceLineRequest,
+    }),
 };

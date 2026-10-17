@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { type Cut, mapTime, planCut, TAIL_PAD_SEC } from "../../cut.js";
+import {
+  type Cut,
+  type CutVoice,
+  mapTime,
+  planCut,
+  TAIL_PAD_SEC,
+} from "../../cut.js";
 import {
   analyze,
   captionAtSource,
   captionLines,
+  clipVoice,
   cueAt,
   type EngineState,
   estimateSpeechSec,
@@ -17,6 +24,8 @@ import {
   rateAt,
   sourceTime,
   tick,
+  type VoicedClip,
+  voicedClip,
 } from "./preview.js";
 
 // 10s of footage at 10 fps, so a frame is 0.1s and the arithmetic is plain.
@@ -507,6 +516,94 @@ describe("narration timing", () => {
     expect(lineDuration({ at: 0, text: "hello" }, known).source).toBe(
       "estimate"
     );
+  });
+});
+
+describe("voiced clips", () => {
+  const say: CutVoice = { narrator: "say" };
+  const clip = (
+    text: string,
+    voice: CutVoice = say,
+    durationSec = 1.5
+  ): VoicedClip => ({
+    text,
+    voice: clipVoice(voice),
+    file: `cut/tts-${text.length.toString(16).padStart(16, "0")}.m4a`,
+    durationSec,
+  });
+
+  it("prefers a recording, then a voiced clip, then the last render, then an estimate", () => {
+    const voiced = clip("hello there");
+    const known = {
+      recordings: [{ file: "recordings/a.wav", durationSec: 1.25 }],
+      rendered: [{ text: "hello there", durationSec: 0.9 }],
+      voiced: [voiced],
+    };
+    expect(
+      lineDuration(
+        { at: 0, text: "hello there", audio: "recordings/a.wav" },
+        known,
+        say
+      )
+    ).toEqual({ sec: 1.25, source: "recording" });
+    expect(lineDuration({ at: 0, text: "hello there" }, known, say)).toEqual({
+      sec: 1.5,
+      source: "voiced",
+      clip: voiced.file,
+    });
+    // No narrator pinned: the next voicing resolves a voice afresh, so no
+    // clip applies yet — the last render's length does.
+    expect(lineDuration({ at: 0, text: "hello there" }, known, {})).toEqual({
+      sec: 0.9,
+      source: "render",
+    });
+    expect(lineDuration({ at: 0, text: "hello" }, known, say)).toEqual({
+      sec: estimateSpeechSec("hello"),
+      source: "estimate",
+    });
+  });
+
+  it("stops applying when the words, narrator, voice name or speed change, and applies again when they change back", () => {
+    const voice: CutVoice = { narrator: "say", name: "Ava", speed: 1.25 };
+    const clips = [clip("Open the form", voice)];
+    const line = { at: 1, text: "Open the form" };
+    expect(voicedClip(line, voice, clips)?.durationSec).toBe(1.5);
+    expect(
+      voicedClip({ ...line, text: "Open the form." }, voice, clips)
+    ).toBeUndefined();
+    expect(
+      voicedClip(line, { ...voice, narrator: "gemini" }, clips)
+    ).toBeUndefined();
+    expect(voicedClip(line, { ...voice, name: "Zoe" }, clips)).toBeUndefined();
+    expect(voicedClip(line, { ...voice, speed: 1.5 }, clips)).toBeUndefined();
+    expect(voicedClip(line, { ...voice }, clips)).toBe(clips[0]);
+  });
+
+  it("keys a voice the way the render's cache does: no name is none, no speed is 1", () => {
+    const clips = [clip("hi")];
+    const line = { at: 0, text: "hi" };
+    expect(voicedClip(line, { narrator: "say", speed: 1 }, clips)).toBe(
+      clips[0]
+    );
+    expect(
+      voicedClip(line, { narrator: "say", name: "Ava" }, clips)
+    ).toBeUndefined();
+    // A recorded line plays its recording, never a clip.
+    expect(
+      voicedClip({ ...line, audio: "recordings/hi.wav" }, say, clips)
+    ).toBeUndefined();
+  });
+
+  it("lays a voiced line out at its clip's length", () => {
+    const words = "one two three four five six seven eight";
+    const cut = cutOf({ voice: say, narration: [{ at: 1, text: words }] });
+    const ctx = { source, lineMax: 20, recordings: [], rendered: [] };
+    const estimated = analyze(cut, ctx);
+    expect(estimated.durations[0]?.source).toBe("estimate");
+    expect(estimated.placed[0]?.durationSec).toBeCloseTo(8 / 2.6);
+    const voiced = analyze(cut, { ...ctx, voiced: [clip(words, say, 1.5)] });
+    expect(voiced.durations[0]).toMatchObject({ sec: 1.5, source: "voiced" });
+    expect(voiced.placed[0]?.durationSec).toBe(1.5);
   });
 });
 

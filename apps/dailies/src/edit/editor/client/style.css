@@ -167,6 +167,10 @@ kbd {
   border-radius: var(--r);
 }
 
+.btn[hidden] {
+  display: none;
+}
+
 .btn:hover:not(:disabled) {
   border-color: var(--ink-strong);
 }
@@ -932,6 +936,98 @@ textarea {
   clip-path: inset(50%);
 }
 
+.voice-line {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--well);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.voice-line[data-state="voiced"] {
+  border-color: var(--line-2);
+}
+
+.voice-line[data-state="failed"] {
+  border-color: var(--fail);
+}
+
+.voice-status {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.voice-line[data-state="voiced"] .voice-status {
+  color: var(--ink);
+}
+
+.voice-all {
+  padding-top: 12px;
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.voice-all h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.voice-all .button-row {
+  margin-bottom: 6px;
+}
+
+.voice-rows {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.voice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  align-items: baseline;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.voice-row-at {
+  color: var(--faint);
+}
+
+.voice-row-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-row-state {
+  color: var(--muted);
+}
+
+.voice-row[data-state="voiced"] .voice-row-state {
+  color: var(--pass);
+}
+
+.voice-row[data-state="failed"] .voice-row-state,
+.voice-row-problem {
+  color: var(--fail);
+}
+
+.voice-row-problem {
+  width: 100%;
+  margin: 2px 0 0;
+}
+
+.voice-row-problem[hidden] {
+  display: none;
+}
+
 .unused {
   padding-top: 12px;
   margin-top: 14px;
@@ -1270,6 +1366,11 @@ textarea {
   background: transparent;
   border-style: dashed;
   border-left: 3px solid var(--ink);
+}
+
+.tl-item.line.voiced {
+  background: var(--well-2);
+  border-style: solid;
 }
 
 .tl-item.line.recorded {

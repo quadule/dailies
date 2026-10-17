@@ -4,7 +4,7 @@
 
 import type { EditorSession } from "../contract.js";
 import type { Grid } from "./format.js";
-import type { Analysis, RenderedLine } from "./preview.js";
+import type { Analysis, RenderedLine, VoicedClip } from "./preview.js";
 import type { EditorState } from "./state.js";
 
 export interface EditorContext {
@@ -24,4 +24,7 @@ export interface EditorContext {
   state: EditorState;
   // A message in the status line; "error" ones are styled and read as such.
   status(message: string, tone?: "error"): void;
+  // Text-to-speech clips already made, for line durations and the preview's
+  // voices (voice.ts keeps it current).
+  voiced: VoicedClip[];
 }
