@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { copyFile, stat } from "node:fs/promises";
 import path from "node:path";
@@ -31,6 +30,7 @@ import {
   writeSessionRecord,
 } from "../session/registry.js";
 import { scrubSessionHar } from "../session/scrub-har.js";
+import { openInOSDefault } from "../util/open.js";
 import {
   condenseVideo,
   findFfmpeg,
@@ -77,32 +77,6 @@ interface SessionEndOpts {
   // name from the script, or a video filename. Whoever drove the session knows
   // which page was the subject; without this the finalizer has to guess.
   video?: string;
-}
-
-// Open a file/URL in the OS default app, detached and best-effort: opening the
-// report is a convenience, so a missing opener or headless host must never fail
-// `session end`.
-function openInOSDefault(target: string): void {
-  let command = "xdg-open";
-  let args = [target];
-  if (process.platform === "darwin") {
-    command = "open";
-  } else if (process.platform === "win32") {
-    command = "cmd";
-    args = ["/c", "start", "", target];
-  }
-  try {
-    const child = spawn(command, args, {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.on("error", () => {
-      // no opener on this host — ignore
-    });
-    child.unref();
-  } catch {
-    // ignore — best effort
-  }
 }
 
 // How much to keep around each step's script execution. The browser is driven
