@@ -6,7 +6,13 @@
 // Items are buttons: click selects, drag moves (edges resize), arrow keys
 // nudge a frame (Shift: a second; Alt: the end edge). A caption's text is
 // edited in place on double-click, F2, or Enter when it is selected. The
-// ruler scrubs. Drags snap to frames and show the time they land on.
+// ruler scrubs, pausing playback. Drags snap to frames and show the time they
+// land on.
+//
+// Each track is one tab stop (a roving tabindex): Tab lands on the selected
+// item, else the first one at or after the playhead, and ↑/↓ move between
+// the track's items in time order (←/→ too on the steps track, where nothing
+// nudges), so a long session doesn't take a hundred Tabs to cross.
 
 import type { Cut } from "../../cut.js";
 import type { EditorStep } from "../contract.js";
@@ -176,6 +182,12 @@ export function createTimeline(ctx: EditorContext): Timeline {
       attrs: { role: "group", "aria-label": "Cuts, speed-ups and holds" },
     }),
   };
+  const trackList = [
+    tracks.steps,
+    tracks.captions,
+    tracks.narration,
+    tracks.timing,
+  ];
   const shade = h("div", {
     class: "tl-shade",
     attrs: { "aria-hidden": "true" },
@@ -298,7 +310,7 @@ export function createTimeline(ctx: EditorContext): Timeline {
     readout,
     h("p", {
       class: "tl-help",
-      text: "Drag to move, drag an edge to resize · ←/→ nudge a frame, Shift a second, Alt the end · double-click a caption to edit",
+      text: "Drag to move, drag an edge to resize · Tab to a track, ↑/↓ between its items · ←/→ nudge a frame, Shift a second, Alt the end · double-click a caption to edit",
     })
   );
 
@@ -351,6 +363,7 @@ export function createTimeline(ctx: EditorContext): Timeline {
     const el = h("button", {
       type: "button",
       class: `tl-item ${kind}`,
+      tabIndex: -1,
       attrs: { "data-kind": kind },
     });
     if (ranged) {
@@ -366,6 +379,11 @@ export function createTimeline(ctx: EditorContext): Timeline {
       el.append(h("span", { class: "tl-label" }));
     }
     return el;
+  }
+
+  // Where an item sits in time, for the roving tabindex.
+  function at(el: HTMLElement, t: number): void {
+    el.dataset.at = String(t);
   }
 
   function label(el: HTMLElement, text: string, aria: string): void {
@@ -420,6 +438,7 @@ export function createTimeline(ctx: EditorContext): Timeline {
         const next =
           steps.slice(i + 1).find((s) => s.at > step.at)?.at ?? duration + 2;
         place(el, step.at);
+        at(el, step.at);
         el.style.maxWidth = `${Math.max(14, (next - step.at) * pps - 4)}px`;
         el.classList.toggle("fail", !step.ok);
         el.classList.toggle("skim", Boolean(step.skim));
@@ -445,6 +464,7 @@ export function createTimeline(ctx: EditorContext): Timeline {
           return;
         }
         place(el, c.start, c.end);
+        at(el, c.start);
         selectState(el, "caption", i);
         el.classList.toggle("empty", !c.text.trim());
         label(
@@ -475,6 +495,7 @@ export function createTimeline(ctx: EditorContext): Timeline {
           ? sourceTime(plan, p.outStart + p.durationSec)
           : line.at + dur.sec;
         place(el, line.at, Math.max(end, line.at + frame));
+        at(el, line.at);
         selectState(el, "line", i);
         el.classList.toggle("recorded", Boolean(line.audio));
         el.classList.toggle("estimate", dur.source === "estimate");
@@ -512,6 +533,7 @@ export function createTimeline(ctx: EditorContext): Timeline {
           const hold = holds[i];
           if (hold) {
             place(el, hold.at);
+            at(el, hold.at);
             label(
               el,
               `+${span(hold.seconds)}`,
@@ -525,6 +547,7 @@ export function createTimeline(ctx: EditorContext): Timeline {
           return;
         }
         place(el, r.start, r.end);
+        at(el, r.start);
         if (kind === "cut") {
           label(
             el,
@@ -591,6 +614,56 @@ export function createTimeline(ctx: EditorContext): Timeline {
     drawTiming();
     drawShade();
     drawRange();
+    rove();
+  }
+
+  // ----- one tab stop per track -----
+
+  // A track's items in time order.
+  function itemsIn(track: HTMLElement): HTMLElement[] {
+    return [...track.children]
+      .filter((el): el is HTMLElement => el instanceof HTMLElement)
+      .sort((a, b) => Number(a.dataset.at) - Number(b.dataset.at));
+  }
+
+  // Give each track exactly one tab stop: the focused item while the focus is
+  // in it, else the selected item, else the first at or after the playhead.
+  function rove(): void {
+    const focused = document.activeElement;
+    for (const track of trackList) {
+      const items = itemsIn(track);
+      const current =
+        items.find((el) => el === focused) ??
+        items.find((el) => el.classList.contains("selected")) ??
+        items.find((el) => Number(el.dataset.at) >= playheadAt - frame / 2) ??
+        items.at(-1);
+      for (const el of items) {
+        el.tabIndex = el === current ? 0 : -1;
+      }
+    }
+  }
+
+  // ↑/↓ (and ←/→ on the steps track) to the previous or next item.
+  function travel(item: HTMLElement, direction: -1 | 1): void {
+    const track = item.parentElement;
+    if (!track) {
+      return;
+    }
+    const items = itemsIn(track);
+    const next = items[items.indexOf(item) + direction];
+    if (!next) {
+      return;
+    }
+    item.tabIndex = -1;
+    next.tabIndex = 0;
+    next.focus();
+    const t = Number(next.dataset.at);
+    if (
+      t < timeAt(scroller.scrollLeft) ||
+      x(t) > scroller.scrollLeft + scroller.clientWidth - 40
+    ) {
+      scroller.scrollLeft = x(t) - scroller.clientWidth / 3;
+    }
   }
 
   // ----- dragging -----
@@ -666,6 +739,7 @@ export function createTimeline(ctx: EditorContext): Timeline {
       }
       scrubbing = event.pointerId;
       content.setPointerCapture(event.pointerId);
+      ctx.pause();
       if (!target.closest(".tl-ruler")) {
         ctx.state.select(undefined);
       }
@@ -745,10 +819,41 @@ export function createTimeline(ctx: EditorContext): Timeline {
     }
   });
 
-  // Arrow keys on an item nudge it; Enter or F2 on a selected caption edits it.
-  content.addEventListener("keydown", (event) => {
-    const item = (event.target as Element).closest<HTMLElement>(".tl-item");
-    if (!item) {
+  // Keys on a step marker: ↑/↓ and ←/→ move to the previous or next step.
+  function stepKey(event: KeyboardEvent, step: HTMLElement): void {
+    const back = event.key === "ArrowUp" || event.key === "ArrowLeft";
+    if (back || event.key === "ArrowDown" || event.key === "ArrowRight") {
+      event.preventDefault();
+      event.stopPropagation();
+      travel(step, back ? -1 : 1);
+    }
+  }
+
+  // ←/→ nudge an item a frame (Shift: a second; Alt: its end edge).
+  function nudge(event: KeyboardEvent, kind: ItemKind, index: number): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const delta =
+      (event.shiftKey ? 1 : frame) * (event.key === "ArrowLeft" ? -1 : 1);
+    const orig = originOf(ctx.state.cut, kind, index);
+    const part: Part = event.altKey && !("at" in orig) ? "end" : "move";
+    ctx.state.edit((cut) => {
+      applyDrag(
+        cut,
+        { kind, index, part, orig, moved: true, pointerId: -1, x0: 0 },
+        delta
+      );
+      return { kind, index };
+    });
+  }
+
+  // Keys on an item: ↑/↓ move to the previous or next item in its track, ←/→
+  // nudge it, and Enter or F2 on a selected caption edits it.
+  function itemKey(event: KeyboardEvent, item: HTMLElement): void {
+    const plain = !(event.altKey || event.ctrlKey || event.metaKey);
+    if (plain && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      event.preventDefault();
+      travel(item, event.key === "ArrowUp" ? -1 : 1);
       return;
     }
     const kind = item.dataset.kind as ItemKind;
@@ -763,23 +868,22 @@ export function createTimeline(ctx: EditorContext): Timeline {
       editCaption(index);
       return;
     }
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      nudge(event, kind, index);
+    }
+  }
+
+  content.addEventListener("keydown", (event) => {
+    const target = event.target as Element;
+    const step = target.closest<HTMLElement>(".tl-step");
+    if (step) {
+      stepKey(event, step);
       return;
     }
-    event.preventDefault();
-    event.stopPropagation();
-    const step =
-      (event.shiftKey ? 1 : frame) * (event.key === "ArrowLeft" ? -1 : 1);
-    const orig = originOf(ctx.state.cut, kind, index);
-    const part: Part = event.altKey && !("at" in orig) ? "end" : "move";
-    ctx.state.edit((cut) => {
-      applyDrag(
-        cut,
-        { kind, index, part, orig, moved: true, pointerId: -1, x0: 0 },
-        step
-      );
-      return { kind, index };
-    });
+    const item = target.closest<HTMLElement>(".tl-item");
+    if (item) {
+      itemKey(event, item);
+    }
   });
 
   scroller.addEventListener("scroll", drawRuler, { passive: true });
@@ -913,6 +1017,9 @@ export function createTimeline(ctx: EditorContext): Timeline {
     setPlayhead(sourceSec, playing) {
       playheadAt = sourceSec;
       drawPlayhead();
+      if (!playing) {
+        rove();
+      }
       const px = x(sourceSec);
       const left = scroller.scrollLeft;
       const right = left + scroller.clientWidth;

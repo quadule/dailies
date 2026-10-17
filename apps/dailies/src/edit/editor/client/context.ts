@@ -10,6 +10,8 @@ import type { EditorState } from "./state.js";
 export interface EditorContext {
   analysis: Analysis;
   grid: Grid;
+  // Stop playback (scrubbing does).
+  pause(): void;
   // The playhead, in source seconds.
   playhead(): number;
   // Voiced lines from the last render, for line durations.

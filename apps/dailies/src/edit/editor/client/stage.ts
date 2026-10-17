@@ -7,7 +7,8 @@
 //
 // "Rendered video" swaps the picture for the last render (it has the band
 // and voices burned in), mapping its time back to source time for the
-// playhead.
+// playhead. It is the video as last rendered, which may predate edits, so its
+// label says when that was.
 
 import {
   type Cut,
@@ -44,8 +45,13 @@ export interface Stage {
   pause(): void;
   refresh(): void;
   seek(sec: number): void;
-  // The cut the rendered video was made from, so its time maps to source.
-  setRendered(cut: Cut | undefined): void;
+  // The cut the rendered video was made from, so its time maps to source,
+  // and when it was rendered (ms since the epoch; `here` when this editor
+  // made it, so it is known to be that cut).
+  setRendered(
+    cut: Cut | undefined,
+    made?: { at?: number; here: boolean }
+  ): void;
   stepFrames(frames: number): void;
   time(): number;
   toggle(): void;
@@ -99,6 +105,20 @@ function clocks(): { node: HTMLElement; parts: Clocks } {
   return { node, parts };
 }
 
+// When a render was made, short: the time today, else the date and time.
+function renderedWhen(ms: number): string {
+  const at = new Date(ms);
+  const today = new Date().toDateString() === at.toDateString();
+  return today
+    ? at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : at.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+}
+
 function toggle(label: string, checked: boolean): HTMLInputElement {
   return h("input", {
     type: "checkbox",
@@ -136,6 +156,14 @@ export function createStage(ctx: EditorContext): Stage {
   const previewToggle = toggle("Preview edits", true);
   const renderedToggle = toggle("Rendered video", false);
   renderedToggle.disabled = true;
+  const renderedNote = h("span", { class: "toggle-note" });
+  const renderedLabel = h(
+    "label",
+    { class: "check" },
+    renderedToggle,
+    h("span", { text: "Rendered video" }),
+    renderedNote
+  );
   const markIn = h("span", { class: "mark-value", text: "—" });
   const markOut = h("span", { class: "mark-value", text: "—" });
   const markLength = h("span", { class: "mark-length" });
@@ -183,12 +211,7 @@ export function createStage(ctx: EditorContext): Stage {
         previewToggle,
         h("span", { text: "Preview edits" })
       ),
-      h(
-        "label",
-        { class: "check" },
-        renderedToggle,
-        h("span", { text: "Rendered video" })
-      )
+      renderedLabel
     )
   );
   const marks = h(
@@ -632,10 +655,25 @@ export function createStage(ctx: EditorContext): Stage {
       shownText = undefined;
       draw();
     },
-    setRendered(cut) {
+    setRendered(cut, made) {
       renderedCut = cut ? structuredClone(cut) : undefined;
       fitRenderedPlan();
       renderedToggle.disabled = !renderedCut;
+      if (!renderedCut) {
+        renderedNote.textContent = "";
+        renderedLabel.title =
+          "There's no rendered video yet — Render makes one to watch here.";
+      } else if (made?.at === undefined) {
+        renderedNote.textContent = "may not match the cut on disk";
+        renderedLabel.title =
+          "The last rendered video. It may not match the cut on disk if cut.json changed after it was rendered.";
+      } else {
+        const when = renderedWhen(made.at);
+        renderedNote.textContent = `as last rendered ${when}`;
+        renderedLabel.title = made.here
+          ? `The video this editor rendered at ${when}. Edits made since then aren't in it.`
+          : `The video as last rendered, at ${when} — before this editor opened, so it may not match the cut on disk.`;
+      }
       if (mode === "rendered") {
         // A new render: reload the video at the same source position.
         const t = sourceNow;
@@ -646,6 +684,7 @@ export function createStage(ctx: EditorContext): Stage {
   };
 
   element.dataset.mode = mode;
+  api.setRendered(undefined);
   drawTotals();
   drawMarks();
   return api;

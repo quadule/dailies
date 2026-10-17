@@ -53,7 +53,16 @@ function hasVoice(cut: Cut): boolean {
   return Object.keys(cut.voice).length > 0;
 }
 
-// The video at session.video.url exists (its version is its mtime).
+// When the video at session.video.url was written (its `v` is its mtime), or
+// undefined when there is none.
+function renderedAt(session: EditorSession): number | undefined {
+  const v = Number(
+    new URL(session.video.url, location.origin).searchParams.get("v")
+  );
+  return Number.isFinite(v) && v > 0 ? v : undefined;
+}
+
+// The video at session.video.url exists.
 function hasRender(session: EditorSession): boolean {
   return !session.video.url.endsWith("?v=0");
 }
@@ -84,6 +93,7 @@ function start(session: EditorSession, initial: RenderStatus): void {
       recordings: session.recordings,
       rendered: [],
     }),
+    pause: () => stage.pause(),
     playhead: () => stage.time(),
     seek: (sec) => stage.seek(sec),
     status(text, tone) {
@@ -333,7 +343,7 @@ function start(session: EditorSession, initial: RenderStatus): void {
     }
     recompute();
     if (status.state === "done" && hasRender(session)) {
-      stage.setRendered(fresh.cut);
+      stage.setRendered(fresh.cut, { at: renderedAt(session), here: true });
     }
     refreshAll();
     showRender(status);
@@ -419,7 +429,7 @@ function start(session: EditorSession, initial: RenderStatus): void {
   app.replaceChildren(header, checks, main, timeline.element);
 
   if (hasRender(session)) {
-    stage.setRendered(session.cut);
+    stage.setRendered(session.cut, { at: renderedAt(session), here: false });
   }
   showRender(initial);
   if (rendering) {

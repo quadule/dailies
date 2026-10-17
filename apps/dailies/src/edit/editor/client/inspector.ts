@@ -58,6 +58,26 @@ function playheadButton(field: string, onClick: () => void): HTMLElement {
   return node;
 }
 
+// The parser's rule for a range ("<range>.end must be after its start"), as
+// the Start or End field that would break it says it.
+function startBefore(end: () => number | undefined) {
+  return (t: number): string | undefined => {
+    const e = end();
+    return e !== undefined && t >= e
+      ? `End must be after its start — this is at or after the end, ${clock(e)}`
+      : undefined;
+  };
+}
+
+function endAfter(start: () => number | undefined) {
+  return (t: number): string | undefined => {
+    const s = start();
+    return s !== undefined && t <= s
+      ? `End must be after its start — this is at or before the start, ${clock(s)}`
+      : undefined;
+  };
+}
+
 // How a line's caption override reads: none set, an empty one, or text.
 function modeOf(caption: string | undefined): "spoken" | "none" | "custom" {
   if (caption === undefined) {
@@ -100,10 +120,13 @@ export function createInspector(
 
   // ----- field builders -----
 
+  // A time field. `check` refuses a time the parser would (an end before its
+  // start) with its message, inline, instead of applying it.
   function timeField(
     name: string,
     get: () => number | undefined,
-    set: (t: number) => void
+    set: (t: number) => void,
+    check?: (t: number) => string | undefined
   ): Field {
     const id = nextId("t");
     const input = h("input", {
@@ -122,17 +145,25 @@ export function createInspector(
       class: "field-error",
       hidden: true,
     });
+    const refuse = (problem: string | undefined) => {
+      input.setAttribute("aria-invalid", String(problem !== undefined));
+      error.hidden = problem === undefined;
+      error.textContent = problem ?? "";
+    };
+    const apply = (t: number) => {
+      const problem = check?.(t);
+      refuse(problem);
+      if (problem === undefined) {
+        set(t);
+      }
+    };
     const commit = () => {
       const value = parseSeconds(input.value);
-      const invalid = value === undefined;
-      input.setAttribute("aria-invalid", String(invalid));
-      error.hidden = !invalid;
-      error.textContent = invalid
-        ? "Type seconds (12.5) or minutes and seconds (0:12.5)"
-        : "";
-      if (!invalid) {
-        set(snapTime(value, grid));
+      if (value === undefined) {
+        refuse("Type seconds (12.5) or minutes and seconds (0:12.5)");
+        return;
       }
+      apply(snapTime(value, grid));
     };
     input.addEventListener("change", commit);
     const node = h(
@@ -145,7 +176,11 @@ export function createInspector(
         input,
         h("span", { class: "unit", text: "s" }),
         hint,
-        playheadButton(name, () => set(snapTime(ctx.playhead(), grid)))
+        playheadButton(name, () => {
+          const t = snapTime(ctx.playhead(), grid);
+          input.value = seconds(t);
+          apply(t);
+        })
       ),
       error
     );
@@ -285,7 +320,8 @@ export function createInspector(
             if (cap) {
               cap.start = t;
             }
-          })
+          }),
+        startBefore(() => get()?.end)
       ),
       timeField(
         "End",
@@ -296,7 +332,8 @@ export function createInspector(
             if (cap) {
               cap.end = t;
             }
-          })
+          }),
+        endAfter(() => get()?.start)
       ),
       note(() => {
         const cap = get();
@@ -539,7 +576,8 @@ export function createInspector(
             if (r) {
               r.start = t;
             }
-          })
+          }),
+        startBefore(() => get()?.end)
       ),
       timeField(
         "End",
@@ -550,7 +588,8 @@ export function createInspector(
             if (r) {
               r.end = t;
             }
-          })
+          }),
+        endAfter(() => get()?.start)
       ),
       note(() => {
         const r = get();
@@ -612,7 +651,8 @@ export function createInspector(
             if (v) {
               v.start = t;
             }
-          })
+          }),
+        startBefore(() => get()?.end)
       ),
       timeField(
         "End",
@@ -623,7 +663,8 @@ export function createInspector(
             if (v) {
               v.end = t;
             }
-          })
+          }),
+        endAfter(() => get()?.start)
       ),
       rateField(i),
       note(() => {
@@ -1029,6 +1070,7 @@ export function createInspector(
         ["Esc", "Clear the selection, then the in/out points"],
         ["Ctrl/⌘ S", "Save"],
         ["Ctrl/⌘ Z", "Undo (Shift: redo)"],
+        ["Tab", "Into a timeline track, then ↑ ↓ between its items"],
         ["On an item: ← →", "Move it a frame (Shift: a second; Alt: its end)"],
         ["On a caption: F2", "Edit its text"],
       ].flatMap(([k, v]) => [
