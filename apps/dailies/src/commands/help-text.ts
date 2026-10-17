@@ -331,4 +331,8 @@ land, how to add the agent plugin). Run it once before your first session.`;
 export const CUT_LONG_ABOUT = `Edit a finished recording and re-render it — captions, cuts, holds, and a
 voice-over — without re-recording.
 
+  render   Rebuild the video and report from cut.json, and print where every edit landed.
+  edit     Edit the cut in your browser: serves an editor on 127.0.0.1 and opens it
+           (--no-open just prints the URL, --port <n> picks the port). Runs until Ctrl-C.
+
 ${RULE_CUT_EDITING}`;

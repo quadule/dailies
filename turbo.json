@@ -3,7 +3,11 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", "src/assets/embedded.generated.ts"]
+      "outputs": [
+        "dist/**",
+        "src/assets/embedded.generated.ts",
+        "src/edit/editor/client.generated.ts"
+      ]
     },
     "dev": {
       "cache": false,

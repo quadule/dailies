@@ -1,6 +1,7 @@
 import { Command, InvalidArgumentError, Option } from "commander";
 import { isMainModule } from "dailies-cli-kit";
 import { ciDecide, ciMetrics, ciPreviousMetrics } from "./commands/ci.js";
+import { cutEdit } from "./commands/cut-edit.js";
 import { cutRender } from "./commands/cut-render.js";
 import { daemonStop } from "./commands/daemon-stop.js";
 import { execScript } from "./commands/exec.js";
@@ -145,6 +146,16 @@ function parseTimeout(value: string): number {
   if (!Number.isFinite(parsed) || String(parsed) !== value || parsed < 1) {
     throw new InvalidArgumentError(
       `invalid value '${value}' for '--timeout <SECONDS>': must be at least 1`
+    );
+  }
+  return parsed;
+}
+
+function parsePort(value: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (String(parsed) !== value || parsed < 1 || parsed > 65_535) {
+    throw new InvalidArgumentError(
+      `invalid value '${value}' for '--port <n>': must be a port from 1 to 65535`
     );
   }
   return parsed;
@@ -659,6 +670,23 @@ export function buildProgram(): Command {
     .argument("<id>", "Session id")
     .action(async (id: string) => {
       const code = await cutRender(id, isJson(program));
+      throw new ExitCodeError(code);
+    });
+  cut
+    .command("edit")
+    .description(
+      "Edit a session's cut in your browser — serves a local editor until Ctrl-C (prints its URL)"
+    )
+    .argument("<id>", "Session id")
+    .option("--port <n>", "Port to serve on (default: a free one)", parsePort)
+    .option("--no-open", "Print the URL without opening a browser")
+    .action(async (id: string, opts: { port?: number; open: boolean }) => {
+      const code = await cutEdit({
+        sessionId: id,
+        port: opts.port,
+        open: opts.open,
+        json: isJson(program),
+      });
       throw new ExitCodeError(code);
     });
 

@@ -1,0 +1,111 @@
+/* The placeholder editor's stylesheet. Plain and system-styled on purpose:
+   the full editor replaces it along with client/main.ts. */
+
+:root {
+  --ink: #1d2320;
+  --muted: #5f6b66;
+  --line: #d3dad6;
+  --bg: #f7f8f6;
+  --accent: #1f6feb;
+  --error: #b42318;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.45;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e6ebe8;
+    --muted: #9aa6a1;
+    --line: #333b38;
+    --bg: #141816;
+    --accent: #6ea8ff;
+    --error: #ff8a80;
+  }
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+#app {
+  max-width: 960px;
+  padding: 24px 16px 48px;
+  margin: 0 auto;
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 1.5rem;
+}
+
+h2 {
+  margin: 24px 0 8px;
+  font-size: 1rem;
+}
+
+video {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  background: #000;
+  border-radius: 6px;
+}
+
+ul,
+ol {
+  padding-left: 20px;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.steps button {
+  padding: 2px 0;
+  font: inherit;
+  color: var(--accent);
+  text-align: left;
+  white-space: pre;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+.steps button:hover,
+.steps button:focus-visible {
+  text-decoration: underline;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.actions button {
+  padding: 6px 14px;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.muted,
+.status {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--error);
+}
+
+.render {
+  padding-top: 8px;
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+}

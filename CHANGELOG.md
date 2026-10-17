@@ -69,6 +69,11 @@
 
 ### Added
 
+- **`dailies cut edit <id>`** serves a browser editor for a finished recording from a local server
+  (127.0.0.1 only) and opens it, until Ctrl-C. This first version plays the clean recording, lists
+  its steps, captions and narration, and saves and renders the cut; the server's API (session,
+  cut, render, voice recordings, ranged media) is documented in `AGENTS.md` for the full editor
+  that follows. `--port <n>` picks the port and `--no-open` just prints the URL.
 - **`run --peek`** reads a session's live page without recording a step: snapshots and reads
   work, while clicks, typing, navigation, tabs, captions and effects are refused.
 - **`run --skim` and cut speed-ups.** `cut.json` takes `speedups` (`{ start, end, rate }`). The

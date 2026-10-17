@@ -47,7 +47,7 @@ and the script.
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/145916b9-80ed-4154-858f-256d84783d19" />
 
 - **A film, not a log.** `--cinematic` turns a silent recording into a narrated short: an LLM writes the voice-over, a voice reads it, each step holds long enough to follow, with a title card, burned-in captions and credits. `--song` scores the whole thing with one original sung track instead.
-- **Edit it without re-recording.** Every recording comes with a `cut.json`: change a caption, cut a stretch, hold on a frame, add a voice-over (text-to-speech or your own recording), then `dailies cut render <id>`. Ask your agent to make the change and it edits the file for you.
+- **Edit it without re-recording.** Every recording comes with a `cut.json`: change a caption, cut a stretch, hold on a frame, add a voice-over (text-to-speech or your own recording), then `dailies cut render <id>`. Ask your agent to make the change and it edits the file for you, or open it in your browser with `dailies cut edit <id>`. See [Edit a finished recording](#edit-a-finished-recording).
 - **A different theme every time.** Omit `--prompt` and each cut draws from 300+ themes and styles, so a repetitive review job stays worth opening. `--prompt "1970s heist film, as a limerick"` when you want to choose.
 - **See exactly what happened.** Trace, video, network, console, and a screenshot of every step — captured automatically, with an on-screen cursor so you can see where the agent actually clicked.
 - **Reproducible by default.** Dailies turns each run into a real Playwright script. Let your agent discover a flow once; re-run it forever.
@@ -473,6 +473,16 @@ DAILIES_NARRATOR=say dailies session end "$id" --cinematic  # the same pins, fro
 A pin is exact, like `$DAILIES_LLM`: the named provider is used, or the slot degrades with a note
 — and the narrator (or the singer, with `--song`) skips the pass rather than being quietly voiced
 by something else. `dailies session end --help` lists every provider's variables.
+
+## Edit a finished recording
+
+`session end` leaves an edit file beside every recording, `~/.dailies/sessions/<id>/cut.json`,
+seeded with the run's captions, step positions and speed-ups. Change a caption, cut a stretch,
+hold on a frame, play setup at 4x, add a voice-over, then `dailies cut render <id>` rebuilds the
+video and the report from the clean recording, so edits never pile up or drift. Ask your agent and
+it edits the file for you. To do it yourself, `dailies cut edit <id>` opens the cut in a browser
+editor served from your own machine (127.0.0.1 only) until you press Ctrl-C; `--no-open` prints
+its URL instead of opening it.
 
 ## One CLI, one runtime
 

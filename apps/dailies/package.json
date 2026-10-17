@@ -30,11 +30,12 @@
     "dist/cli.js.map"
   ],
   "scripts": {
-    "build": "node scripts/build.mjs",
-    "clean": "rm -rf dist coverage .turbo",
-    "compile": "tsc --noEmit",
-    "dev": "tsx src/cli.ts",
-    "prepack": "node scripts/build.mjs",
+    "prebuild": "node scripts/embed-editor.mjs",
+    "build": "pnpm prebuild && node scripts/build.mjs",
+    "clean": "rm -rf dist coverage .turbo src/edit/editor/client.generated.ts",
+    "compile": "pnpm prebuild && tsc --noEmit",
+    "dev": "pnpm prebuild && tsx src/cli.ts",
+    "prepack": "pnpm prebuild && node scripts/build.mjs",
     "test": "pnpm build && vitest run",
     "test:watch": "pnpm build && vitest"
   },

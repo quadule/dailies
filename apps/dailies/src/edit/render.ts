@@ -419,7 +419,7 @@ async function pinVoice(
   await writeCut(sessionId, cut);
 }
 
-interface CutSource {
+export interface CutSource {
   cut: Cut;
   dir: string;
   ffmpeg: string;
@@ -430,7 +430,11 @@ interface CutSource {
   videoPath: string;
 }
 
-async function loadCutSource(
+// Everything a render starts from, or why the session can't be edited: still
+// recording, no cut.json, no ffmpeg, or a source that can't be read. Shared
+// with the browser editor (edit/editor/server.ts), which refuses a session for
+// the same reasons.
+export async function loadCutSource(
   sessionId: string
 ): Promise<CutSource | { error: string }> {
   const record = await readSessionRecord(sessionId);

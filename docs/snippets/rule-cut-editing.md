@@ -1,6 +1,7 @@
 A finished recording can be edited after the fact — no re-recording. `session end` writes
 `~/.dailies/sessions/<id>/cut.json`, an edit file seeded with the run's captions and step
 positions. Change it, then run `{{cli}} cut render <id>` to rebuild the video and the report.
+`{{cli}} cut edit <id>` opens the same cut in a browser editor for a person; an agent edits the file.
 
 - Every time in the file is in seconds into the condensed recording (the source), NOT into the
   rendered video. Edits never shift each other: a cut at 10s doesn't change where a caption at

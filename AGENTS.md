@@ -51,7 +51,7 @@ or verifiable.
 
 1. `dailies-protocol` + `dailies-config` + `dailies-logger` + `dailies-runtime` (no build, source-distributed)
 2. `dailies-daemon` builds → emits `dist/daemon.bundle.mjs` + `dist/sandbox-client.js`
-3. `dailies-cli` embeds its assets (the daemon bundle via `dailies-daemon-client`), then bundles with esbuild
+3. `dailies-cli` embeds its assets (the daemon bundle via `dailies-daemon-client`, and its own browser editor client via `scripts/embed-editor.mjs`), then bundles with esbuild
 
 ## Shared docs (skills + CLI help + README)
 
@@ -223,6 +223,70 @@ finalize and a render of the untouched seed are the same video.
   measured worse than both, so re-measure before changing it.
 - Spoken lines are loudness-normalized (−16 LUFS) so TTS and a laptop-mic recording match. A line
   that runs past the picture extends the last frame; lines that overlap only warn.
+
+## Editing in the browser (`apps/dailies/src/edit/editor/`)
+
+`dailies cut edit <id>` (`commands/cut-edit.ts`) serves an editor for one session from a local
+`node:http` server, prints its URL on stdout, opens it unless `--no-open`, and runs until Ctrl-C
+(`--port <n>` picks the port; default a free one). It is the human path to `cut.json`; agents
+still edit the file. It refuses the sessions `loadCutSource` (`edit/render.ts`) refuses — still
+recording, no `cut.json`, no ffmpeg — and, like a render, copies the video to the
+`*.precinematic.webm` source when that sidecar doesn't exist yet.
+
+- `server.ts` — `startEditorServer({ sessionId, port? })` → `{ url, close(), rendering() }`. It
+  goes through `readCut`/`writeCut` and runs `renderCut` in-process, so a save here is the same
+  edit as one made by hand and a render is `dailies cut render`. It writes only `cut.json` and
+  `recordings/` itself. `close()` waits for a render it started, so the render's cleanup runs.
+- `contract.ts` — the request and response types plus the shared constants. Imported by the
+  server and the client, so it stays browser-safe.
+- `page.ts` — the HTML shell; the client renders everything into `#app`.
+- `client/main.ts` + `client/style.css` — the browser client. `scripts/embed-editor.mjs` bundles
+  it with esbuild (iife, platform browser, es2022, unminified) and writes the gitignored
+  `client.generated.ts` (`EDITOR_CLIENT_JS`, `EDITOR_CLIENT_CSS`). It is the CLI's `prebuild`,
+  run before `build`, `compile`, `test`, `dev` and `prepack`. The CLI's tsconfig includes the DOM
+  libs for it.
+- The client imports the cut model straight from `edit/cut.ts` so a preview computes output
+  times exactly as the render will (the placeholder uses `planCut` and `mapTime`; `outputCaptions`
+  and `layoutLines` are there for a caption and narration preview). That makes `cut.ts` and
+  everything it imports (`video/segments.ts`, `video/media-preferences.ts`) browser code: no
+  Node imports, nothing Node-only at module scope. The browser-platform bundle fails the build on
+  a Node import.
+- Recordings live in the session's `recordings/` (`rec-<UTC timestamp>.<ext>`), never in `cut/`
+  or `video/`: the artifact scanner (`packages/runtime/src/artifacts.ts`) doesn't read it, and
+  the render's cache prune removes only its own `tts-*` / `rec-*` clips from `cut/`.
+- A browser's MediaRecorder writes webm with no duration in its header; `audioDurationSec`
+  decodes such a file to measure it.
+
+**Security model.** The server binds 127.0.0.1 only. A request whose `Host` is not
+`127.0.0.1:<port>` or `localhost:<port>` gets 403, which defeats DNS rebinding. Every `/api/*`
+request must carry `X-Dailies-Editor: 1`; a cross-site page can't send a custom header without a
+CORS preflight, and every `OPTIONS` request gets 403 with no CORS headers. File routes take one
+bare file name (`[A-Za-z0-9][A-Za-z0-9._-]*`, checked after percent-decoding) and serve it only if
+its real path (symlinks resolved) is inside the session directory. Every response carries
+`Cross-Origin-Resource-Policy: same-origin`, `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer` and `X-Frame-Options: DENY`; the page adds a CSP that allows only
+its own script and `blob:` media (for playing a recording before it is uploaded).
+
+**HTTP contract.** Types are in `contract.ts`. Every `/api/*` error is JSON `{ "error": string }`.
+All times are SOURCE seconds, as in `cut.json`.
+
+| Route | Answer |
+| --- | --- |
+| `GET /` | The HTML shell, `Cache-Control: no-store`. `GET /editor.js`, `GET /editor.css`: the bundle and stylesheet. |
+| `GET /api/session` | 200 `EditorSession`: `{ id, name?, cut, source: { durationSec, fps, width, height }, caption: { bandPx, fontPx, lineMax }, steps: [{ name, at, ok, skim?, error?, durationMs, screenshot? }], narrators, video: { url, path }, recordings: [{ file, durationSec }] }`. `steps` come from the session record in order (`at` = `precinematicVideoTime ?? videoTime`, else the same-named `cut.steps` entry by occurrence); a step with no time is left out. `screenshot` is `/screenshots/<sessionStepSlug(name)>.png` when that file exists. `video.url` is `/video.webm?v=<mtimeMs>` and changes after every render; `video.path` is `cut.video`. `recordings` lists `recordings/` files with a known audio extension and a readable duration. 409 if `cut.json` on disk doesn't parse. |
+| `PUT /api/cut` | Body: a `Cut` as JSON (5 MB cap → 413). Parsed with `parseCut`: 400 with the parser's message, or for bad JSON. 400 if `video` differs from the cut on disk (`version` must be 1, the parser's rule). 409 while a render runs (the render pins the voice into `cut.json` when it finishes). Otherwise writes `formatCut` and answers 200 `{ cut }`, normalized as written (times rounded to the millisecond). |
+| `POST /api/render` | Starts `renderCut` in-process; 202 with the `RenderStatus`. 409 if one is running. |
+| `GET /api/render` | 200 `RenderStatus`: `{ state: "idle" \| "running" \| "done" \| "error", progress: string[], result?, error? }`. `progress` is the current or last render's messages; `result` is the last successful `CutRenderResult`, kept while the next render runs; `error` is set when `state` is `"error"`. |
+| `POST /api/recordings` | Body: raw audio with `Content-Type` `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/mpeg`, `audio/wav` or `audio/x-wav` (parameters ignored; else 415). Saved as `recordings/rec-<timestamp>.<webm\|ogg\|m4a\|mp3\|wav>`. 201 `{ file: "recordings/rec-….webm", durationSec }`. 413 past 200 MB, 400 when empty, 422 when ffmpeg can't read a duration (the file is removed). |
+| `DELETE /api/recordings/<name>` | 204. 400 unless `<name>` is a bare file name, 404 if missing, 409 while a narration line's `audio` names it. |
+| `GET /source.webm` | The clean condensed source every cut time points into. |
+| `GET /video.webm` | The rendered output, `video/<cut.video>`. |
+| `GET /recordings/<name>`, `GET /screenshots/<name>` | Those files. |
+
+File routes answer `GET` and `HEAD` with `Accept-Ranges: bytes`, a single `Range` (206 +
+`Content-Range`, 416 past the end; a multi-range gets the whole file), `ETag`/`If-None-Match`
+and `Cache-Control: no-cache`; a bad file name is 400. Other methods on non-API paths are 405;
+unknown routes are 404.
 
 ## Artifact sensitivity
 
