@@ -117,6 +117,88 @@ describe("EditorState", () => {
     expect(state.dirty).toBe(true);
   });
 
+  describe("after a render pins its voice", () => {
+    const pinned = { narrator: "say" as const, name: "Ava (Premium)" };
+
+    // Edit a caption, save, and let a render pin `voice` into cut.json.
+    function rendered(start: Cut) {
+      const state = new EditorState(start);
+      state.edit((cut) => {
+        (cut.captions[0] as { text: string }).text = "edited";
+        return;
+      });
+      state.markSaved(structuredClone(state.cut), JSON.stringify(state.cut));
+      return state;
+    }
+
+    it("keeps the pinned voice through an undo and a redo", () => {
+      const state = rendered(seed());
+      state.load(
+        { ...structuredClone(state.cut), voice: pinned },
+        {
+          rendered: true,
+        }
+      );
+      expect(state.dirty).toBe(false);
+      state.undo();
+      expect(state.cut.captions[0]?.text).toBe("hello");
+      expect(state.cut.voice).toEqual(pinned);
+      state.redo();
+      expect(state.cut.voice).toEqual(pinned);
+      expect(state.dirty).toBe(false);
+    });
+
+    it("leaves a voice changed on purpose in the history", () => {
+      const charon = { narrator: "gemini" as const, name: "Charon" };
+      const state = new EditorState({ ...seed(), voice: charon });
+      // Clear the name, so the render picks a voice again.
+      state.edit((cut) => {
+        cut.voice = { narrator: "gemini" };
+        return;
+      });
+      state.markSaved(structuredClone(state.cut), JSON.stringify(state.cut));
+      const puck = { narrator: "gemini" as const, name: "Puck" };
+      state.load(
+        { ...structuredClone(state.cut), voice: puck },
+        {
+          rendered: true,
+        }
+      );
+      expect(state.cut.voice).toEqual(puck);
+      state.undo();
+      expect(state.cut.voice).toEqual(charon);
+    });
+
+    it("takes the pinned voice into edits made while it rendered", () => {
+      const state = rendered(seed());
+      const disk = { ...structuredClone(state.cut), voice: pinned };
+      state.edit((cut) => {
+        cut.holds.push({ at: 1, seconds: 1 });
+        return;
+      });
+      const seen: Change[] = [];
+      state.subscribe((change) => seen.push(change));
+      state.setDisk(disk, { rendered: true });
+      expect(seen.at(-1)?.cut).toBe(true);
+      expect(state.cut.voice).toEqual(pinned);
+      expect(state.cut.holds).toHaveLength(1);
+      expect(state.dirty).toBe(true);
+      state.undo();
+      expect(state.cut.holds).toHaveLength(0);
+      expect(state.cut.voice).toEqual(pinned);
+      expect(state.dirty).toBe(false);
+      state.undo();
+      expect(state.cut.voice).toEqual(pinned);
+    });
+
+    it("leaves the history alone for a change on disk that isn't a render", () => {
+      const state = rendered(seed());
+      state.load({ ...structuredClone(state.cut), voice: pinned });
+      state.undo();
+      expect(state.cut.voice).toEqual({});
+    });
+  });
+
   it("tells subscribers what changed", () => {
     const state = new EditorState(seed());
     const seen: Change[] = [];

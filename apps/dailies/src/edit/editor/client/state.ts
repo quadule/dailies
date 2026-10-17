@@ -2,7 +2,7 @@
 // marks, whether the cut differs from cut.json on disk, and the undo history
 // (JSON snapshots of the cut). DOM-free; the views subscribe to changes.
 
-import { type Cut, formatCut } from "../../cut.js";
+import { type Cut, type CutVoice, formatCut } from "../../cut.js";
 
 export type ItemKind = "caption" | "line" | "cut" | "speedup" | "hold";
 
@@ -49,6 +49,18 @@ export function itemsOf(cut: Cut, kind: ItemKind): unknown[] {
 
 function sameSelection(a?: Selection, b?: Selection): boolean {
   return a?.kind === b?.kind && a?.index === b?.index;
+}
+
+function sameVoice(a: CutVoice, b: CutVoice): boolean {
+  const key = (v: CutVoice) =>
+    JSON.stringify([v.narrator ?? null, v.name ?? null, v.speed ?? null]);
+  return key(a) === key(b);
+}
+
+// How cut.json came to change under the editor.
+export interface DiskChange {
+  // A render wrote it, pinning the voice it used (render.ts pinVoice).
+  rendered?: boolean;
 }
 
 export class EditorState {
@@ -170,19 +182,57 @@ export class EditorState {
     this.emit({ cut: unchanged, selection: false, saved: true, marks: false });
   }
 
-  // cut.json changed on disk under us (a render pinned its voice): take it
-  // as the saved cut. Undo history stays; it holds snapshots, not diffs.
-  load(cut: Cut): void {
+  // cut.json changed on disk under us: take it as the saved cut. Undo
+  // history stays; it holds snapshots, not diffs. After a render, see
+  // pinVoice.
+  load(cut: Cut, change: DiskChange = {}): void {
+    if (change.rendered) {
+      this.pinVoice(cut.voice);
+    }
     this.cut = structuredClone(cut);
     this.saved = formatCut(cut);
     this.dropStaleSelection();
     this.emit({ cut: true, selection: true, saved: true, marks: false });
   }
 
-  // Note that disk holds `disk` without touching the local edits.
-  setDisk(disk: Cut): void {
+  // Note that disk holds `disk` without touching the local edits — except,
+  // after a render, the voice it pinned (see pinVoice).
+  setDisk(disk: Cut, change: DiskChange = {}): void {
+    const voiced = change.rendered === true && this.pinVoice(disk.voice, true);
     this.saved = formatCut(disk);
-    this.emit({ cut: false, selection: false, saved: true, marks: false });
+    this.emit({ cut: voiced, selection: false, saved: true, marks: false });
+  }
+
+  // A render pinned `pinned`, the voice it used, into cut.json. Wherever the
+  // voice it started from (the saved cut's) still stands — every undo and
+  // redo snapshot, a gesture's start and, with `current`, the cut being
+  // edited — it becomes the pinned one, so an undo doesn't unpin it and a
+  // save of that undo doesn't send the next render to a fresh voice that
+  // re-voices every line. A voice changed on purpose stays as it was.
+  // Returns whether the cut being edited changed.
+  private pinVoice(pinned: CutVoice, current = false): boolean {
+    const from = (JSON.parse(this.saved) as Cut).voice;
+    if (sameVoice(from, pinned)) {
+      return false;
+    }
+    const patch = (snapshot: Snapshot) => {
+      const cut = JSON.parse(snapshot.cut) as Cut;
+      if (sameVoice(cut.voice, from)) {
+        cut.voice = structuredClone(pinned);
+        snapshot.cut = JSON.stringify(cut);
+      }
+    };
+    for (const snapshot of [...this.undoStack, ...this.redoStack]) {
+      patch(snapshot);
+    }
+    if (this.gesture) {
+      patch(this.gesture);
+    }
+    if (current && sameVoice(this.cut.voice, from)) {
+      this.cut.voice = structuredClone(pinned);
+      return true;
+    }
+    return false;
   }
 
   private snapshot(): Snapshot {

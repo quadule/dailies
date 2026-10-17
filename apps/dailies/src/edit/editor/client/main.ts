@@ -66,10 +66,6 @@ function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function hasVoice(cut: Cut): boolean {
-  return Object.keys(cut.voice).length > 0;
-}
-
 // When the video at session.video.url was written (its `v` is its mtime), or
 // undefined when there is none.
 function renderedAt(session: EditorSession): number | undefined {
@@ -388,17 +384,12 @@ function start(session: EditorSession, initial: RenderStatus): void {
     session.video = fresh.video;
     session.recordings = fresh.recordings;
     session.steps = fresh.steps;
+    // The render may have pinned its voice into cut.json: the edits made
+    // while it ran stay, and the history takes the pinned voice too.
     if (state.dirty) {
-      state.setDisk(fresh.cut);
-      if (!hasVoice(state.cut) && hasVoice(fresh.cut)) {
-        state.edit((cut) => {
-          cut.voice = structuredClone(fresh.cut.voice);
-          return;
-        });
-      }
+      state.setDisk(fresh.cut, { rendered: true });
     } else {
-      // The render may have pinned its voice into cut.json.
-      state.load(fresh.cut);
+      state.load(fresh.cut, { rendered: true });
     }
     recompute();
     if (status.state === "done" && hasRender(session)) {
