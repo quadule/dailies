@@ -79,35 +79,50 @@ export async function audioDurationSec(
   if (duration !== undefined) {
     return duration;
   }
-  const stderr = await ffmpegStderr(ffmpeg, ["-hide_banner", "-i", filePath]);
+  const { stderr } = await ffmpegStderr(ffmpeg, [
+    "-hide_banner",
+    "-i",
+    filePath,
+  ]);
   const parsed = parseDurationFromStderr(stderr);
   if (parsed !== undefined || !/Duration:\s*N\/A/.test(stderr)) {
     return parsed;
   }
-  return parseLastTime(
-    await ffmpegStderr(ffmpeg, [
-      "-hide_banner",
-      "-i",
-      filePath,
-      "-map",
-      "0:a:0",
-      "-f",
-      "null",
-      "-",
-    ])
-  );
+  const decode = await ffmpegStderr(ffmpeg, [
+    "-hide_banner",
+    "-i",
+    filePath,
+    "-map",
+    "0:a:0",
+    "-f",
+    "null",
+    "-",
+  ]);
+  // Only a decode that ran to the end says where the file ends. One killed
+  // for a timeout or an overflowing stderr, or interrupted by a signal (ffmpeg
+  // traps SIGINT/SIGTERM and exits 255, still printing the time it reached),
+  // stopped short, and its last time= mark would be a truncated length.
+  return decode.completed ? parseLastTime(decode.stderr) : undefined;
 }
 
 // ffmpeg's stderr, whether or not it exited cleanly: `ffmpeg -i` with no
-// output exits non-zero but still prints what it read.
-async function ffmpegStderr(ffmpeg: string, args: string[]): Promise<string> {
+// output exits non-zero but still prints what it read. `completed` is true
+// only when ffmpeg exited 0.
+async function ffmpegStderr(
+  ffmpeg: string,
+  args: string[]
+): Promise<{ completed: boolean; stderr: string }> {
   try {
-    return (await run(ffmpeg, args, PROBE_TIMEOUT_MS)).stderr;
+    return {
+      completed: true,
+      stderr: (await run(ffmpeg, args, PROBE_TIMEOUT_MS)).stderr,
+    };
   } catch (err) {
-    if (err instanceof Error && "stderr" in err) {
-      return (err as { stderr?: string }).stderr ?? "";
-    }
-    return "";
+    const stderr =
+      err instanceof Error && "stderr" in err
+        ? ((err as { stderr?: string }).stderr ?? "")
+        : "";
+    return { completed: false, stderr };
   }
 }
 

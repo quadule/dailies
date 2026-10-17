@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { run } from "../util/process.js";
+import { ProcessError, run } from "../util/process.js";
 import { audioDurationSec, ffprobeFor, probeDurationSec } from "./ffmpeg.js";
 
 vi.mock("../util/process.js", async (importOriginal) => ({
@@ -108,6 +108,53 @@ describe("audioDurationSec", () => {
       "-",
     ]);
   });
+
+  it.each([
+    {
+      reason: "timeout" as const,
+      cause: new Error("timed out after 30000ms"),
+    },
+    {
+      reason: "maxBuffer" as const,
+      cause: new Error("output exceeded maxBuffer"),
+    },
+    // ffmpeg traps SIGINT and exits 255 on its own, mid-decode.
+    {
+      reason: "exit" as const,
+      cause: new Error("Command failed: ffmpeg"),
+      exitCode: 255,
+    },
+    {
+      reason: "exit" as const,
+      cause: new Error("Command failed: ffmpeg"),
+      exitCode: null,
+      signal: "SIGKILL" as const,
+    },
+  ])(
+    "gives no duration for a decode that stopped short: $reason $exitCode $signal",
+    async (failure) => {
+      respondsWith({ stdout: "N/A\n" });
+      respondsWith({
+        stderr: "Input #0, matroska,webm:\n  Duration: N/A, start: 0.000000\n",
+        code: 1,
+      });
+      vi.mocked(run).mockRejectedValueOnce(
+        new ProcessError(
+          "ffmpeg",
+          {
+            stdout: "",
+            stderr: "size=N/A time=00:00:00.96 bitrate=N/A speed= 599x\n",
+          },
+          failure
+        )
+      );
+
+      await expect(
+        audioDurationSec("ffmpeg", "rec.webm")
+      ).resolves.toBeUndefined();
+      expect(run).toHaveBeenCalledTimes(3);
+    }
+  );
 
   it("returns unavailable when neither probe reports a duration", async () => {
     respondsWith({ code: 1 });
