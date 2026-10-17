@@ -1,219 +1,552 @@
-// The browser editor's client — a deliberately small placeholder that proves
-// the pipeline end to end: it loads the session over the API, plays the
-// source, lists what the cut holds, saves the cut back and renders it. The
-// full editor (timeline, live preview, caption and narration editing,
-// microphone recording) replaces this file; the HTTP contract it uses is in
-// ../contract.ts and AGENTS.md.
+// The browser editor for one session's cut.json, served by `dailies cut edit`
+// (../server.ts; the HTTP contract is ../contract.ts and AGENTS.md).
 //
-// It imports the cut model straight from ../../cut.ts: planCut and mapTime
-// are pure, so the preview computes output times exactly as the renderer will.
+// main.ts boots the editor and lays it out: the top bar (save, render, undo),
+// the validation line, the stage (stage.ts, a live preview of the edits), the
+// inspector (inspector.ts) and the timeline (timeline.ts). The cut model is
+// edit/cut.ts itself, so every output time shown here is the one the render
+// will produce. Every time in the cut is SOURCE time.
+//
+// window.dailiesEditor is a small handle for QA scripts (see AGENTS.md).
 
-import { type CutPlan, mapTime, planCut } from "../../cut.js";
-import {
-  EDITOR_HEADER,
-  EDITOR_HEADER_VALUE,
-  type EditorSession,
-  type RenderStatus,
-  type SaveCutResponse,
-} from "../contract.js";
+import type { Cut } from "../../cut.js";
+import type { EditorSession, RenderStatus } from "../contract.js";
+import { api } from "./api.js";
+import type { EditorContext } from "./context.js";
+import { button, h, isTyping } from "./dom.js";
+import { clock, endOf } from "./format.js";
+import { createInspector } from "./inspector.js";
+import { analyze } from "./preview.js";
+import { attachRecording, bindRecorder } from "./recorder.js";
+import { createStage } from "./stage.js";
+import { EditorState } from "./state.js";
+import { createTimeline } from "./timeline.js";
 
 const POLL_MS = 1000;
+// A transient status message clears after this long; errors stay.
+const STATUS_MS = 8000;
+// Polls that may fail in a row before the editor stops following a render.
+const POLL_RETRIES = 5;
+
+export interface DailiesEditor {
+  addRecording: typeof attachRecording;
+  getCut(): Cut;
+  render(): Promise<RenderStatus | undefined>;
+  save(): Promise<boolean>;
+  seek(sec: number): void;
+  setCut(cut: Cut): void;
+}
+
+declare global {
+  interface Window {
+    dailiesEditor?: DailiesEditor;
+  }
+}
+
 const app = document.getElementById("app") as HTMLElement;
 
-async function api<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method,
-    headers: {
-      [EDITOR_HEADER]: EDITOR_HEADER_VALUE,
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) {
-    throw new Error(data.error ?? `${method} ${url} failed (${res.status})`);
-  }
-  return data;
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  text = "",
-  className = ""
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.textContent = text;
-  if (className) {
-    node.className = className;
-  }
-  return node;
+function hasVoice(cut: Cut): boolean {
+  return Object.keys(cut.voice).length > 0;
 }
 
-// m:ss.s, the way `dailies cut render` prints a position.
-function clock(sec: number): string {
-  const tenths = Math.round(Math.max(0, sec) * 10);
-  const seconds = ((tenths % 600) / 10).toFixed(1).padStart(4, "0");
-  return `${Math.floor(tenths / 600)}:${seconds}`;
+// The video at session.video.url exists (its version is its mtime).
+function hasRender(session: EditorSession): boolean {
+  return !session.video.url.endsWith("?v=0");
 }
 
-function section(title: string, ...children: Node[]): HTMLElement {
-  const box = el("section");
-  box.append(el("h2", title), ...children);
-  return box;
-}
-
-function list(items: string[], empty: string): HTMLElement {
-  if (items.length === 0) {
-    return el("p", empty, "muted");
-  }
-  const ul = el("ul");
-  ul.append(...items.map((text) => el("li", text)));
-  return ul;
-}
-
-function stepList(
-  session: EditorSession,
-  plan: CutPlan,
-  video: HTMLVideoElement
-): HTMLElement {
-  const ol = el("ol", "", "steps");
-  for (const step of session.steps) {
-    const out = mapTime(plan, step.at);
-    const button = el(
-      "button",
-      `${clock(step.at)}  ${step.name}${step.ok ? "" : " (failed)"}`
-    );
-    button.type = "button";
-    button.title = out.removed
-      ? "Cut from the video"
-      : `At ${clock(out.out)} in the video`;
-    button.addEventListener("click", () => {
-      video.currentTime = step.at;
-    });
-    const li = el("li");
-    li.append(button);
-    ol.append(li);
-  }
-  return ol;
-}
-
-function renderPanel(): {
-  panel: HTMLElement;
-  show: (status: RenderStatus, videoUrl?: string) => void;
-} {
-  const panel = el("section", "", "render");
-  const show = (status: RenderStatus, videoUrl?: string) => {
-    const result = status.state === "done" ? status.result : undefined;
-    const lines = [
-      ...status.progress,
-      ...(status.error ? [`Error: ${status.error}`] : []),
-      ...(result?.notes ?? []),
-      ...(result?.warnings ?? []).map((w) => `Warning: ${w}`),
-    ];
-    panel.replaceChildren(el("h2", `Render: ${status.state}`), list(lines, ""));
-    if (result && videoUrl) {
-      const video = el("video");
-      video.controls = true;
-      video.src = videoUrl;
-      panel.append(
-        el("p", `Rendered ${clock(result.durationSec)} of video.`),
-        video
-      );
-    }
+function start(session: EditorSession, initial: RenderStatus): void {
+  const state = new EditorState(session.cut);
+  const grid = {
+    durationSec: session.source.durationSec,
+    fps: session.source.fps || 30,
   };
-  return { panel, show };
-}
+  const statusLine = h("p", { class: "status", attrs: { role: "status" } });
+  let statusTimer: ReturnType<typeof setTimeout> | undefined;
+  // The status line holds "can't save" for an invalid cut: cleared once the
+  // cut is valid again, so it never contradicts the verdict.
+  let invalidNotice = false;
 
-// Follow the render until it settles, then show the new video (its URL
-// changes with every render, so the session is fetched again for it).
-async function pollRender(
-  show: (status: RenderStatus, videoUrl?: string) => void,
-  report: (message: string) => void
-): Promise<void> {
-  try {
-    const status = await api<RenderStatus>("GET", "/api/render");
+  const ctx: EditorContext = {
+    session,
+    state,
+    grid,
+    rendered: (initial.result?.lines ?? []).map((l) => ({
+      text: l.text,
+      durationSec: l.durationSec,
+    })),
+    analysis: analyze(state.cut, {
+      source: grid,
+      lineMax: session.caption.lineMax,
+      recordings: session.recordings,
+      rendered: [],
+    }),
+    playhead: () => stage.time(),
+    seek: (sec) => stage.seek(sec),
+    status(text, tone) {
+      invalidNotice = false;
+      statusLine.textContent = text;
+      statusLine.classList.toggle("error", tone === "error");
+      clearTimeout(statusTimer);
+      if (tone !== "error") {
+        statusTimer = setTimeout(() => {
+          statusLine.textContent = "";
+        }, STATUS_MS);
+      }
+    },
+  };
+  const recompute = () => {
+    ctx.analysis = analyze(state.cut, {
+      source: grid,
+      lineMax: session.caption.lineMax,
+      recordings: session.recordings,
+      rendered: ctx.rendered,
+    });
+  };
+  recompute();
+  bindRecorder(ctx);
+
+  const stage = createStage(ctx);
+  const timeline = createTimeline(ctx);
+  const inspector = createInspector(ctx, {
+    editCaption: (i) => timeline.editCaption(i),
+  });
+
+  // ----- top bar -----
+
+  let rendering = initial.state === "running";
+  let saving = false;
+  let renderNote = "";
+
+  const badge = h("span", { class: "badge sm" });
+  const undo = button("Undo", () => state.undo(), {
+    class: "btn icon",
+    icon: "undo",
+    iconOnly: true,
+    title: "Undo (Ctrl/⌘ Z)",
+  });
+  const redo = button("Redo", () => state.redo(), {
+    class: "btn icon",
+    icon: "redo",
+    iconOnly: true,
+    title: "Redo (Shift Ctrl/⌘ Z)",
+  });
+  const saveButton = button("Save", () => void save(), {
+    class: "btn primary",
+  });
+  const renderButton = button("Render", () => void render(), { class: "btn" });
+  const renderState = h("span", {
+    class: "render-note",
+    attrs: { role: "status" },
+  });
+  const reportPath = `~/.dailies/sessions/${session.id}/report.html`;
+  const copy = button(
+    "Copy the report's path",
+    () => {
+      navigator.clipboard.writeText(reportPath).then(
+        () => ctx.status("Copied the report's path"),
+        () => ctx.status("Couldn't copy — select the path instead", "error")
+      );
+    },
+    { class: "btn icon xs", icon: "copy", iconOnly: true }
+  );
+  const header = h(
+    "header",
+    { class: "topbar" },
+    h(
+      "div",
+      { class: "title" },
+      h("h1", { text: session.name ?? session.id }),
+      h(
+        "p",
+        { class: "crumb" },
+        h("span", { class: "mono", text: session.id }),
+        h("span", {
+          class: "sep",
+          text: "·",
+          attrs: { "aria-hidden": "true" },
+        }),
+        "Report ",
+        h("code", { text: reportPath }),
+        copy
+      )
+    ),
+    badge,
+    h(
+      "div",
+      { class: "actions" },
+      undo,
+      redo,
+      saveButton,
+      renderButton,
+      renderState
+    )
+  );
+
+  // ----- the validation line -----
+
+  const verdict = h("p", { class: "verdict" });
+  const hintList = h("ul", { class: "hint-list" });
+  const hintSummary = h("summary");
+  const hints = h("details", { class: "hints" }, hintSummary, hintList);
+  const checks = h(
+    "div",
+    { class: "checks", attrs: { "aria-label": "Validation" } },
+    verdict,
+    hints,
+    statusLine
+  );
+
+  function saveBlocker(): string | undefined {
+    if (rendering) {
+      return "Saving waits for the render: it writes the voice it used into cut.json when it finishes";
+    }
+    if (ctx.analysis.error) {
+      return "Fix the problem in the cut first";
+    }
+    if (saving) {
+      return "Saving…";
+    }
+    if (!state.dirty) {
+      return "No unsaved changes";
+    }
+  }
+
+  function drawChecks(): void {
+    const { error, hints: found, plan } = ctx.analysis;
+    verdict.className = `verdict ${error ? "bad" : "ok"}`;
+    verdict.replaceChildren(
+      h("span", {
+        class: "mark",
+        text: error ? "✕" : "✓",
+        attrs: { "aria-hidden": "true" },
+      }),
+      error
+        ? h("span", {}, h("strong", { text: "Can't save: " }), error)
+        : h("span", {
+            text: `Valid · ${clock(endOf(grid))} of footage → ${clock(plan.outDurationSec)} of video`,
+          })
+    );
+    hints.hidden = found.length === 0;
+    hintSummary.textContent =
+      found.length === 1
+        ? `1 hint: ${found[0]}`
+        : `${found.length} hints — ${found[0] ?? ""}`;
+    hintList.replaceChildren(...found.map((t) => h("li", { text: t })));
+    if (invalidNotice && !error) {
+      ctx.status("");
+    }
+    if (rendering && !statusLine.textContent) {
+      statusLine.textContent =
+        "A render is running — saving is paused until it finishes.";
+    }
+  }
+
+  function drawTop(): void {
+    const dirty = state.dirty;
+    badge.textContent = dirty ? "Unsaved changes" : "Saved";
+    badge.className = `badge sm ${dirty ? "unsaved" : "saved"}`;
+    undo.disabled = !state.canUndo;
+    redo.disabled = !state.canRedo;
+    const blocker = saveBlocker();
+    saveButton.disabled = blocker !== undefined;
+    saveButton.title = blocker ?? "Save cut.json (Ctrl/⌘ S)";
+    renderButton.disabled = rendering || Boolean(ctx.analysis.error);
+    renderButton.title = rendering
+      ? "A render is running"
+      : "Save if needed, then render the video from cut.json";
+    const label = renderButton.querySelector("span");
+    if (label) {
+      label.textContent = rendering ? "Rendering…" : "Render";
+    }
+    renderState.textContent = renderNote;
+    drawChecks();
+  }
+
+  // ----- saving and rendering -----
+
+  async function save(): Promise<boolean> {
+    const blocker = rendering || ctx.analysis.error ? saveBlocker() : undefined;
+    if (blocker) {
+      ctx.status(
+        ctx.analysis.error ? `Can't save: ${ctx.analysis.error}` : blocker,
+        "error"
+      );
+      invalidNotice = Boolean(ctx.analysis.error);
+      return false;
+    }
+    saving = true;
+    drawTop();
+    const sent = JSON.stringify(state.cut);
+    try {
+      const saved = await api.saveCut(state.cut);
+      state.markSaved(saved.cut, sent);
+      ctx.status("Saved cut.json");
+      return true;
+    } catch (err) {
+      ctx.status(`Not saved: ${message(err)}`, "error");
+      return false;
+    } finally {
+      saving = false;
+      drawTop();
+    }
+  }
+
+  function showRender(status: RenderStatus): void {
+    inspector.showRender(status);
     if (status.state === "running") {
-      show(status);
-      setTimeout(() => void pollRender(show, report), POLL_MS);
+      renderNote = status.progress.at(-1) ?? "starting…";
+    } else if (status.state === "error") {
+      renderNote = "Render failed";
+    } else {
+      renderNote = "";
+    }
+    drawTop();
+  }
+
+  async function finishRender(status: RenderStatus): Promise<void> {
+    rendering = false;
+    if (status.result) {
+      ctx.rendered = status.result.lines.map((l) => ({
+        text: l.text,
+        durationSec: l.durationSec,
+      }));
+    }
+    const fresh = await api.session();
+    session.video = fresh.video;
+    session.recordings = fresh.recordings;
+    session.steps = fresh.steps;
+    if (state.dirty) {
+      state.setDisk(fresh.cut);
+      if (!hasVoice(state.cut) && hasVoice(fresh.cut)) {
+        state.edit((cut) => {
+          cut.voice = structuredClone(fresh.cut.voice);
+          return;
+        });
+      }
+    } else {
+      // The render may have pinned its voice into cut.json.
+      state.load(fresh.cut);
+    }
+    recompute();
+    if (status.state === "done" && hasRender(session)) {
+      stage.setRendered(fresh.cut);
+    }
+    refreshAll();
+    showRender(status);
+    ctx.status(
+      status.state === "done" && status.result
+        ? `Rendered ${clock(status.result.durationSec)} of video — switch on "Rendered video" to watch it`
+        : `The render failed: ${status.error ?? "no reason given"}`,
+      status.state === "done" ? undefined : "error"
+    );
+  }
+
+  let failures = 0;
+  async function poll(): Promise<void> {
+    try {
+      const status = await api.renderStatus();
+      failures = 0;
+      showRender(status);
+      if (status.state === "running") {
+        setTimeout(() => void poll(), POLL_MS);
+        return;
+      }
+      await finishRender(status);
+    } catch (err) {
+      failures += 1;
+      if (failures < POLL_RETRIES) {
+        setTimeout(() => void poll(), POLL_MS);
+        return;
+      }
+      rendering = false;
+      drawTop();
+      ctx.status(`Lost track of the render: ${message(err)}`, "error");
+    }
+  }
+
+  async function render(): Promise<RenderStatus | undefined> {
+    if (rendering) {
       return;
     }
-    const session = await api<EditorSession>("GET", "/api/session");
-    show(status, session.video.url);
-  } catch (err) {
-    report(`Lost track of the render: ${(err as Error).message}`);
+    if (state.dirty && !(await save())) {
+      return;
+    }
+    try {
+      const status = await api.startRender();
+      rendering = true;
+      showRender(status);
+      setTimeout(() => void poll(), POLL_MS);
+      return status;
+    } catch (err) {
+      ctx.status(`Not rendered: ${message(err)}`, "error");
+      return;
+    }
   }
-}
 
-function view(session: EditorSession): void {
-  const plan = planCut(session.cut, session.source);
-  const video = el("video");
-  video.controls = true;
-  video.src = "/source.webm";
-  const status = el("p", "", "status");
-  status.setAttribute("role", "status");
-  const { panel, show } = renderPanel();
-  const report = (message: string) => {
-    status.textContent = message;
-  };
+  // ----- wiring -----
 
-  const save = el("button", "Save cut");
-  save.type = "button";
-  save.addEventListener("click", async () => {
-    try {
-      await api<SaveCutResponse>("PUT", "/api/cut", session.cut);
-      report("Saved cut.json.");
-    } catch (err) {
-      report(`Not saved: ${(err as Error).message}`);
+  function refreshAll(): void {
+    stage.refresh();
+    timeline.refresh();
+    inspector.refresh();
+    drawTop();
+  }
+
+  state.subscribe((change) => {
+    if (change.cut) {
+      recompute();
+      stage.refresh();
     }
-  });
-  const renderButton = el("button", "Render");
-  renderButton.type = "button";
-  renderButton.addEventListener("click", async () => {
-    try {
-      show(await api<RenderStatus>("POST", "/api/render"));
-      setTimeout(() => void pollRender(show, report), POLL_MS);
-    } catch (err) {
-      report(`Not rendered: ${(err as Error).message}`);
+    if (change.cut || change.selection || change.marks) {
+      timeline.refresh();
+      inspector.refresh();
     }
+    drawTop();
   });
-  const actions = el("div", "", "actions");
-  actions.append(save, renderButton, status);
+  stage.onTime((t, playing) => timeline.setPlayhead(t, playing));
 
-  app.replaceChildren(
-    el("h1", session.name ?? session.id),
-    el(
-      "p",
-      `${session.id} · ${clock(plan.sourceDurationSec)} of footage → ${clock(plan.outDurationSec)} of video`,
-      "muted"
-    ),
-    video,
-    actions,
-    section("Steps", stepList(session, plan, video)),
-    section(
-      "Captions",
-      list(
-        session.cut.captions.map(
-          (c) => `${clock(c.start)}–${clock(c.end)}  ${c.text}`
-        ),
-        "No captions."
-      )
-    ),
-    section(
-      "Narration",
-      list(
-        session.cut.narration.map(
-          (l) => `${clock(l.at)}  ${l.text}${l.audio ? ` (${l.audio})` : ""}`
-        ),
-        "No narration."
-      )
-    ),
-    panel
+  const main = h(
+    "main",
+    { class: "workspace" },
+    stage.element,
+    inspector.element
   );
-  void pollRender(show, report);
+  app.className = "editor";
+  app.replaceChildren(header, checks, main, timeline.element);
+
+  if (hasRender(session)) {
+    stage.setRendered(session.cut);
+  }
+  showRender(initial);
+  if (rendering) {
+    setTimeout(() => void poll(), POLL_MS);
+  }
+  refreshAll();
+
+  // ----- keyboard -----
+
+  function history(forward: boolean): void {
+    if (forward) {
+      state.redo();
+    } else {
+      state.undo();
+    }
+  }
+
+  function onKey(event: KeyboardEvent): void {
+    const mod = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
+    if (mod && key === "s") {
+      event.preventDefault();
+      void save();
+      return;
+    }
+    if (isTyping(event.target)) {
+      if (event.key === "Escape") {
+        (event.target as HTMLElement).blur();
+      }
+      return;
+    }
+    if (mod && (key === "z" || key === "y")) {
+      event.preventDefault();
+      history(key === "y" || event.shiftKey);
+      return;
+    }
+    if (mod || event.altKey) {
+      return;
+    }
+    const handled = shortcut(event);
+    if (handled) {
+      event.preventDefault();
+    }
+  }
+
+  function shortcut(event: KeyboardEvent): boolean {
+    switch (event.key) {
+      case " ":
+        stage.toggle();
+        return true;
+      case "i":
+      case "I":
+        stage.mark("in");
+        return true;
+      case "o":
+      case "O":
+        stage.mark("out");
+        return true;
+      case "ArrowLeft":
+      case "ArrowRight": {
+        const direction = event.key === "ArrowLeft" ? -1 : 1;
+        if (event.shiftKey) {
+          stage.pause();
+          stage.seek(stage.time() + direction);
+        } else {
+          stage.stepFrames(direction);
+        }
+        return true;
+      }
+      case "Home":
+        stage.seek(0);
+        return true;
+      case "End":
+        stage.seek(endOf(grid));
+        return true;
+      case "Delete":
+      case "Backspace":
+        return state.removeSelected();
+      case "Escape":
+        if (state.selection) {
+          state.select(undefined);
+        } else {
+          state.setMarks({});
+        }
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  window.addEventListener("keydown", onKey);
+  window.addEventListener("beforeunload", (event) => {
+    if (state.dirty) {
+      event.preventDefault();
+    }
+  });
+
+  window.dailiesEditor = {
+    getCut: () => structuredClone(state.cut),
+    setCut(cut) {
+      state.edit((current) => {
+        Object.assign(current, structuredClone(cut));
+        return;
+      });
+    },
+    addRecording: attachRecording,
+    save,
+    render,
+    seek: (sec) => stage.seek(sec),
+  };
 }
 
 function failed(err: unknown): void {
-  app.replaceChildren(el("p", `Error: ${(err as Error).message}`, "error"));
+  app.className = "editor failed";
+  app.replaceChildren(
+    h(
+      "div",
+      { class: "boot-error", attrs: { role: "alert" } },
+      h("h1", { text: "The editor couldn't load this session" }),
+      h("p", { text: message(err) })
+    )
+  );
 }
 
-api<EditorSession>("GET", "/api/session").then(view, failed);
+Promise.all([
+  api.session(),
+  api
+    .renderStatus()
+    .catch((): RenderStatus => ({ state: "idle", progress: [] })),
+]).then(([session, status]) => start(session, status), failed);
