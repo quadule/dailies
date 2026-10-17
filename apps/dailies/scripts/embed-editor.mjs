@@ -11,7 +11,13 @@
 // The bundle targets the browser, so a client import that reaches Node (fs,
 // child_process, the logger) fails the build here rather than in the page.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -48,8 +54,17 @@ const content = [
 ].join("\n");
 
 // Compare before writing, so an unchanged client doesn't touch the file and
-// invalidate everything downstream of its mtime.
+// invalidate everything downstream of its mtime. Written under another name
+// and renamed into place: in a fresh clone turbo runs `compile` and `build`
+// side by side, both run this script, and tsc may be reading the file while
+// the other one writes it.
 const out = resolve(editorDir, "client.generated.ts");
 if (!existsSync(out) || readFileSync(out, "utf8") !== content) {
-  writeFileSync(out, content);
+  const tmp = `${out}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, content);
+    renameSync(tmp, out);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
 }
