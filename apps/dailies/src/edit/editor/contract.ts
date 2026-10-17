@@ -5,7 +5,7 @@
 // routes these shapes travel over.
 
 import type { NarratorChoice } from "../../video/media-preferences.js";
-import type { Cut } from "../cut.js";
+import type { Cut, CutVoice } from "../cut.js";
 import type { CutRenderResult } from "../render.js";
 
 // Every /api/* request must carry this header. A cross-site page can't add a
@@ -53,6 +53,16 @@ export interface EditorRecording {
   file: string;
 }
 
+// A text-to-speech line of the cut on disk whose clip is already in the
+// session's cut/ cache under the cut's pinned voice and speed — voiced by a
+// render or by POST /api/voice. `index` is its place in cut.narration; `file`
+// is "cut/tts-….m4a", served at "/" + file.
+export interface EditorVoicedLine {
+  durationSec: number;
+  file: string;
+  index: number;
+}
+
 // GET /api/session
 export interface EditorSession {
   // Caption band geometry the render uses: the band added under the picture,
@@ -68,6 +78,26 @@ export interface EditorSession {
   steps: EditorStep[];
   // The rendered output. `url` changes (its `v`) after every render.
   video: { path: string; url: string };
+  // Text-to-speech lines whose clip is already made, so their real length
+  // survives a restart.
+  voiced: EditorVoicedLine[];
+}
+
+// POST /api/voice: voice the text-to-speech line at cut.narration[index] of
+// the cut on disk.
+export interface VoiceLineRequest {
+  index: number;
+}
+
+// POST /api/voice → 200: the clip, and what it is keyed by — the words of
+// the line it voiced (from the cut on disk) and the cut's voice once the
+// voicing pinned it.
+export interface VoiceLineResponse {
+  durationSec: number;
+  // "cut/tts-….m4a", served at "/" + file.
+  file: string;
+  text: string;
+  voice: CutVoice;
 }
 
 // GET /api/render (also the body of POST /api/render's 202).

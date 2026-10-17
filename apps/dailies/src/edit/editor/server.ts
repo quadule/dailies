@@ -3,10 +3,11 @@
 // to 127.0.0.1.
 //
 // It reads and writes the same files the CLI does — cut.json through
-// readCut/writeCut, renders through renderCut — so an edit saved here and one
-// an agent makes by hand are the same edit. The only files it writes itself
-// are cut.json and the session's recordings/ folder; a render writes what
-// `dailies cut render` writes.
+// readCut/writeCut, renders through renderCut and voices a line ahead of a
+// render through voiceCutLines — so an edit saved here and one an agent makes
+// by hand are the same edit. The only files it writes itself are cut.json and
+// the session's recordings/ folder; a render writes what `dailies cut render`
+// writes, and voicing a line writes its clip into the render's cache, cut/.
 //
 // Security for a tool on localhost: requests must name 127.0.0.1:<port> or
 // localhost:<port> as their Host (a DNS-rebinding page names its own host;
@@ -48,10 +49,14 @@ import {
 } from "../cut.js";
 import { readCut, writeCut } from "../cut-file.js";
 import {
+  CUT_CACHE_DIR,
   type CutRenderResult,
   type CutSource,
+  FINISHED_CLIP,
   loadCutSource,
   renderCut,
+  ttsClipName,
+  voiceCutLines,
 } from "../render.js";
 import { EDITOR_CLIENT_CSS, EDITOR_CLIENT_JS } from "./client.generated.js";
 import {
@@ -60,15 +65,19 @@ import {
   type EditorRecording,
   type EditorSession,
   type EditorStep,
+  type EditorVoicedLine,
   MAX_RECORDING_BYTES,
   RECORDING_TYPES,
   RECORDINGS_DIR,
   type RenderStatus,
+  type VoiceLineResponse,
 } from "./contract.js";
 import { editorPage } from "./page.js";
 
 // A cut is a few hundred KB at most, even for a long run.
 const MAX_CUT_BYTES = 5 * 1024 * 1024;
+// POST /api/voice takes `{ "index": n }`.
+const MAX_VOICE_BYTES = 1024;
 
 // Headers on every response. CORP keeps another site from embedding the
 // session's video and screenshots; the rest are the usual hardening.
@@ -481,6 +490,11 @@ class Editor {
   >();
   private render: RenderStatus = { state: "idle", progress: [] };
   private running: Promise<void> = Promise.resolve();
+  // A POST /api/voice in progress, and a PUT /api/cut writing cut.json.
+  // Voicing may pin the voice into cut.json, writing back the cut it read, so
+  // the two never overlap (see voice and putCut).
+  private voicing: Promise<void> | undefined;
+  private saving: Promise<void> | undefined;
 
   private readonly sessionId: string;
   private readonly source: CutSource;
@@ -504,7 +518,20 @@ class Editor {
   }
 
   settled(): Promise<void> {
-    return this.running;
+    return Promise.all([this.running, this.voicing]).then(() => undefined);
+  }
+
+  // Why cut.json can't be written now, or undefined when it can: a render or
+  // a voicing pins its voice into it when it finishes, writing the cut it
+  // started from.
+  private writeBlocker(): string | undefined {
+    if (this.rendering()) {
+      return "a render is running — save again when it finishes";
+    }
+    if (this.voicing) {
+      return "a line is being voiced — save again when it finishes";
+    }
+    return;
   }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -590,11 +617,18 @@ class Editor {
     if (
       rest.length === 0 &&
       name &&
-      (sub === RECORDINGS_DIR || sub === SESSION_SCREENSHOTS_DIR)
+      (sub === RECORDINGS_DIR ||
+        sub === SESSION_SCREENSHOTS_DIR ||
+        sub === CUT_CACHE_DIR)
     ) {
       const file = namedFile(this.dir, sub, name);
       if (!file) {
         sendText(res, 400, "Bad file name");
+        return;
+      }
+      // cut/ is the render's cache: only its finished clips are served.
+      if (sub === CUT_CACHE_DIR && !FINISHED_CLIP.test(path.basename(file))) {
+        sendText(res, 404, "Not found");
         return;
       }
       await sendFile(req, res, file, this.dir);
@@ -631,6 +665,8 @@ class Editor {
       sendJson(res, 200, this.render);
     } else if (route === "POST /api/render") {
       this.startRender(res);
+    } else if (route === "POST /api/voice") {
+      await this.voice(req, res);
     } else if (route === "POST /api/recordings") {
       await this.uploadRecording(req, res);
     } else if (
@@ -646,6 +682,7 @@ class Editor {
         "/api/session",
         "/api/cut",
         "/api/render",
+        "/api/voice",
         `/api/${RECORDINGS_DIR}`,
       ].includes(pathname)
     ) {
@@ -700,6 +737,7 @@ class Editor {
         path: cut.video,
       },
       recordings: await this.recordings(),
+      voiced: await this.voiced(cut),
     };
     sendJson(res, 200, session);
   }
@@ -708,10 +746,11 @@ class Editor {
     req: IncomingMessage,
     res: ServerResponse
   ): Promise<void> {
-    if (this.rendering()) {
-      // The render pins its voice into cut.json when it finishes, writing the
-      // cut it started from — a save now could be overwritten.
-      sendError(res, 409, "a render is running — save again when it finishes");
+    // A render or a voicing pins its voice into cut.json when it finishes,
+    // writing the cut it started from — a save now could be overwritten.
+    const blocked = this.writeBlocker();
+    if (blocked) {
+      sendError(res, 409, blocked);
       return;
     }
     const body = await readBody(req, MAX_CUT_BYTES);
@@ -754,7 +793,20 @@ class Editor {
       );
       return;
     }
-    await writeCut(this.sessionId, parsed.cut);
+    // Checked again: one may have started while the body was read. Nothing
+    // is awaited between this check and the write starting.
+    const late = this.writeBlocker();
+    if (late) {
+      sendError(res, 409, late);
+      return;
+    }
+    const writing = writeCut(this.sessionId, parsed.cut).then(() => undefined);
+    this.saving = writing;
+    try {
+      await writing;
+    } finally {
+      this.saving = undefined;
+    }
     // What is on disk now.
     sendJson(res, 200, { cut: saved.cut });
   }
@@ -762,6 +814,11 @@ class Editor {
   private startRender(res: ServerResponse): void {
     if (this.rendering()) {
       sendError(res, 409, "a render is already running");
+      return;
+    }
+    if (this.voicing) {
+      // Both would resolve a voice, and both pin theirs into cut.json.
+      sendError(res, 409, "a line is being voiced — render when it finishes");
       return;
     }
     const status: RenderStatus = {
@@ -800,6 +857,148 @@ class Editor {
     sendJson(res, 202, status);
   }
 
+  // ----- voicing a line ahead of a render -----
+
+  // POST /api/voice { index }: voice that text-to-speech line of the cut on
+  // disk into the render's cache, as a render would (render.ts voiceCutLines).
+  private async voice(
+    req: IncomingMessage,
+    res: ServerResponse
+  ): Promise<void> {
+    const body = await readBody(req, MAX_VOICE_BYTES);
+    if (body === "too-large") {
+      refuseTooLarge(req, res);
+      return;
+    }
+    let index: unknown;
+    try {
+      index = (JSON.parse(body.toString("utf8")) as { index?: unknown } | null)
+        ?.index;
+    } catch (err) {
+      sendError(
+        res,
+        400,
+        `the body is not valid JSON: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return;
+    }
+    if (!(typeof index === "number" && Number.isInteger(index) && index >= 0)) {
+      sendError(
+        res,
+        400,
+        'the body must be { "index": n }, n a narration line\'s index in cut.json'
+      );
+      return;
+    }
+    if (this.rendering()) {
+      sendError(
+        res,
+        409,
+        "a render is running — voice the line when it finishes"
+      );
+      return;
+    }
+    if (this.voicing) {
+      sendError(res, 409, "a line is already being voiced");
+      return;
+    }
+    // Set before anything is awaited, so a save or a render arriving now
+    // waits its turn (writeBlocker, startRender).
+    const task = this.voiceNow(res, index);
+    this.voicing = task;
+    try {
+      await task;
+    } finally {
+      this.voicing = undefined;
+    }
+  }
+
+  private async voiceNow(res: ServerResponse, index: number): Promise<void> {
+    // A save that began before this request is let finish, so the cut read
+    // here is the one it wrote.
+    await this.saving;
+    const cut = await this.currentCut(res);
+    if (!cut) {
+      return;
+    }
+    const line = cut.narration[index];
+    if (!line) {
+      sendError(
+        res,
+        400,
+        `cut.json has no narration line ${index} (it has ${cut.narration.length}) — save the cut first`
+      );
+      return;
+    }
+    if (line.audio) {
+      sendError(
+        res,
+        400,
+        `narration line ${index} is recorded (${line.audio}) — only a text-to-speech line is voiced`
+      );
+      return;
+    }
+    let result: Awaited<ReturnType<typeof voiceCutLines>>;
+    try {
+      result = await voiceCutLines({
+        sessionId: this.sessionId,
+        cut,
+        lines: [line],
+        dir: this.dir,
+        ffmpeg: this.source.ffmpeg,
+        echo: () => undefined,
+        progress: () => undefined,
+      });
+    } catch (err) {
+      // The voice itself failed: the provider, or the say command.
+      logger.warn({ err, sessionId: this.sessionId, index }, "voicing failed");
+      sendError(res, 500, err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if ("error" in result) {
+      // No narrator at all is the machine's state, not this line's fault.
+      sendError(res, result.noVoice ? 503 : 500, result.error);
+      return;
+    }
+    const voiced = result.voiced[0];
+    if (!voiced) {
+      sendError(res, 500, "the line was not voiced");
+      return;
+    }
+    await this.remember(path.join(this.dir, voiced.file), voiced.durationSec);
+    // The clip's key: the line's words, and the voice the voicing pinned
+    // into `cut` (and cut.json) when the cut had none.
+    const answer: VoiceLineResponse = {
+      file: voiced.file,
+      durationSec: voiced.durationSec,
+      text: line.text,
+      voice: cut.voice,
+    };
+    sendJson(res, 200, answer);
+  }
+
+  // The TTS lines of `cut` whose clip is cached under its pinned voice and
+  // speed, so their length survives a restart. A voice that isn't pinned
+  // keys nothing yet: the next render or voicing resolves one.
+  private async voiced(cut: Cut): Promise<EditorVoicedLine[]> {
+    if (!cut.voice.narrator) {
+      return [];
+    }
+    const speed = cut.voice.speed ?? 1;
+    const out: EditorVoicedLine[] = [];
+    for (const [index, line] of cut.narration.entries()) {
+      if (line.audio !== undefined) {
+        continue;
+      }
+      const file = `${CUT_CACHE_DIR}/${ttsClipName(cut.voice, speed, line.text)}`;
+      const durationSec = await this.durationOf(path.join(this.dir, file));
+      if (durationSec) {
+        out.push({ index, file, durationSec });
+      }
+    }
+    return out;
+  }
+
   // ----- recordings -----
 
   private async recordings(): Promise<EditorRecording[]> {
@@ -820,7 +1019,20 @@ class Editor {
     return out;
   }
 
-  // A recording's length, probed once per version of the file.
+  // Note a length measured elsewhere (voicing measures its clip), so
+  // durationOf doesn't probe that version of the file again.
+  private async remember(file: string, durationSec: number): Promise<void> {
+    const info = await stat(file).catch(() => undefined);
+    if (info?.isFile()) {
+      this.durations.set(file, {
+        key: `${info.size}:${info.mtimeMs}`,
+        durationSec,
+      });
+    }
+  }
+
+  // An audio file's length (a recording, a cached clip), probed once per
+  // version of the file.
   private async durationOf(file: string): Promise<number | undefined> {
     const info = await stat(file).catch(() => undefined);
     if (!info?.isFile()) {

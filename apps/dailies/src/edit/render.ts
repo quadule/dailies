@@ -214,6 +214,18 @@ function cacheKey(parts: unknown[]): string {
     .slice(0, 16);
 }
 
+// The name a TTS line's clip has in cut/: keyed by the words it speaks and the
+// voice that spoke them (narrator, voice name, speed). The render, voicing a
+// line ahead of one (voiceCutLines), and the editor's list of lines already
+// voiced (edit/editor/server.ts) all name a clip through this.
+export function ttsClipName(
+  voice: { narrator?: string; name?: string },
+  speed: number,
+  text: string
+): string {
+  return `tts-${cacheKey(["tts", voice.narrator, voice.name ?? "", speed, speechText(text)])}.m4a`;
+}
+
 // Transcode a spoken line to the mix format: stereo 44.1k AAC, loudness
 // normalized, optionally sped up. Written under a temporary name and renamed
 // into place: the cache treats "the file exists" as "the clip is good", so an
@@ -274,12 +286,12 @@ interface ClipJob {
 // A recorded line's clip is keyed by the file, so replacing the recording (a
 // new size or mtime) re-normalizes it.
 async function findRecordings(
-  cut: Cut,
+  lines: CutLine[],
   dir: string,
   cacheDir: string
 ): Promise<Map<CutLine, { src: string; clip: string }> | { error: string }> {
   const recorded = new Map<CutLine, { src: string; clip: string }>();
-  for (const line of cut.narration) {
+  for (const line of lines) {
     if (!line.audio) {
       continue;
     }
@@ -334,24 +346,30 @@ async function produceClip(args: {
   }
 }
 
-// Produce a clip for every narration line: the cached one when its text and
-// voice are unchanged, otherwise a fresh TTS render or a normalized copy of the
-// recorded file. Resolves the TTS voice only when a line actually needs it.
+// Produce a clip for every narration line (or just `lines`): the cached one
+// when its text and voice are unchanged, otherwise a fresh TTS render or a
+// normalized copy of the recorded file. Resolves the TTS voice only when a
+// line actually needs it. `noVoice` marks the error that says no narrator is
+// available, as opposed to one line failing.
 async function voiceLines(args: {
   cut: Cut;
+  // The lines to voice, from cut.narration; all of them when absent.
+  lines?: CutLine[];
   dir: string;
   ffmpeg: string;
   notes: string[];
   echo: Echo;
   progress: (message: string) => void;
 }): Promise<
-  { voiced: VoicedLine[]; voice?: Voice; used: Set<string> } | { error: string }
+  | { voiced: VoicedLine[]; voice?: Voice; used: Set<string> }
+  | { error: string; noVoice?: boolean }
 > {
   const { cut, dir, ffmpeg, notes, echo, progress } = args;
+  const lines = args.lines ?? cut.narration;
   const cacheDir = path.join(dir, CUT_CACHE_DIR);
   await mkdir(cacheDir, { recursive: true });
   const speed = cut.voice.speed ?? 1;
-  const recorded = await findRecordings(cut, dir, cacheDir);
+  const recorded = await findRecordings(lines, dir, cacheDir);
   if (!(recorded instanceof Map)) {
     return recorded;
   }
@@ -359,12 +377,9 @@ async function voiceLines(args: {
   // A TTS clip is keyed by its words and the voice that spoke them. A voice
   // pinned in the cut is known up front, so a fully cached render resolves no
   // provider at all; otherwise the voice is resolved once, here.
-  const spoken = cut.narration.filter((line) => !recorded.has(line));
+  const spoken = lines.filter((line) => !recorded.has(line));
   const ttsClip = (line: CutLine, v: { narrator?: string; name?: string }) =>
-    path.join(
-      cacheDir,
-      `tts-${cacheKey(["tts", v.narrator, v.name ?? "", speed, speechText(line.text)])}.m4a`
-    );
+    path.join(cacheDir, ttsClipName(v, speed, line.text));
   const pinned = cut.voice.narrator ? cut.voice : undefined;
   const cached =
     pinned !== undefined &&
@@ -373,13 +388,13 @@ async function voiceLines(args: {
   if (spoken.length > 0 && !cached) {
     const resolved = await resolveVoice(cut, ffmpeg, notes, echo);
     if ("error" in resolved) {
-      return resolved;
+      return { error: resolved.error, noVoice: true };
     }
     voice = resolved;
   }
   const keyVoice = voice ?? pinned ?? {};
 
-  const jobs: ClipJob[] = cut.narration.map((line) => ({
+  const jobs: ClipJob[] = lines.map((line) => ({
     line,
     ...(recorded.get(line) ?? { clip: ttsClip(line, keyVoice) }),
   }));
@@ -412,6 +427,9 @@ async function voiceLines(args: {
 // A clip the cache made: `tts-<key>.m4a` or `rec-<key>.m4a`, plus whatever an
 // interrupted encode left beside one (`….m4a.part.m4a`, `….m4a.raw.wav`).
 const CACHE_CLIP = /^(?:tts|rec)-[0-9a-f]{16}\.m4a(?:\..+)?$/;
+
+// A finished clip in cut/, the only files the editor serves from there.
+export const FINISHED_CLIP = /^(?:tts|rec)-[0-9a-f]{16}\.m4a$/;
 
 // The files in cut/ a prune removes: clips the cache made that no line uses
 // any more. Anything else in the folder is someone else's — a voice line
@@ -451,6 +469,57 @@ async function pinVoice(
     ...(voice.name ? { name: voice.name } : {}),
   };
   await writeCut(sessionId, cut);
+}
+
+export interface VoicedCutLine {
+  durationSec: number;
+  // The clip, relative to the session directory: "cut/tts-….m4a".
+  file: string;
+  line: CutLine;
+}
+
+// Voice some of a cut's lines ahead of a render (`dailies cut edit`'s "Voice
+// this line"): the render's own cache, cache keys and voice resolution, and
+// the first voice resolved is pinned into cut.json exactly as the first
+// render pins it. `cut` is the cut on disk and `lines` are some of its
+// narration. Nothing is pruned — a clip the cut stops using goes at the next
+// render. The caller keeps cut.json from changing while this runs, since the
+// pin writes `cut` back.
+export async function voiceCutLines(args: {
+  sessionId: string;
+  cut: Cut;
+  lines: CutLine[];
+  dir: string;
+  ffmpeg: string;
+  echo: Echo;
+  progress: (message: string) => void;
+}): Promise<
+  | { voiced: VoicedCutLine[]; notes: string[] }
+  | { error: string; noVoice?: boolean }
+> {
+  const { sessionId, cut, lines, dir, ffmpeg, echo, progress } = args;
+  const notes: string[] = [];
+  const voicing = await voiceLines({
+    cut,
+    lines,
+    dir,
+    ffmpeg,
+    notes,
+    echo,
+    progress,
+  });
+  if ("error" in voicing) {
+    return voicing;
+  }
+  await pinVoice(sessionId, cut, voicing.voice);
+  return {
+    notes,
+    voiced: voicing.voiced.map((v) => ({
+      line: v.line,
+      file: `${CUT_CACHE_DIR}/${path.basename(v.m4aPath)}`,
+      durationSec: v.durationSec,
+    })),
+  };
 }
 
 export interface CutSource {
@@ -694,7 +763,7 @@ export async function renderCutVideo(args: {
 
   const voicing = await voiceLines({ cut, dir, ffmpeg, notes, echo, progress });
   if ("error" in voicing) {
-    return voicing;
+    return { error: voicing.error };
   }
 
   const { placed, overrunSec } = layoutLines({

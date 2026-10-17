@@ -28,6 +28,7 @@ import type {
   EditorSession,
   RenderStatus,
   UploadRecordingResponse,
+  VoiceLineResponse,
 } from "./contract.js";
 import {
   allowedHosts,
@@ -217,13 +218,15 @@ describe.skipIf(!ffmpeg)("editor server", () => {
       headers?: Record<string, string | number>;
       body?: Buffer | string;
       api?: boolean;
+      // Another editor server than the suite's.
+      port?: number;
     } = {}
   ): Promise<Reply> {
     return new Promise((resolve, reject) => {
       const req = request(
         {
           host: "127.0.0.1",
-          port,
+          port: opts.port ?? port,
           path: pathname,
           method: opts.method ?? "GET",
           headers: {
@@ -792,4 +795,220 @@ describe.skipIf(!ffmpeg)("editor server", () => {
       false
     );
   }, 60_000);
+  describe("voicing a line ahead of a render", () => {
+    // Every narrator a render could find, cleared so the say command below is
+    // the only voice — and no test reaches a hosted provider.
+    const VOICE_ENV = [
+      "DAILIES_SAY_COMMAND",
+      "DAILIES_SAY_VOICE",
+      "DAILIES_NARRATOR",
+      "DAILIES_OMLX_URL",
+      "DAILIES_OMLX_API_KEY",
+      "ELEVENLABS_API_KEY",
+      "GEMINI_API_KEY",
+      "GOOGLE_GENAI_API_KEY",
+      "GOOGLE_APPLICATION_CREDENTIALS",
+    ];
+    const before = new Map(VOICE_ENV.map((k) => [k, process.env[k]]));
+    let clip: VoiceLineResponse;
+
+    const voice = (index: unknown) =>
+      call("/api/voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ index }),
+      });
+    const current = async () =>
+      (await call("/api/session")).json<EditorSession>().cut;
+
+    beforeAll(async () => {
+      for (const key of VOICE_ENV) {
+        delete process.env[key];
+      }
+      // A say-compatible command (speech.ts runSayCommand: the words as its
+      // argument, the file to write in $DAILIES_SAY_OUTPUT) that ignores the
+      // words and writes 1.5s of tone — slowly enough that a test can act
+      // while a line is being voiced.
+      const say = path.join(home, "fake-say.sh");
+      await writeFile(
+        say,
+        `#!/bin/sh\nsleep 0.5\nexec "${ffmpeg}" -hide_banner -loglevel error -y -f lavfi -i sine=frequency=440:duration=1.5 -f wav "$DAILIES_SAY_OUTPUT"\n`
+      );
+      await chmod(say, 0o755);
+      process.env.DAILIES_SAY_COMMAND = say;
+      const cut = await current();
+      expect(cut.voice).toEqual({});
+      const res = await putCut({
+        ...cut,
+        narration: [
+          { at: 0.5, text: "Open the form" },
+          { at: 1.2, text: "", audio: "recordings/rec-missing.wav" },
+        ],
+      });
+      expect(res.status).toBe(200);
+    });
+
+    afterAll(() => {
+      for (const [key, value] of before) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    });
+
+    it("voices a line into cut/, answers its clip and length, and pins the voice", async () => {
+      const res = await voice(0);
+      expect(res.status, res.body.toString("utf8")).toBe(200);
+      clip = res.json<VoiceLineResponse>();
+      expect(clip.file).toMatch(/^cut\/tts-[0-9a-f]{16}\.m4a$/);
+      expect(clip.durationSec).toBeCloseTo(1.5, 1);
+      expect(clip.text).toBe("Open the form");
+      // The cut had no voice: the voicing resolved one and pinned it, as the
+      // first render does. A say command's line is not a voice name.
+      expect(clip.voice).toEqual({ narrator: "say" });
+      const onDisk = JSON.parse(
+        await readFile(path.join(dir, "cut.json"), "utf8")
+      ) as Cut;
+      expect(onDisk.voice).toEqual({ narrator: "say" });
+      expect(existsSync(path.join(dir, clip.file))).toBe(true);
+      expect(await readdir(path.join(dir, "cut"))).not.toContainEqual(
+        expect.stringMatching(/\.(raw|part)\./)
+      );
+
+      const served = await call(`/${clip.file}`, {
+        headers: { Range: "bytes=0-7" },
+      });
+      expect(served.status).toBe(206);
+      expect(served.headers["content-type"]).toBe("audio/mp4");
+      expect(served.body.subarray(4, 8).toString("latin1")).toBe("ftyp");
+
+      const session = (await call("/api/session")).json<EditorSession>();
+      expect(session.voiced).toEqual([
+        { index: 0, file: clip.file, durationSec: clip.durationSec },
+      ]);
+      // Voicing it again is the cached clip.
+      const again = await voice(0);
+      expect(again.json<VoiceLineResponse>()).toEqual(clip);
+    }, 30_000);
+
+    it("answers 400 for a recorded line, an index the cut doesn't have, and a bad body", async () => {
+      const recorded = await voice(1);
+      expect(recorded.status).toBe(400);
+      expect(recorded.json<{ error: string }>().error).toContain("recorded");
+      const missing = await voice(7);
+      expect(missing.status).toBe(400);
+      expect(missing.json<{ error: string }>().error).toContain(
+        "no narration line 7"
+      );
+      for (const index of [-1, 0.5, "0", null]) {
+        expect((await voice(index)).status, String(index)).toBe(400);
+      }
+      const notJson = await call("/api/voice", { method: "POST", body: "{" });
+      expect(notJson.status).toBe(400);
+    });
+
+    it("refuses a save, a render and a second voicing while a line is voiced", async () => {
+      const edited = {
+        ...(await current()),
+        narration: [
+          { at: 0.5, text: "Fill in the form" },
+          { at: 1.2, text: "Open the form" },
+        ],
+      };
+      expect((await putCut(edited)).status).toBe(200);
+      const voicing = voice(0);
+      // The same cut again until the server refuses it: a save that lands
+      // first writes what is already there.
+      let save = await putCut(edited);
+      for (let i = 0; i < 200 && save.status === 200; i++) {
+        save = await putCut(edited);
+      }
+      expect(save.status).toBe(409);
+      expect(save.json<{ error: string }>().error).toContain("being voiced");
+      const render = await call("/api/render", { method: "POST" });
+      expect(render.status).toBe(409);
+      expect(render.json<{ error: string }>().error).toContain("being voiced");
+      const second = await voice(1);
+      expect(second.status).toBe(409);
+      const done = await voicing;
+      expect(done.status).toBe(200);
+      expect(done.json<VoiceLineResponse>().text).toBe("Fill in the form");
+      expect((await putCut(edited)).status).toBe(200);
+    }, 30_000);
+
+    it("answers 409 while a render runs", async () => {
+      const started = await call("/api/render", { method: "POST" });
+      expect(started.status).toBe(202);
+      const res = await voice(0);
+      expect(res.status).toBe(409);
+      expect(res.json<{ error: string }>().error).toContain("render");
+      let status = started.json<RenderStatus>();
+      for (let i = 0; i < 300 && status.state === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        status = (await call("/api/render")).json<RenderStatus>();
+      }
+      expect(status.error).toBeUndefined();
+      expect(status.state).toBe("done");
+    }, 60_000);
+
+    it("answers 503 when no narrator is available", async () => {
+      const cut = await current();
+      expect(
+        (
+          await putCut({
+            ...cut,
+            voice: { narrator: "elevenlabs" },
+            narration: [{ at: 0.5, text: "Nobody can say this" }],
+          })
+        ).status
+      ).toBe(200);
+      const res = await voice(0);
+      expect(res.status).toBe(503);
+      expect(res.json<{ error: string }>().error).toContain("elevenlabs");
+      expect((await putCut(cut)).status).toBe(200);
+    }, 30_000);
+
+    it("serves only finished clips from cut/", async () => {
+      await writeFile(path.join(dir, "cut", "notes.txt"), "mine");
+      await writeFile(
+        path.join(dir, "cut", "tts-0123456789abcdef.m4a.part.m4a"),
+        "half"
+      );
+      // Files the render's cache didn't make, or hasn't finished.
+      for (const name of [
+        "notes.txt",
+        "line1.m4a",
+        "tts-0123456789abcdef.m4a.part.m4a",
+      ]) {
+        expect((await call(`/cut/${name}`)).status, name).toBe(404);
+      }
+      expect((await call("/cut/..%2fcut.json")).status).toBe(400);
+      expect((await call(`/${clip.file}`)).status).toBe(200);
+    });
+
+    it("lists the voiced lines again after a restart", async () => {
+      const fresh = await startEditorServer({ sessionId: SESSION });
+      try {
+        const res = await call("/api/session", {
+          port: Number(new URL(fresh.url).port),
+        });
+        const session = res.json<EditorSession>();
+        expect(session.cut.voice).toEqual({ narrator: "say" });
+        expect(session.cut.narration.map((l) => l.text)).toEqual([
+          "Fill in the form",
+          "Open the form",
+        ]);
+        expect(session.voiced.map((v) => v.index)).toEqual([0, 1]);
+        expect(session.voiced[1]).toEqual({
+          index: 1,
+          file: clip.file,
+          durationSec: clip.durationSec,
+        });
+      } finally {
+        await fresh.close();
+      }
+    });
+  });
 });
