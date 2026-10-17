@@ -940,15 +940,19 @@ class Editor {
     }
     let result: Awaited<ReturnType<typeof voiceCutLines>>;
     try {
-      result = await voiceCutLines({
-        sessionId: this.sessionId,
-        cut,
-        lines: [line],
-        dir: this.dir,
-        ffmpeg: this.source.ffmpeg,
-        echo: () => undefined,
-        progress: () => undefined,
-      });
+      // In its own process group like a render, so the Ctrl-C that stops the
+      // editor doesn't cut the say command or ffmpeg off mid-clip.
+      result = await inOwnProcessGroups(() =>
+        voiceCutLines({
+          sessionId: this.sessionId,
+          cut,
+          lines: [line],
+          dir: this.dir,
+          ffmpeg: this.source.ffmpeg,
+          echo: () => undefined,
+          progress: () => undefined,
+        })
+      );
     } catch (err) {
       // The voice itself failed: the provider, or the say command.
       logger.warn({ err, sessionId: this.sessionId, index }, "voicing failed");

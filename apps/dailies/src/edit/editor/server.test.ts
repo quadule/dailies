@@ -804,6 +804,9 @@ describe.skipIf(!ffmpeg)("editor server", () => {
       "DAILIES_NARRATOR",
       "DAILIES_OMLX_URL",
       "DAILIES_OMLX_API_KEY",
+      "DAILIES_PIPER",
+      "DAILIES_PIPER_VOICE",
+      "DAILIES_PIPER_VOICES",
       "ELEVENLABS_API_KEY",
       "GEMINI_API_KEY",
       "GOOGLE_GENAI_API_KEY",
@@ -825,6 +828,14 @@ describe.skipIf(!ffmpeg)("editor server", () => {
       for (const key of VOICE_ENV) {
         delete process.env[key];
       }
+      // The local narrators are found on this machine, not in the
+      // environment: Piper from its binary on PATH plus the voices installed
+      // under /usr/share, oMLX from a server on localhost. An empty voices
+      // folder and a port nothing listens on keep both out of the test.
+      const noVoices = path.join(home, "no-piper-voices");
+      await mkdir(noVoices, { recursive: true });
+      process.env.DAILIES_PIPER_VOICES = noVoices;
+      process.env.DAILIES_OMLX_URL = "http://127.0.0.1:1";
       // A say-compatible command (speech.ts runSayCommand: the words as its
       // argument, the file to write in $DAILIES_SAY_OUTPUT) that ignores the
       // words and writes 1.5s of tone — slowly enough that a test can act
