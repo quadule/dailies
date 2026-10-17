@@ -30,6 +30,7 @@ import type {
   UploadRecordingResponse,
 } from "./contract.js";
 import {
+  allowedHosts,
   BodyTooLarge,
   byteLimit,
   type EditorServer,
@@ -94,6 +95,21 @@ describe("recordingExtension", () => {
     expect(recordingExtension("audio/x-wav")).toBe("wav");
     expect(recordingExtension("video/webm")).toBeUndefined();
     expect(recordingExtension(undefined)).toBeUndefined();
+  });
+});
+
+describe("allowedHosts", () => {
+  it("names the port on every host", () => {
+    expect(allowedHosts(4323)).toEqual(
+      new Set(["127.0.0.1:4323", "localhost:4323"])
+    );
+  });
+
+  it("takes the bare names on port 80, where a browser leaves the port off", () => {
+    expect(allowedHosts(80)).toEqual(
+      new Set(["127.0.0.1:80", "localhost:80", "127.0.0.1", "localhost"])
+    );
+    expect(allowedHosts(8080).has("localhost")).toBe(false);
   });
 });
 

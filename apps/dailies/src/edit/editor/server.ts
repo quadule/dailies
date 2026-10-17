@@ -9,7 +9,8 @@
 // `dailies cut render` writes.
 //
 // Security for a tool on localhost: requests must name 127.0.0.1:<port> or
-// localhost:<port> as their Host (a DNS-rebinding page names its own host),
+// localhost:<port> as their Host (a DNS-rebinding page names its own host;
+// on port 80 a browser leaves the port off, so the bare names count too),
 // every /api/* request must carry X-Dailies-Editor: 1 (a cross-site page can't
 // set a custom header without a preflight), and preflights are refused. File
 // routes take a bare file name and must resolve inside the session directory.
@@ -203,6 +204,16 @@ export function namedFile(
   const file = path.join(dir, sub, name);
   const rel = path.relative(dir, file);
   return rel.startsWith("..") || path.isAbsolute(rel) ? undefined : file;
+}
+
+// The Host headers the server answers to on `port`. A browser leaves the
+// default port off, so on port 80 the bare names are what it sends.
+export function allowedHosts(port: number): Set<string> {
+  const names = ["127.0.0.1", "localhost"];
+  return new Set([
+    ...names.map((name) => `${name}:${port}`),
+    ...(port === 80 ? names : []),
+  ]);
 }
 
 // A request body that went past its limit.
@@ -459,7 +470,7 @@ export async function startEditorServer(args: {
 
 class Editor {
   private readonly dir: string;
-  private readonly hosts = new Set<string>();
+  private hosts = new Set<string>();
   private readonly durations = new Map<
     string,
     { key: string; durationSec: number | undefined }
@@ -477,8 +488,7 @@ class Editor {
   }
 
   allowHosts(port: number): void {
-    this.hosts.add(`127.0.0.1:${port}`);
-    this.hosts.add(`localhost:${port}`);
+    this.hosts = allowedHosts(port);
   }
 
   rendering(): boolean {
@@ -490,7 +500,7 @@ class Editor {
   }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (!this.hosts.has(req.headers.host ?? "")) {
+    if (!this.hosts.has((req.headers.host ?? "").toLowerCase())) {
       sendText(res, 403, "Forbidden: this editor only answers to localhost");
       return;
     }
