@@ -68,7 +68,9 @@ export function parseDurationFromStderr(stderr: string): number | undefined {
 
 // Measure an audio clip's duration in seconds: ffprobe if present, else the
 // ffmpeg `-i` stderr Duration line (mirrors condense relying on ffmpeg for
-// timing when a dedicated probe isn't available).
+// timing when a dedicated probe isn't available). A file written as a live
+// stream — a browser's MediaRecorder webm — carries no duration in its header
+// ("Duration: N/A"), so that one is decoded to find its end.
 export async function audioDurationSec(
   ffmpeg: string,
   filePath: string
@@ -77,21 +79,48 @@ export async function audioDurationSec(
   if (duration !== undefined) {
     return duration;
   }
+  const stderr = await ffmpegStderr(ffmpeg, ["-hide_banner", "-i", filePath]);
+  const parsed = parseDurationFromStderr(stderr);
+  if (parsed !== undefined || !/Duration:\s*N\/A/.test(stderr)) {
+    return parsed;
+  }
+  return parseLastTime(
+    await ffmpegStderr(ffmpeg, [
+      "-hide_banner",
+      "-i",
+      filePath,
+      "-map",
+      "0:a:0",
+      "-f",
+      "null",
+      "-",
+    ])
+  );
+}
+
+// ffmpeg's stderr, whether or not it exited cleanly: `ffmpeg -i` with no
+// output exits non-zero but still prints what it read.
+async function ffmpegStderr(ffmpeg: string, args: string[]): Promise<string> {
   try {
-    const { stderr } = await run(
-      ffmpeg,
-      ["-hide_banner", "-i", filePath],
-      PROBE_TIMEOUT_MS
-    );
-    return parseDurationFromStderr(stderr);
+    return (await run(ffmpeg, args, PROBE_TIMEOUT_MS)).stderr;
   } catch (err) {
-    // `ffmpeg -i` with no output exits non-zero but still prints Duration.
     if (err instanceof Error && "stderr" in err) {
-      const stderr = (err as { stderr?: string }).stderr ?? "";
-      return parseDurationFromStderr(stderr);
+      return (err as { stderr?: string }).stderr ?? "";
     }
+    return "";
+  }
+}
+
+// The last "time=HH:MM:SS.ms" progress mark a decode printed: where it ended.
+function parseLastTime(stderr: string): number | undefined {
+  const marks = [...stderr.matchAll(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/g)];
+  const last = marks.at(-1);
+  if (!last) {
     return;
   }
+  const seconds =
+    Number(last[1]) * 3600 + Number(last[2]) * 60 + Number(last[3]);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
 }
 
 // ffprobe normally sits beside ffmpeg with the same name suffix.

@@ -85,6 +85,30 @@ describe("audioDurationSec", () => {
     ]);
   });
 
+  it("decodes a live-recorded file whose header has no duration", async () => {
+    respondsWith({ stdout: "N/A\n" });
+    respondsWith({
+      stderr: "Input #0, matroska,webm:\n  Duration: N/A, start: 0.000000\n",
+      code: 1,
+    });
+    respondsWith({
+      stderr:
+        "size=N/A time=00:00:00.96 bitrate=N/A\rsize=N/A time=00:00:01.50 bitrate=N/A speed= 599x\n",
+    });
+
+    await expect(audioDurationSec("ffmpeg", "rec.webm")).resolves.toBe(1.5);
+    expect(vi.mocked(run).mock.calls[2]?.[1]).toEqual([
+      "-hide_banner",
+      "-i",
+      "rec.webm",
+      "-map",
+      "0:a:0",
+      "-f",
+      "null",
+      "-",
+    ]);
+  });
+
   it("returns unavailable when neither probe reports a duration", async () => {
     respondsWith({ code: 1 });
     respondsWith({ stderr: "invalid media", code: 1 });
