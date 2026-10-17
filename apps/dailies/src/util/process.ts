@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { type ChildProcess, spawn } from "node:child_process";
 import { formatCommand } from "./shell.js";
 
 export const VERSION_PROBE_TIMEOUT_MS = 10_000;
@@ -8,11 +9,68 @@ export type Echo = (line: string) => void;
 
 export interface RunOptions {
   echo?: Echo;
+  // The child's environment; this process's when omitted.
+  env?: NodeJS.ProcessEnv;
   // Omitted input gives the child immediate EOF. Supplied input is written in
   // full and then closed, including when it is an explicitly empty string.
   input?: string | Uint8Array;
   // Limit each output stream independently, in bytes rather than characters.
   maxBuffer?: number;
+  // Start the child in a process group of its own (POSIX only). Defaults to
+  // true inside inOwnProcessGroups(), false elsewhere.
+  ownProcessGroup?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Process groups. A Ctrl-C at a terminal is delivered to every process in the
+// foreground process group — this one and every child it spawned — so a child
+// that must outlive a Ctrl-C this process handles (`dailies cut edit` lets a
+// render finish) has to be in a group of its own. Such a child would also
+// outlive this process if it exited first, so each one is killed, with its
+// group, when this process exits.
+// ---------------------------------------------------------------------------
+
+const ownGroups = new AsyncLocalStorage<boolean>();
+const grouped = new Set<ChildProcess>();
+let exitHook = false;
+
+// Run `task` with every child it starts through run() in a process group of
+// its own. (execFile can't do this: it doesn't pass `detached` to spawn.)
+export function inOwnProcessGroups<T>(task: () => Promise<T>): Promise<T> {
+  return ownGroups.run(true, task);
+}
+
+function wantsOwnGroup(explicit?: boolean): boolean {
+  return (
+    process.platform !== "win32" && (explicit ?? ownGroups.getStore() === true)
+  );
+}
+
+// Kill the child's group if this process exits while it still runs.
+function watchGroup(child: ChildProcess): void {
+  if (!child.pid) {
+    // It never started; its spawn error reaches the caller.
+    return;
+  }
+  grouped.add(child);
+  child.once("exit", () => grouped.delete(child));
+  if (!exitHook) {
+    exitHook = true;
+    process.on("exit", killProcessGroups);
+  }
+}
+
+// Kill every child started in a group of its own that is still running, and
+// everything in its group. Synchronous, so it can run as the process exits.
+export function killProcessGroups(): void {
+  for (const child of grouped) {
+    try {
+      process.kill(-(child.pid as number), "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+  grouped.clear();
 }
 
 export interface ProcessOutput {
@@ -92,10 +150,16 @@ export async function run(
     throw new RangeError("maxBuffer must be a non-negative integer");
   }
   options.echo?.(`$ ${formatCommand(cmd, args)}`);
+  const ownGroup = wantsOwnGroup(options.ownProcessGroup);
   return await new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      ...(options.env ? { env: options.env } : {}),
+      ...(ownGroup ? { detached: true } : {}),
     });
+    if (ownGroup) {
+      watchGroup(child);
+    }
     const stdout = outputBuffer(maxBuffer);
     const stderr = outputBuffer(maxBuffer);
     let settled = false;

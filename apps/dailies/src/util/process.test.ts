@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  inOwnProcessGroups,
   isOnPath,
+  killProcessGroups,
   mapLimit,
   ProcessError,
   type ProcessOutput,
@@ -187,6 +191,67 @@ describe("run", () => {
     expect(error.reason).toBe("spawn");
     expect(error.cause).toMatchObject({ code: "ENOENT" });
     expect(error.message).toContain("ENOENT");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("process groups", () => {
+  // The shell's pid and its process group.
+  async function pidAndGroup(
+    options?: Parameters<typeof run>[3]
+  ): Promise<{ pid: number; pgid: number }> {
+    const { stdout } = await run(
+      "/bin/sh",
+      ["-c", "echo $$ $(ps -o pgid= -p $$)"],
+      5000,
+      options
+    );
+    const [pid = 0, pgid = 0] = stdout.trim().split(/\s+/).map(Number);
+    expect(pid).toBeGreaterThan(0);
+    return { pid, pgid };
+  }
+
+  it("starts a child in this process's group by default", async () => {
+    const { pid, pgid } = await pidAndGroup();
+    expect(pgid).not.toBe(pid);
+  });
+
+  it("gives every child started inside inOwnProcessGroups a group of its own", async () => {
+    const { pid, pgid } = await inOwnProcessGroups(() => pidAndGroup());
+    expect(pgid).toBe(pid);
+    // The scope ends with the task.
+    const after = await pidAndGroup();
+    expect(after.pgid).not.toBe(after.pid);
+  });
+
+  it("takes the option explicitly too", async () => {
+    const own = await pidAndGroup({ ownProcessGroup: true });
+    expect(own.pgid).toBe(own.pid);
+    const shared = await inOwnProcessGroups(() =>
+      pidAndGroup({ ownProcessGroup: false })
+    );
+    expect(shared.pgid).not.toBe(shared.pid);
+  });
+
+  it("kills a child in its own group that outlives the caller's interest", async () => {
+    const ready = path.join(tmpdir(), `dailies-group-${randomUUID()}`);
+    const pending = inOwnProcessGroups(() =>
+      run(
+        node,
+        [
+          "-e",
+          `require("node:fs").writeFileSync(${JSON.stringify(ready)}, ""); setInterval(() => {}, 1000);`,
+        ],
+        10_000
+      )
+    ).catch((err: unknown) => err);
+    await vi.waitFor(() => expect(existsSync(ready)).toBe(true), {
+      timeout: 5000,
+    });
+    killProcessGroups();
+    const error = await pending;
+    expect(error).toBeInstanceOf(ProcessError);
+    expect((error as ProcessError).signal).toBe("SIGKILL");
+    await rm(ready, { force: true });
   });
 });
 

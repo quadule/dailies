@@ -3,13 +3,9 @@
 // a TTS provider) that renderClip drives. `SpeechSynth`/`speechText`/
 // `resolveSpeech` are used by narrate's clip rendering, so they're exported.
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { type Echo, run, VERSION_PROBE_TIMEOUT_MS } from "../util/process.js";
 import { shellQuote } from "../util/shell.js";
 import type { MediaProviders } from "./providers.js";
-
-const execFileAsync = promisify(execFile);
 
 // A parsed `say -v '?'` entry. `full` is the exact string to pass to `say -v`,
 // INCLUDING any "(Premium)"/"(Enhanced)" suffix — passing the bare name selects
@@ -230,9 +226,7 @@ async function runSayCommand(
   echo?.(
     `$ DAILIES_SAY_OUTPUT=${shellQuote(outPath)} ${command} ${shellQuote(text)}`
   );
-  await execFileAsync("/bin/sh", ["-c", `${command} "$@"`, "sh", text], {
-    timeout: SAY_TIMEOUT_MS,
-    maxBuffer: 64 * 1024 * 1024,
+  await run("/bin/sh", ["-c", `${command} "$@"`, "sh", text], SAY_TIMEOUT_MS, {
     env: { ...process.env, DAILIES_SAY_OUTPUT: outPath },
   });
 }

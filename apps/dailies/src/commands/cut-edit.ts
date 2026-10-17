@@ -4,6 +4,11 @@ import { openInOSDefault } from "../util/open.js";
 // `dailies cut edit <id>`: serve the browser editor for a session on
 // 127.0.0.1 until Ctrl-C. The URL goes to stdout (one line, or JSON with
 // --json) so a script can pick it up; everything else goes to stderr.
+//
+// A Ctrl-C during a render lets the render finish: the editor starts the
+// render's processes (ffmpeg, a say command) in process groups of their own,
+// so the terminal's SIGINT reaches only this process. A second Ctrl-C quits
+// at once, and exiting kills those processes (util/process.ts).
 export async function cutEdit(args: {
   sessionId: string;
   port?: number;
@@ -29,23 +34,46 @@ export async function cutEdit(args: {
   if (args.open) {
     openInOSDefault(editor.url);
   }
+  // A closed terminal quits without waiting for anything; exiting (rather
+  // than dying of the signal) is what kills a render's processes.
+  process.once("SIGHUP", () => process.exit(129));
 
-  await new Promise<void>((resolve) => {
+  const waited = await new Promise<boolean>((resolve) => {
     const stop = () => {
       process.off("SIGINT", stop);
       process.off("SIGTERM", stop);
-      if (editor.rendering()) {
-        // A second Ctrl-C quits now; the render's partial file is left behind.
+      const rendering = editor.rendering();
+      if (rendering) {
         process.stderr.write(
           "Finishing the render first — press Ctrl-C again to quit now\n"
         );
-        process.once("SIGINT", () => process.exit(130));
+        // Exiting kills the render's processes; its partial output and the
+        // captions it already wrote are left until the next render.
+        const quit = () => {
+          process.stderr.write(
+            `Render interrupted — \`dailies cut render ${sessionId}\` renders the cut again\n`
+          );
+          process.exit(130);
+        };
+        process.once("SIGINT", quit);
+        process.once("SIGTERM", quit);
       }
-      resolve();
+      resolve(rendering);
     };
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
   });
   await editor.close();
-  return 0;
+  if (!waited) {
+    return 0;
+  }
+  const status = editor.renderStatus();
+  if (status.state === "done" && status.result) {
+    process.stderr.write(`Rendered ${status.result.videoPath}\n`);
+    return 0;
+  }
+  process.stderr.write(
+    `The render failed: ${status.error ?? "no reason given"}\n`
+  );
+  return 1;
 }

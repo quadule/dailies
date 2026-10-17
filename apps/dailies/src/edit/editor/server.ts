@@ -34,6 +34,7 @@ import {
 } from "dailies-protocol";
 import { logger } from "../../logger.js";
 import { readSessionRecord, type SessionStep } from "../../session/registry.js";
+import { inOwnProcessGroups } from "../../util/process.js";
 import { audioDurationSec } from "../../video/ffmpeg.js";
 import { NARRATOR_CHOICES } from "../../video/media-preferences.js";
 import { captionBandPx, captionFontPx } from "../../video/narrate.js";
@@ -109,6 +110,8 @@ export interface EditorServer {
   close(): Promise<void>;
   // True while a render started from the editor is still running.
   rendering(): boolean;
+  // The current or last render, as GET /api/render answers it.
+  renderStatus(): RenderStatus;
   url: string;
 }
 
@@ -457,6 +460,7 @@ export async function startEditorServer(args: {
   return {
     url: `http://127.0.0.1:${port}/`,
     rendering: () => editor.rendering(),
+    renderStatus: () => editor.renderStatus(),
     async close() {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
@@ -493,6 +497,10 @@ class Editor {
 
   rendering(): boolean {
     return this.render.state === "running";
+  }
+
+  renderStatus(): RenderStatus {
+    return this.render;
   }
 
   settled(): Promise<void> {
@@ -762,13 +770,18 @@ class Editor {
       ...(this.render.result ? { result: this.render.result } : {}),
     };
     this.render = status;
-    this.running = renderCut({
-      sessionId: this.sessionId,
-      progress: (message) => status.progress.push(message),
-      echo: () => {
-        // ffmpeg's per-command echo is noise here; failures carry stderr.
-      },
-    }).then(
+    // Its processes get process groups of their own, so a Ctrl-C at the
+    // terminal running `cut edit` doesn't kill them: commands/cut-edit.ts
+    // lets the render finish.
+    this.running = inOwnProcessGroups(() =>
+      renderCut({
+        sessionId: this.sessionId,
+        progress: (message) => status.progress.push(message),
+        echo: () => {
+          // ffmpeg's per-command echo is noise here; failures carry stderr.
+        },
+      })
+    ).then(
       (result: CutRenderResult | { error: string }) => {
         if ("error" in result) {
           status.state = "error";

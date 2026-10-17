@@ -42,6 +42,7 @@ import { execFile } from "node:child_process";
 import { access, rename, rm, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { Logger } from "dailies-logger";
+import { run, VERSION_PROBE_TIMEOUT_MS } from "../util/process.js";
 import { ENCODE_TIMEOUT_MS, VP8_ENCODE_ARGS } from "./ffmpeg.js";
 import {
   mergeWindows,
@@ -412,7 +413,9 @@ export async function findFfmpeg(): Promise<string | undefined> {
   }
   try {
     const probe = process.platform === "win32" ? "where" : "which";
-    const { stdout } = await execFileAsync(probe, ["ffmpeg"]);
+    // run(), not execFile: inside `cut edit`'s render it starts the probe in
+    // a process group of its own, like every other process a render starts.
+    const { stdout } = await run(probe, ["ffmpeg"], VERSION_PROBE_TIMEOUT_MS);
     const found = stdout.split(/\r?\n/)[0]?.trim();
     if (found) {
       return found;
