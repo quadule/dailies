@@ -108,7 +108,9 @@ slot degrades with a note, never a silent swap.
 
 Every recording also keeps an edit file, `cut.json`, with its captions, step positions and
 speed-ups. Edit it (or ask your agent to) and `dailies cut render <id>` rebuilds the video, or run
-`dailies cut edit <id>` to work on the cut in a browser editor served from your machine.
+`dailies cut edit <id>` to work on the cut in a browser editor served from your machine: a
+timeline of captions, narration, cuts, speed-ups and holds with a live preview, so you see an edit
+before you render it.
 
 Run `dailies session end --help` for every flag and every provider's environment variables, or see
 [Voices, music and title art](https://github.com/quadule/dailies#voices-music-and-title-art) in the
@@ -124,7 +126,7 @@ main README.
 | `dailies run [FILE]` | Run a script (a file, or stdin if omitted) as one step. Requires `--session <id>`; label it with `--step <name>`; bound it with `--timeout <seconds>`; mark setup or a detour with `--skim` so the video fast-forwards it. `--peek` reads the live page without recording a step. |
 | `dailies session end <id>` | Stop recording, collect artifacts, render `report.html` + `results.json`. Declare the outcome with `--pass` / `--fail [reason]` (otherwise it's the per-step tally); add evidence with `--attach <file>` and numbers with `--metric name=value` (both repeatable); `--video <page>` picks which recording to finish when the run drove several pages, `--open` opens the report, `--stop-daemon` shuts the daemon down afterward if nothing else needs it. Cut a film with `--cinematic` / `--song` / `--prompt <text>`, pinning slots with `--narrator` / `--music` / `--image <provider>`. |
 | `dailies cut render <id>` | Rebuild a session's video and report from its `cut.json` (captions, cuts, holds, speed-ups, voice-over) and print where every edit landed. |
-| `dailies cut edit <id>` | Edit the cut in your browser: serves a local editor on 127.0.0.1 and opens it, until Ctrl-C. `--port <n>` picks the port, `--no-open` just prints the URL. |
+| `dailies cut edit <id>` | Edit the cut in your browser — a timeline with a live preview of cuts, holds, speed-ups, captions and narration, then save and render — served on 127.0.0.1 until Ctrl-C. `--port <n>` picks the port, `--no-open` just prints the URL. |
 | `dailies session abort <id>` | Best-effort teardown of a session — salvage a wedged run from whatever artifacts survived. |
 | `dailies session list` | List recorded sessions (table; `--json` for machine output). |
 | `dailies session url <id>` | Print the session's current page URL — read-only, records nothing. Use it between steps to check where you actually landed. |

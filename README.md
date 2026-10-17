@@ -480,9 +480,18 @@ by something else. `dailies session end --help` lists every provider's variables
 seeded with the run's captions, step positions and speed-ups. Change a caption, cut a stretch,
 hold on a frame, play setup at 4x, add a voice-over, then `dailies cut render <id>` rebuilds the
 video and the report from the clean recording, so edits never pile up or drift. Ask your agent and
-it edits the file for you. To do it yourself, `dailies cut edit <id>` opens the cut in a browser
-editor served from your own machine (127.0.0.1 only) until you press Ctrl-C; `--no-open` prints
-its URL instead of opening it.
+it edits the file for you.
+
+To do it yourself, `dailies cut edit <id>` opens the cut in a browser editor served from your own
+machine (127.0.0.1 only) until you press Ctrl-C; `--no-open` prints its URL instead of opening it.
+The editor previews your edits live, without rendering: it plays the recording with cut footage
+skipped, holds frozen, speed-ups sped up, and the captions and recorded lines where the render
+will put them, with a clock for the source and one for the finished video. On its timeline you
+drag and resize captions, cuts, speed-ups and holds (they snap to frames), place narration lines,
+and double-click a caption to retype it; mark an in and an out point (I and O) to cut or speed up
+the stretch between them. A narration line can use your own recording from an audio file. Save
+writes `cut.json` (Ctrl/⌘ S, with the parser's message shown if the cut can't be saved), undo
+covers every edit, and Render rebuilds the video and lets you watch the result in place.
 
 ## One CLI, one runtime
 

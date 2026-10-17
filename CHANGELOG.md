@@ -70,10 +70,22 @@
 ### Added
 
 - **`dailies cut edit <id>`** serves a browser editor for a finished recording from a local server
-  (127.0.0.1 only) and opens it, until Ctrl-C. This first version plays the clean recording, lists
-  its steps, captions and narration, and saves and renders the cut; the server's API (session,
-  cut, render, voice recordings, ranged media) is documented in `AGENTS.md` for the full editor
-  that follows. `--port <n>` picks the port and `--no-open` just prints the URL.
+  (127.0.0.1 only) and opens it, until Ctrl-C. `--port <n>` picks the port and `--no-open` just
+  prints the URL.
+  - **A live preview.** The stage plays the clean recording as the render will cut it — removed
+    footage skipped, holds frozen, speed-ups sped up, captions in a band like the burned one,
+    recorded lines voiced where they land — with a source clock and a video clock side by side.
+    "Rendered video" swaps in the last render to check the real thing.
+  - **A timeline** of steps (with screenshots), captions, narration and timing edits: drag to move,
+    drag an edge to resize, snapped to frames; arrow keys nudge a frame or a second; double-click a
+    caption to retype it. In and out points (I and O) make a cut or a speed-up.
+  - **An inspector** for the selected item's times (typed as seconds or m:ss.s, or set to the
+    playhead), caption text, a line's text and caption, its recording (play, replace from a file,
+    remove), a speed-up's rate and a hold's length; plus the voice (narrator, voice name, speed).
+  - Save (Ctrl/⌘ S) is held back while the cut doesn't parse, with the parser's message shown;
+    the model's warnings (a line running into the next, a caption inside cut footage) show as
+    hints. Undo and redo cover every edit, Render saves first and follows the render's progress,
+    and closing the tab with unsaved changes asks first.
 - **`run --peek`** reads a session's live page without recording a step: snapshots and reads
   work, while clicks, typing, navigation, tabs, captions and effects are refused.
 - **`run --skim` and cut speed-ups.** `cut.json` takes `speedups` (`{ start, end, rate }`). The

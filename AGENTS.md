@@ -240,17 +240,52 @@ recording, no `cut.json`, no ffmpeg — and, like a render, copies the video to 
 - `contract.ts` — the request and response types plus the shared constants. Imported by the
   server and the client, so it stays browser-safe.
 - `page.ts` — the HTML shell; the client renders everything into `#app`.
-- `client/main.ts` + `client/style.css` — the browser client. `scripts/embed-editor.mjs` bundles
-  it with esbuild (iife, platform browser, es2022, unminified) and writes the gitignored
-  `client.generated.ts` (`EDITOR_CLIENT_JS`, `EDITOR_CLIENT_CSS`). It is the CLI's `prebuild`,
-  run before `build`, `compile`, `test`, `dev` and `prepack`. The CLI's tsconfig includes the DOM
-  libs for it.
-- The client imports the cut model straight from `edit/cut.ts` so a preview computes output
-  times exactly as the render will (the placeholder uses `planCut` and `mapTime`; `outputCaptions`
-  and `layoutLines` are there for a caption and narration preview). That makes `cut.ts` and
-  everything it imports (`video/segments.ts`, `video/media-preferences.ts`) browser code: no
-  Node imports, nothing Node-only at module scope. The browser-platform bundle fails the build on
-  a Node import.
+- `client/` — the browser client, vanilla TypeScript and DOM, no framework.
+  `scripts/embed-editor.mjs` bundles `client/main.ts` with esbuild (iife, platform browser,
+  es2022, unminified) and writes the gitignored `client.generated.ts` (`EDITOR_CLIENT_JS`,
+  `EDITOR_CLIENT_CSS` from `client/style.css`). It is the CLI's `prebuild`, run before `build`,
+  `compile`, `test`, `dev` and `prepack`, so a client change needs a rebuild (and a restarted
+  `cut edit`) to show. The CLI's tsconfig includes the DOM libs for it.
+  - `main.ts` boots and lays out the page: the top bar (Undo/Redo, Save, Render and its latest
+    progress message, the report's path), the validation line, then wires the views and the
+    keyboard shortcuts and owns saving and rendering.
+  - `state.ts` (DOM-free) holds the cut, the selection, the in/out marks and the undo history
+    (JSON snapshots; a drag or a field's focus-to-blur is one step via `begin()`/`end()`).
+    "Unsaved" compares `formatCut` output, so a change that rounds away isn't one.
+  - `preview.ts` (DOM-free) is the analysis and the playback engine; `stage.ts` applies it to
+    the `<video>`/`<audio>` elements. `timeline.ts`, `inspector.ts` are the other views;
+    `format.ts` (DOM-free) formats, parses and frame-snaps times; `api.ts` is the typed fetch
+    layer; `dom.ts` has the element builder, icons and a keyed list that updates elements in
+    place (so a drag's pointer capture and a focused field survive a re-render).
+  - `recorder.ts` holds `attachRecording(blob, atSec, lineIndex?)` — upload to `/api/recordings`,
+    then set the line's `audio` or add a line — and `recordingControls`, whose elements the
+    inspector shows in a narration line's audio box. Today that is a file picker; microphone
+    capture goes here and ends in `attachRecording` the same way.
+  - The pure modules have vitest tests beside them (`format.test.ts`, `preview.test.ts`,
+    `state.test.ts`). They run under node, so nothing in them may touch the DOM at import time.
+- The client imports the cut model straight from `edit/cut.ts` (and the burn's `wrapCaption`
+  from `video/srt.ts`), so the editor computes output times, captions and line placement exactly
+  as the render will. That makes `cut.ts` and everything it imports (`video/segments.ts`,
+  `video/media-preferences.ts`) browser code: no Node imports, nothing Node-only at module scope.
+  The browser-platform bundle fails the build on a Node import. Constants the render and the
+  preview share live in `cut.ts` (`TAIL_PAD_SEC`), not in `render.ts`.
+- **The preview** (`preview.ts`) never renders. `analyze` does what `renderCutVideo` does —
+  `planCut`, `layoutLines` (line durations: the recording's, else the last render's
+  `result.lines` by text, else 2.6 words a second), `extendTail` for an overrunning last line,
+  then `outputCaptions` — and adds `parseCut`'s error and caption-length hints. The engine's
+  `tick(model, state, { now, since, dt })` is called every animation frame while the preview
+  plays and answers play (at what rate), hold (pause on the frame, the output clock runs on
+  wall time), skip (seek to the next kept frame) or end; `previewModel(plan)` derives the gaps,
+  holds and fast stretches from the plan's pieces. The output clock is `mapTime` plus the
+  elapsed part of a hold. Recorded lines start when the output clock crosses their place. With
+  "Rendered video" on the stage plays `session.video.url` and maps its time back with
+  `sourceTime` (the inverse of `mapTime` over `plan.pieces`), the tail fitted to the video's real
+  length. Every time the editor stores is source time, snapped to frames.
+- **QA handle.** `window.dailiesEditor` is `{ getCut, setCut, addRecording, save, render, seek }`
+  (`addRecording` is `attachRecording`; `save` and `render` resolve when the request answers;
+  `seek` takes source seconds). The stage's clocks carry `data-clock="source"` and
+  `data-clock="output"`, and `.stage[data-holding]` says whether a hold is playing — drive it
+  with `dailies exec` scripts, never another browser tool.
 - Recordings live in the session's `recordings/` (`rec-<UTC timestamp>.<ext>`), never in `cut/`
   or `video/`: the artifact scanner (`packages/runtime/src/artifacts.ts`) doesn't read it, and
   the render's cache prune removes only its own `tts-*` / `rec-*` clips from `cut/`.
