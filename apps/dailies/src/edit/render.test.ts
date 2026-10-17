@@ -1,10 +1,64 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   narratorOf,
   singlePassArgs,
   staleCacheFiles,
   voiceFromLabel,
+  withPinnedVoice,
 } from "./render.js";
+
+describe("withPinnedVoice", () => {
+  const key = "DAILIES_TTS_VOICE";
+  const original = process.env[key];
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = original;
+    }
+  });
+
+  it("sets the voice for the resolve only, then unsets it", async () => {
+    delete process.env[key];
+    const seen = await withPinnedVoice(
+      { narrator: "gemini", name: "Charon" },
+      async () => process.env[key]
+    );
+    expect(seen).toBe("Charon");
+    expect(key in process.env).toBe(false);
+  });
+
+  it("puts back a voice the environment already had, even after a failure", async () => {
+    process.env[key] = "Puck";
+    await expect(
+      withPinnedVoice({ narrator: "gemini", name: "Charon" }, () =>
+        Promise.reject(new Error("no provider"))
+      )
+    ).rejects.toThrow("no provider");
+    expect(process.env[key]).toBe("Puck");
+  });
+
+  it("leaves the environment alone for a cut that names no voice", async () => {
+    process.env[key] = "Puck";
+    const seen = await withPinnedVoice(
+      { narrator: "gemini" },
+      async () => process.env[key]
+    );
+    expect(seen).toBe("Puck");
+    // A later render whose cut dropped the name doesn't hear an earlier one.
+    delete process.env[key];
+    await withPinnedVoice(
+      { narrator: "gemini", name: "Charon" },
+      async () => undefined
+    );
+    expect(
+      await withPinnedVoice(
+        { narrator: "gemini" },
+        async () => process.env[key]
+      )
+    ).toBeUndefined();
+  });
+});
 
 describe("narratorOf", () => {
   it("maps a TTS provider id to the narrator a cut names", () => {

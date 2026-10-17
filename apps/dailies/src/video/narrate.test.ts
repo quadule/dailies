@@ -629,6 +629,29 @@ describe("customSaySynth", () => {
       rmSync(out, { force: true });
     }
   });
+
+  it("hands the command the $DAILIES_SAY_VOICE set when it was made", async () => {
+    // A render pins a cut's voice in the environment only while it resolves
+    // the voice (edit/render.ts withPinnedVoice); the lines are said later.
+    const before = process.env.DAILIES_SAY_VOICE;
+    process.env.DAILIES_SAY_VOICE = "Ava (Premium)";
+    const synth = customSaySynth(
+      // The trailing # drops the text the synth appends.
+      'printf "%s" "$DAILIES_SAY_VOICE" > "$DAILIES_SAY_OUTPUT" #'
+    );
+    if (before === undefined) {
+      delete process.env.DAILIES_SAY_VOICE;
+    } else {
+      process.env.DAILIES_SAY_VOICE = before;
+    }
+    const out = path.join(os.tmpdir(), `dailies-sayvoice-${process.pid}.txt`);
+    try {
+      await synth.run("hello", out);
+      expect(readFileSync(out, "utf8")).toBe("Ava (Premium)");
+    } finally {
+      rmSync(out, { force: true });
+    }
+  });
 });
 
 describe("voiceCredit", () => {

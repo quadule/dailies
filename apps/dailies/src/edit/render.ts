@@ -62,6 +62,7 @@ import {
   type Cut,
   type CutLine,
   type CutPlan,
+  type CutVoice,
   cutVideoFilter,
   extendTail,
   layoutLines,
@@ -117,20 +118,56 @@ interface Voice {
   synth: SpeechSynth;
 }
 
+// Run `resolve` with the voice a cut names set in its narrator's environment
+// variable, and put the variable back afterwards (unset when it was). Only for
+// the resolve: every provider reads its voice when it is made, and a render in
+// a long-lived process (`cut edit`) must not leave the voice behind for the
+// next one, whose cut may name another voice or none. Exported for tests.
+export async function withPinnedVoice<T>(
+  voice: CutVoice,
+  resolve: () => Promise<T>
+): Promise<T> {
+  const { narrator, name } = voice;
+  if (!(narrator && name)) {
+    return await resolve();
+  }
+  const key = VOICE_ENV[narrator];
+  const before = process.env[key];
+  process.env[key] = name;
+  try {
+    return await resolve();
+  } finally {
+    if (before === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = before;
+    }
+  }
+}
+
 // Resolve who voices the TTS lines. A voice named in the cut is pinned through
-// that narrator's own environment variable, so the provider code that picks a
-// voice is the same one the cinematic pass uses. No silent fallback to a second
-// voice: half a video in one voice and half in another is worse than an error.
-async function resolveVoice(
+// that narrator's own environment variable (withPinnedVoice), so the provider
+// code that picks a voice is the same one the cinematic pass uses. No silent
+// fallback to a second voice: half a video in one voice and half in another is
+// worse than an error.
+function resolveVoice(
   cut: Cut,
   ffmpeg: string,
   notes: string[],
   echo: Echo
 ): Promise<Voice | { error: string }> {
-  const { narrator, name } = cut.voice;
-  if (narrator && name) {
-    process.env[VOICE_ENV[narrator]] = name;
-  }
+  return withPinnedVoice(cut.voice, () =>
+    resolveVoiceNow(cut, ffmpeg, notes, echo)
+  );
+}
+
+async function resolveVoiceNow(
+  cut: Cut,
+  ffmpeg: string,
+  notes: string[],
+  echo: Echo
+): Promise<Voice | { error: string }> {
+  const { narrator } = cut.voice;
   // resolveMedia's notes are about music and title art, which a cut doesn't
   // use; only the voice notes from resolveSpeech below are worth showing.
   const selection = await resolveMedia({

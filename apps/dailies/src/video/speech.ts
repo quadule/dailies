@@ -216,18 +216,24 @@ function saySynth(
 // only argument we append (passed as the positional "$@", never interpolated, so
 // narration can't inject shell). The output path and the voice ride in the
 // environment: $DAILIES_SAY_OUTPUT is where the command must write the audio, and
-// $DAILIES_SAY_VOICE (if the user set it) is inherited for the command to read.
-async function runSayCommand(
-  command: string,
-  text: string,
-  outPath: string,
-  echo?: Echo
-): Promise<void> {
+// $DAILIES_SAY_VOICE (when set) is passed for the command to read.
+async function runSayCommand(args: {
+  command: string;
+  text: string;
+  outPath: string;
+  voice: string | undefined;
+  echo?: Echo;
+}): Promise<void> {
+  const { command, text, outPath, voice, echo } = args;
   echo?.(
     `$ DAILIES_SAY_OUTPUT=${shellQuote(outPath)} ${command} ${shellQuote(text)}`
   );
   await run("/bin/sh", ["-c", `${command} "$@"`, "sh", text], SAY_TIMEOUT_MS, {
-    env: { ...process.env, DAILIES_SAY_OUTPUT: outPath },
+    env: {
+      ...process.env,
+      ...(voice === undefined ? {} : { DAILIES_SAY_VOICE: voice }),
+      DAILIES_SAY_OUTPUT: outPath,
+    },
   });
 }
 
@@ -237,10 +243,15 @@ async function runSayCommand(
 // macOS Personal Voice, e.g. (chmod +x, then point $DAILIES_SAY_COMMAND at it):
 //   exec env DYLD_INSERT_LIBRARIES=…/mysay.dylib \
 //     say -v "$DAILIES_SAY_VOICE" -o "$DAILIES_SAY_OUTPUT" "$1"
+// $DAILIES_SAY_VOICE is read when the synth is made, like every other
+// provider's voice, so a voice a render pins for the resolve alone
+// (edit/render.ts) still reaches the command.
 export function customSaySynth(command: string, echo?: Echo): SpeechSynth {
+  const voice = process.env.DAILIES_SAY_VOICE;
   return {
     ext: "aiff",
-    run: (text, outPath) => runSayCommand(command, text, outPath, echo),
+    run: (text, outPath) =>
+      runSayCommand({ command, text, outPath, voice, echo }),
   };
 }
 
