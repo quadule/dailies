@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -12,6 +13,7 @@ import {
 import { type IncomingHttpHeaders, request } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { sessionStepSlug } from "dailies-protocol";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -28,6 +30,8 @@ import type {
   UploadRecordingResponse,
 } from "./contract.js";
 import {
+  BodyTooLarge,
+  byteLimit,
   type EditorServer,
   editorSteps,
   namedFile,
@@ -90,6 +94,26 @@ describe("recordingExtension", () => {
     expect(recordingExtension("audio/x-wav")).toBe("wav");
     expect(recordingExtension("video/webm")).toBeUndefined();
     expect(recordingExtension(undefined)).toBeUndefined();
+  });
+});
+
+describe("byteLimit", () => {
+  async function drain(chunks: string[], limit: number): Promise<string> {
+    let out = "";
+    for await (const chunk of byteLimit(limit)(
+      Readable.from(chunks.map((c) => Buffer.from(c)))
+    )) {
+      out += chunk.toString("utf8");
+    }
+    return out;
+  }
+
+  it("passes a body up to the limit through", async () => {
+    expect(await drain(["abc", "de"], 5)).toBe("abcde");
+  });
+
+  it("fails once the body passes the limit", async () => {
+    await expect(drain(["abc", "def"], 5)).rejects.toBeInstanceOf(BodyTooLarge);
   });
 });
 
@@ -207,6 +231,55 @@ describe.skipIf(!ffmpeg)("editor server", () => {
       );
       req.on("error", reject);
       req.end(opts.body);
+    });
+  }
+
+  // POST a recording in pieces, `gapMs` apart, the way a slow connection
+  // sends one. Resolves with the status as soon as the answer arrives, which
+  // may be before the whole body went out.
+  function trickle(
+    pieces: Buffer[],
+    gapMs: number
+  ): Promise<{ status: number; body: string }> {
+    return new Promise((resolve, reject) => {
+      const req = request(
+        {
+          host: "127.0.0.1",
+          port,
+          path: "/api/recordings",
+          method: "POST",
+          headers: { "X-Dailies-Editor": "1", "Content-Type": "audio/wav" },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () =>
+            resolve({
+              status: res.statusCode ?? 0,
+              body: Buffer.concat(chunks).toString("utf8"),
+            })
+          );
+        }
+      );
+      // The server drops the connection after answering mid-upload.
+      req.on("error", reject);
+      let answered = false;
+      req.once("response", () => {
+        answered = true;
+        req.off("error", reject);
+        req.on("error", () => undefined);
+      });
+      const send = async () => {
+        for (const piece of pieces) {
+          if (answered) {
+            return;
+          }
+          req.write(piece);
+          await new Promise((r) => setTimeout(r, gapMs));
+        }
+        req.end();
+      };
+      send().catch(reject);
     });
   }
 
@@ -587,6 +660,34 @@ describe.skipIf(!ffmpeg)("editor server", () => {
     const left = await readdir(path.join(dir, "recordings")).catch(() => []);
     expect(left).toEqual([]);
   });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "answers 500 and stays up when it can't write a recording",
+    async () => {
+      const recordings = path.join(dir, "recordings");
+      await mkdir(recordings, { recursive: true });
+      await chmod(recordings, 0o555);
+      try {
+        // A body in one go, and one trickling in over a slow connection.
+        const fast = await call("/api/recordings", {
+          method: "POST",
+          headers: { "Content-Type": "audio/wav" },
+          body: Buffer.alloc(3 * 1024 * 1024, 1),
+        });
+        expect(fast.status).toBe(500);
+        expect(fast.json<{ error: string }>().error).toContain("EACCES");
+        const slow = await trickle(
+          Array.from({ length: 20 }, () => Buffer.alloc(64 * 1024, 1)),
+          10
+        );
+        expect(slow.status).toBe(500);
+        expect((await call("/api/session")).status).toBe(200);
+      } finally {
+        await chmod(recordings, 0o755);
+      }
+      expect(await readdir(recordings)).toEqual([]);
+    }
+  );
 
   it("won't delete a recording a narration line uses, or a path", async () => {
     const wav = await sine(path.join(home, "used.wav"), 1);

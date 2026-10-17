@@ -15,7 +15,6 @@
 // routes take a bare file name and must resolve inside the session directory.
 // AGENTS.md ("Editing in the browser") documents the full HTTP contract.
 
-import { once } from "node:events";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { mkdir, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import {
@@ -200,6 +199,26 @@ export function namedFile(
   return rel.startsWith("..") || path.isAbsolute(rel) ? undefined : file;
 }
 
+// A request body that went past its limit.
+export class BodyTooLarge extends Error {}
+
+// A pipeline stage that passes a body through until it has carried more than
+// `limit` bytes, then fails with BodyTooLarge.
+export function byteLimit(
+  limit: number
+): (chunks: AsyncIterable<Buffer>) => AsyncGenerator<Buffer> {
+  return async function* limited(chunks) {
+    let total = 0;
+    for await (const chunk of chunks) {
+      total += chunk.length;
+      if (total > limit) {
+        throw new BodyTooLarge(`the body is over ${limit} bytes`);
+      }
+      yield chunk;
+    }
+  };
+}
+
 // The extension a recording upload is saved with, from its Content-Type.
 export function recordingExtension(
   contentType: string | undefined
@@ -250,11 +269,16 @@ function sendText(res: ServerResponse, status: number, text: string): void {
   );
 }
 
-// Refuse a body that is too big, then drop the connection once the answer is
-// out rather than reading the rest of it.
-function refuseTooLarge(req: IncomingMessage, res: ServerResponse): void {
+// Drop the connection once the answer is out, rather than read the rest of a
+// body the server stopped reading.
+function closeAfterAnswer(req: IncomingMessage, res: ServerResponse): void {
   res.once("finish", () => req.socket.destroy());
   res.setHeader("Connection", "close");
+}
+
+// Refuse a body that is too big, then drop the connection.
+function refuseTooLarge(req: IncomingMessage, res: ServerResponse): void {
+  closeAfterAnswer(req, res);
   sendError(res, 413, "the request body is too large");
 }
 
@@ -275,6 +299,40 @@ async function readBody(
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks);
+}
+
+// Stream a request body into `file`, through byteLimit. Every failure — the
+// client going away, the disk refusing the file — rejects, and the file is
+// closed before this settles, so the caller can remove it. Resolves with the
+// bytes written, or "too-large" with the body only partly read.
+async function saveBody(
+  req: IncomingMessage,
+  file: string,
+  limit: number
+): Promise<number | "too-large"> {
+  const out = createWriteStream(file);
+  const closed = new Promise<void>((resolve) => {
+    out.once("close", () => resolve());
+  });
+  // pipeline listens for errors only while it runs.
+  out.on("error", () => undefined);
+  try {
+    // Not destroyed when the limit stops the read, so a 413 can still go out.
+    await pipeline(
+      req.iterator({ destroyOnReturn: false }),
+      byteLimit(limit),
+      out
+    );
+    return out.bytesWritten;
+  } catch (err) {
+    if (err instanceof BodyTooLarge) {
+      return "too-large";
+    }
+    throw err;
+  } finally {
+    out.destroy();
+    await closed;
+  }
 }
 
 // Serve a file, honoring a single byte range — <video> and <audio> seek by
@@ -763,24 +821,16 @@ class Editor {
     await mkdir(dir, { recursive: true });
     // Dot-prefixed, so a half-written upload is never listed or served.
     const partial = path.join(dir, `.upload-${process.pid}-${Date.now()}.part`);
-    let total = 0;
     try {
-      const out = createWriteStream(partial);
+      let total: number | "too-large";
       try {
-        for await (const chunk of req.iterator({ destroyOnReturn: false })) {
-          total += (chunk as Buffer).length;
-          if (total > MAX_RECORDING_BYTES) {
-            break;
-          }
-          if (!out.write(chunk)) {
-            await once(out, "drain");
-          }
-        }
-      } finally {
-        out.end();
-        await once(out, "close");
+        total = await saveBody(req, partial, MAX_RECORDING_BYTES);
+      } catch (err) {
+        // Answered 500 by the request handler, possibly mid-upload.
+        closeAfterAnswer(req, res);
+        throw err;
       }
-      if (total > MAX_RECORDING_BYTES) {
+      if (total === "too-large") {
         refuseTooLarge(req, res);
         return;
       }
