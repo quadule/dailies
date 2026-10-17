@@ -15,15 +15,15 @@
 // Rendering (ffmpeg, TTS) lives in render.ts.
 
 import {
+  NARRATOR_CHOICES,
+  type NarratorChoice,
+} from "../video/media-preferences.js";
+import {
   mergeWindows,
   type Segment,
   selectTree,
   subtractSpans,
-} from "../video/condense.js";
-import {
-  NARRATOR_CHOICES,
-  type NarratorChoice,
-} from "../video/media-preferences.js";
+} from "../video/segments.js";
 
 export const CUT_FILE = "cut.json";
 export const CUT_VERSION = 1;

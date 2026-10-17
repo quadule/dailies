@@ -36,7 +36,6 @@ import {
   findFfmpeg,
   keptSeconds,
   remapToCondensed,
-  type Segment,
 } from "../video/condense.js";
 import { probeDurationSec, probeVideo } from "../video/ffmpeg.js";
 import type { MediaPreferences } from "../video/media-preferences.js";
@@ -45,6 +44,7 @@ import {
   cinematicProcess,
   precinematicVideoPath,
 } from "../video/narrate.js";
+import type { Segment } from "../video/segments.js";
 import { stopDaemonIfIdle } from "./daemon-stop.js";
 
 interface SessionEndOpts {

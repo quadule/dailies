@@ -43,6 +43,12 @@ import { access, rename, rm, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { Logger } from "dailies-logger";
 import { ENCODE_TIMEOUT_MS, VP8_ENCODE_ARGS } from "./ffmpeg.js";
+import {
+  mergeWindows,
+  type Segment,
+  selectTree,
+  subtractSpans,
+} from "./segments.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -126,34 +132,10 @@ const MIN_SAVINGS_SEC = 1;
 // the cap before its middle is cut.
 const MIN_CUT_SEC = 0.25;
 
-// Join `select` terms into one expression as a balanced tree of `+`.
-//
-// ffmpeg's expression parser has a nesting budget, and a flat `a+b+c+…` spends
-// it once per term: past ~100 terms it fails with "Error while parsing
-// expression" / "Cannot allocate memory" and the encode aborts. A balanced tree
-// nests only log2(n) deep — measured, 2,000 terms parse and run in one pass. So
-// a long session's hundreds of kept segments are one decode of the source, not
-// one per batch of 50 plus a concat. Pure → unit-tested.
-export function selectTree(terms: string[]): string {
-  if (terms.length === 0) {
-    return "0";
-  }
-  if (terms.length === 1) {
-    return terms[0] as string;
-  }
-  const mid = Math.floor(terms.length / 2);
-  return `(${selectTree(terms.slice(0, mid))}+${selectTree(terms.slice(mid))})`;
-}
-
 // The motion pass decodes every frame and runs signalstats over it, so it is
 // far heavier than the freezedetect pass it replaced (~3s per minute of
 // 1440x900 video, measured) — generous enough for a long session.
 const ANALYZE_TIMEOUT_MS = 300_000;
-
-export interface Segment {
-  end: number;
-  start: number;
-}
 
 // One analysed frame: its presentation time and the fraction of the picture
 // (0-1) that changed between it and the frame before it.
@@ -481,65 +463,9 @@ async function runMotionPass(
   return stdout;
 }
 
-// Clamp each window to [0, durationSec], drop empties, and merge overlapping or
-// touching windows into a sorted, disjoint keep list.
-export function mergeWindows(
-  windows: Segment[],
-  durationSec: number
-): Segment[] {
-  const clamped = windows
-    .map((w) => ({
-      start: Math.max(0, Math.min(w.start, durationSec)),
-      end: Math.max(0, Math.min(w.end, durationSec)),
-    }))
-    .filter((w) => w.end > w.start)
-    .sort((a, b) => a.start - b.start);
-  const merged: Segment[] = [];
-  for (const w of clamped) {
-    const last = merged.at(-1);
-    if (last && w.start <= last.end) {
-      last.end = Math.max(last.end, w.end);
-    } else {
-      merged.push({ ...w });
-    }
-  }
-  return merged;
-}
-
 // Subtract detected still spans from interaction-aware keep windows so that
 // dead waits inside a step (e.g. a 30-second login response within one action)
 // are trimmed even when the caller supplies explicit keepWindows.
-// Remove `remove` from `spans`, splitting a span in two when a removal falls in
-// its middle. Pure → unit-tested.
-export function subtractSpans(spans: Segment[], remove: Segment[]): Segment[] {
-  const result: Segment[] = [];
-  for (const span of spans) {
-    let parts: Segment[] = [{ start: span.start, end: span.end }];
-    for (const cut of remove) {
-      const cs = Math.max(cut.start, span.start);
-      const ce = Math.min(cut.end, span.end);
-      if (ce <= cs) {
-        continue;
-      }
-      parts = parts.flatMap((seg) => {
-        if (ce <= seg.start || cs >= seg.end) {
-          return [seg];
-        }
-        const out: Segment[] = [];
-        if (seg.start < cs) {
-          out.push({ start: seg.start, end: cs });
-        }
-        if (seg.end > ce) {
-          out.push({ start: ce, end: seg.end });
-        }
-        return out;
-      });
-    }
-    result.push(...parts);
-  }
-  return result.filter((s) => s.end > s.start);
-}
-
 export function subtractStillsFromWindows(
   keeps: Segment[],
   stills: Segment[],
