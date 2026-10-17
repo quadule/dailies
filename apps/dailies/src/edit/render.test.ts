@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { narratorOf, singlePassArgs, voiceFromLabel } from "./render.js";
+import {
+  narratorOf,
+  singlePassArgs,
+  staleCacheFiles,
+  voiceFromLabel,
+} from "./render.js";
 
 describe("narratorOf", () => {
   it("maps a TTS provider id to the narrator a cut names", () => {
@@ -69,5 +74,38 @@ describe("singlePassArgs", () => {
     const args = singlePassArgs({ ...base, burn }) as string[];
     expect(args).toContain("-an");
     expect(args).not.toContain("[aout]");
+  });
+});
+
+describe("staleCacheFiles", () => {
+  const used = new Set(["tts-0123456789abcdef.m4a"]);
+
+  it("removes the cache's own clips that no line uses", () => {
+    expect(
+      staleCacheFiles(
+        [
+          "tts-0123456789abcdef.m4a",
+          "tts-fedcba9876543210.m4a",
+          "rec-00112233445566ff.m4a",
+          "tts-fedcba9876543210.m4a.part.m4a",
+          "tts-fedcba9876543210.m4a.raw.wav",
+        ],
+        used
+      )
+    ).toEqual([
+      "tts-fedcba9876543210.m4a",
+      "rec-00112233445566ff.m4a",
+      "tts-fedcba9876543210.m4a.part.m4a",
+      "tts-fedcba9876543210.m4a.raw.wav",
+    ]);
+  });
+
+  it("keeps files it didn't make, like a voice line recorded into cut/", () => {
+    expect(
+      staleCacheFiles(
+        ["line1.m4a", "take-2.webm", "notes.txt", "tts-short.m4a"],
+        used
+      )
+    ).toEqual([]);
   });
 });

@@ -375,14 +375,26 @@ async function voiceLines(args: {
   };
 }
 
+// A clip the cache made: `tts-<key>.m4a` or `rec-<key>.m4a`, plus whatever an
+// interrupted encode left beside one (`….m4a.part.m4a`, `….m4a.raw.wav`).
+const CACHE_CLIP = /^(?:tts|rec)-[0-9a-f]{16}\.m4a(?:\..+)?$/;
+
+// The files in cut/ a prune removes: clips the cache made that no line uses
+// any more. Anything else in the folder is someone else's — a voice line
+// recorded straight into cut/ must survive, or the next render can't find it.
+// Pure → unit-tested.
+export function staleCacheFiles(names: string[], used: Set<string>): string[] {
+  return names.filter((name) => CACHE_CLIP.test(name) && !used.has(name));
+}
+
 // Delete cached clips no line uses any more, so the cache tracks the cut.
 async function pruneCache(dir: string, used: Set<string>): Promise<void> {
   const cacheDir = path.join(dir, CUT_CACHE_DIR);
   const names = await readdir(cacheDir).catch(() => [] as string[]);
   await Promise.all(
-    names
-      .filter((name) => !used.has(name))
-      .map((name) => rm(path.join(cacheDir, name), { force: true }))
+    staleCacheFiles(names, used).map((name) =>
+      rm(path.join(cacheDir, name), { force: true })
+    )
   );
 }
 

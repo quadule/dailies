@@ -18,8 +18,8 @@ positions. Change it, then run `{{cli}} cut render <id>` to rebuild the video an
 - `narration`: `{ "at", "text" }` — a spoken line starting at `at`, voiced by text-to-speech.
   While it plays its text is shown as the caption; add `"caption": "…"` to show different text,
   or `"caption": ""` to show none. To use a recorded voice instead of TTS, add
-  `"audio": "<file>"` (a path relative to the session directory, e.g. `cut/line1.m4a`); `text`
-  is then what the line says, for the caption.
+  `"audio": "<file>"` (a path relative to the session directory, e.g. `recordings/line1.m4a`);
+  `text` is then what the line says, for the caption.
 - `voice`: `{ "narrator", "name", "speed" }` — who reads the TTS lines (`say`, `omlx`,
   `elevenlabs` or `gemini`), which of their voices, and a pace from 0.5 to 2. Left empty, the
   first render picks a voice and writes it back here, so later renders keep sounding the same.
