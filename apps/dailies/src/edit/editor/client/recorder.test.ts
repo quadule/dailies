@@ -355,6 +355,41 @@ describe("MicCapture", () => {
     expect(micProblem(err)).toBe("unsupported");
   });
 
+  it("asks once while the browser is still asking", async () => {
+    const stream = fakeStream();
+    let grant: (s: MediaStream) => void = () => undefined;
+    const getUserMedia = vi.fn(
+      () =>
+        new Promise<MediaStream>((resolve) => {
+          grant = resolve;
+        })
+    );
+    const capture = new MicCapture({ getUserMedia });
+    const first = capture.open();
+    const second = capture.open();
+    grant(stream);
+    expect(await first).toBe(stream);
+    expect(await second).toBe(stream);
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a microphone that arrives after it was abandoned", async () => {
+    const stream = fakeStream();
+    let grant: (s: MediaStream) => void = () => undefined;
+    const capture = new MicCapture({
+      getUserMedia: () =>
+        new Promise<MediaStream>((resolve) => {
+          grant = resolve;
+        }),
+    });
+    const opened = capture.open().catch((err: unknown) => err);
+    capture.abandon();
+    grant(stream);
+    expect(await opened).toMatchObject({ name: "AbortError" });
+    expect(stream.tracks[0]?.readyState).toBe("ended");
+    expect(capture.current).toBeUndefined();
+  });
+
   it("lets go of the microphone", async () => {
     const stream = fakeStream();
     const capture = new MicCapture({ getUserMedia: async () => stream });
@@ -368,7 +403,7 @@ describe("MicCapture", () => {
 // ----- the state machine -----
 
 function harness(getUserMedia: () => Promise<MediaStream>) {
-  const { Recorder } = fakeRecorderClass();
+  const { Recorder, made } = fakeRecorderClass();
   const calls: string[] = [];
   const attached: { blob: Blob; target: RecordTarget }[] = [];
   const phases: string[] = [];
@@ -392,7 +427,7 @@ function harness(getUserMedia: () => Promise<MediaStream>) {
     new MicCapture({ getUserMedia, MediaRecorder: Recorder }),
     hooks
   );
-  return { rec, calls, attached, phases };
+  return { rec, calls, attached, phases, made };
 }
 
 describe("NarrationRecorder", () => {
@@ -469,6 +504,47 @@ describe("NarrationRecorder", () => {
     expect(calls).toEqual([]);
     await rec.start({ at: 1 });
     expect(rec.problem?.where).toBe("new");
+  });
+
+  it("records with the one microphone after R, Esc, R while the browser asks", async () => {
+    const stream = fakeStream();
+    let grant: (s: MediaStream) => void = () => undefined;
+    const getUserMedia = vi.fn(
+      () =>
+        new Promise<MediaStream>((resolve) => {
+          grant = resolve;
+        })
+    );
+    const { rec, calls, made } = harness(getUserMedia);
+    const first = rec.start({ at: 1 });
+    expect(rec.cancel()).toBe(true);
+    const second = rec.start({ at: 2 });
+    grant(stream);
+    await Promise.all([first, second]);
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(rec.phase).toBe("recording");
+    expect(calls).toEqual(["play 2"]);
+    expect(made).toHaveLength(1);
+    expect((made[0] as unknown as { stream: MediaStream }).stream).toBe(stream);
+    expect(stream.tracks[0]?.readyState).toBe("live");
+  });
+
+  it("stops the microphone when it arrives after Esc", async () => {
+    const stream = fakeStream();
+    let grant: (s: MediaStream) => void = () => undefined;
+    const { rec } = harness(
+      () =>
+        new Promise<MediaStream>((resolve) => {
+          grant = resolve;
+        })
+    );
+    const started = rec.start({ at: 1 });
+    rec.cancel();
+    grant(stream);
+    await started;
+    expect(rec.phase).toBe("idle");
+    expect(rec.stream).toBeUndefined();
+    expect(stream.tracks[0]?.readyState).toBe("ended");
   });
 
   it("ignores a second start while busy", async () => {

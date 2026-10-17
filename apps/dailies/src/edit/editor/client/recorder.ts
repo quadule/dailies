@@ -277,6 +277,17 @@ class MicUnavailable extends Error {
   override readonly name = "NotSupportedError";
 }
 
+// The microphone arrived after nobody wanted it any more.
+class MicAbandoned extends Error {
+  override readonly name = "AbortError";
+}
+
+function stopTracks(stream: MediaStream | undefined): void {
+  for (const track of stream?.getTracks() ?? []) {
+    track.stop();
+  }
+}
+
 function browserGetUserMedia(
   constraints: MediaStreamConstraints
 ): Promise<MediaStream> {
@@ -307,7 +318,11 @@ export class MicCapture {
   ) => Promise<MediaStream>;
   private readonly recorderClass: () => MediaRecorderClass | undefined;
   private recorder: MediaRecorderLike | undefined;
+  // The getUserMedia call in flight, shared by every open() while it is.
+  private request: Promise<MediaStream> | undefined;
   private stream: MediaStream | undefined;
+  // abandon() was called while a request was in flight.
+  private unwanted = false;
 
   constructor(deps: CaptureDeps = {}) {
     this.getUserMedia = deps.getUserMedia ?? browserGetUserMedia;
@@ -321,16 +336,47 @@ export class MicCapture {
   }
 
   // The microphone, asked for once and kept for later recordings (asked for
-  // again only if its track ended, as when the device is unplugged).
-  async open(): Promise<MediaStream> {
+  // again only if its track ended, as when the device is unplugged). While
+  // the browser is still asking — R, Esc, R with the prompt up — every
+  // open() waits on the same request, so no second stream is opened and lost.
+  open(): Promise<MediaStream> {
     const live = this.stream
       ?.getAudioTracks()
       .some((track) => track.readyState === "live");
     if (this.stream && live) {
-      return this.stream;
+      return Promise.resolve(this.stream);
     }
-    this.stream = await this.getUserMedia({ audio: true });
-    return this.stream;
+    this.unwanted = false;
+    if (!this.request) {
+      const request = this.ask();
+      this.request = request;
+      const settled = () => {
+        if (this.request === request) {
+          this.request = undefined;
+        }
+      };
+      request.then(settled, settled);
+    }
+    return this.request;
+  }
+
+  private async ask(): Promise<MediaStream> {
+    const stream = await this.getUserMedia({ audio: true });
+    if (this.unwanted) {
+      stopTracks(stream);
+      throw new MicAbandoned("the microphone was no longer wanted");
+    }
+    this.stream = stream;
+    return stream;
+  }
+
+  // Stop waiting for the microphone: a stream that arrives from the request
+  // in flight is stopped at once instead of kept, unless open() asks again
+  // before it does.
+  abandon(): void {
+    if (this.request) {
+      this.unwanted = true;
+    }
   }
 
   // Start recording `stream`; resolves once the recorder has started.
@@ -415,9 +461,8 @@ export class MicCapture {
   // Let go of the microphone (the page is going away).
   release(): void {
     this.discard();
-    for (const track of this.stream?.getTracks() ?? []) {
-      track.stop();
-    }
+    this.abandon();
+    stopTracks(this.stream);
     this.stream = undefined;
   }
 }
@@ -577,6 +622,7 @@ export class NarrationRecorder {
       this.capture.discard();
     } else if (this.phase === "requesting") {
       this.attempt++;
+      this.capture.abandon();
     } else {
       return false;
     }
