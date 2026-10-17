@@ -492,9 +492,13 @@ and double-click a caption to retype it; mark an in and an out point (I and O) t
 the stretch between them. Record narration from your microphone: press R (or Record) and the
 preview plays from the playhead, muted, so you speak over the picture as it will be cut — cuts
 skipped, holds held, speed-ups fast — and the take lands where you started. Re-record a line from
-its start the same way, or use an audio file instead. Save writes `cut.json` (Ctrl/⌘ S, with the
-parser's message shown if the cut can't be saved) and deletes the takes you replaced; undo covers
-every edit, and Render rebuilds the video and lets you watch the result in place.
+its start the same way, or use an audio file instead. A text-to-speech line is silent in the
+preview, its length estimated, until you voice it: Voice this line (or Voice all unvoiced lines)
+makes its clip now through the render's own cache, so the preview plays it at its real length,
+the next render reuses it, and the length is still known next time you open the editor. Save
+writes `cut.json` (Ctrl/⌘ S, with the parser's message shown if the cut can't be saved) and
+deletes the takes you replaced; undo covers every edit, and Render rebuilds the video and lets you
+watch the result in place.
 
 ## One CLI, one runtime
 

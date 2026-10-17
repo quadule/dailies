@@ -92,6 +92,12 @@
     dot, a clock and a level meter show while it records; Stop or R keeps the take, Escape
     throws it away, and the end of the video stops it. A blocked or missing microphone says so
     in place, and attaching a file still works.
+  - **Text-to-speech lines voiced ahead of a render.** Voice this line in a line's inspector, or
+    Voice all unvoiced lines in the Voice panel, makes the clip through the render's own cache
+    (saving first) and pins the voice as the first render would. The preview then plays the line
+    where it lands, the timeline and the hints use its real length, and the length is known
+    again after a restart. Changing the words, the narrator, the voice name or the speed puts the
+    line back to an estimate until it is voiced again; an undo brings the clip back.
   - **Takes you replace don't pile up.** Save deletes the recordings the page uploaded that the
     saved cut no longer uses. If an undo brings one back, its line says the file is gone and
     offers Record or Replace. Recordings no line uses, such as files left from an earlier visit,

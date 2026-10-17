@@ -204,7 +204,9 @@ finalize and a render of the untouched seed are the same video.
 - **Generation is cached, assembly is not.** Voiced lines live in the session's `cut/` folder,
   keyed by text + voice + speed (recordings by file size + mtime); the first render pins the
   resolved voice into `cut.json` so later lines can't come out in a different voice. There is no
-  silent fallback to a second voice. A pinned voice reaches the provider through its narrator's
+  silent fallback to a second voice. `voiceCutLines` voices some lines ahead of a render (the
+  browser editor's "Voice this line") through the same cache, keys (`ttsClipName`) and voice
+  resolution, and pins the first voice it resolves the same way; it prunes nothing. A pinned voice reaches the provider through its narrator's
   environment variable, set only while the voice resolves (`withPinnedVoice`) — every provider,
   a `$DAILIES_SAY_COMMAND` included, reads its voice when it is made — so a later render in the
   same process (`cut edit`) never inherits it.
@@ -249,8 +251,11 @@ sidecar doesn't exist yet.
 - `server.ts` — `startEditorServer({ sessionId, port? })` → `{ url, close(), rendering(),
   renderStatus() }`. It goes through `readCut`/`writeCut` and runs `renderCut` in-process, so a
   save here is the same edit as one made by hand and a render is `dailies cut render`. It writes
-  only `cut.json` and `recordings/` itself. `close()` waits for a render it started, so the
-  render's cleanup runs. An upload streams through `pipeline` (a `byteLimit` stage, then the
+  only `cut.json` and `recordings/` itself; voicing a line (`voiceCutLines`) writes its clip into
+  the render's cache, `cut/`. One voicing runs at a time, and while it does a save and a render
+  are refused, as a save is during a render: both pin a voice into `cut.json`, writing back the
+  cut they started from. `close()` waits for a render or a voicing it started, so its cleanup
+  runs. An upload streams through `pipeline` (a `byteLimit` stage, then the
   file), so a disk that refuses the file is a 500 and the server stays up.
 - `contract.ts` — the request and response types plus the shared constants. Imported by the
   server and the client, so it stays browser-safe.
@@ -263,7 +268,7 @@ sidecar doesn't exist yet.
   `cut edit`) to show. The CLI's tsconfig includes the DOM libs for it.
   - `main.ts` boots and lays out the page: the top bar (Undo/Redo, Save, Render and its latest
     progress message, the report's path), the validation line, then wires the views, the
-    recorder and the keyboard shortcuts and owns saving and rendering.
+    recorder, the voicer and the keyboard shortcuts and owns saving and rendering.
   - `state.ts` (DOM-free) holds the cut, the selection, the in/out marks and the undo history
     (JSON snapshots; a drag or a field's focus-to-blur is one step via `begin()`/`end()`).
     "Unsaved" compares `formatCut` output, so a change that rounds away isn't one. After a
@@ -276,12 +281,22 @@ sidecar doesn't exist yet.
     `format.ts` (DOM-free) formats, parses and frame-snaps times; `api.ts` is the typed fetch
     layer; `dom.ts` has the element builder, icons and a keyed list that updates elements in
     place (so a drag's pointer capture and a focused field survive a re-render).
+  - `voice.ts` voices text-to-speech lines ahead of a render: "Voice this line" in a line's
+    inspector (not voiced yet / voicing / voiced with its length and Play / failed with the
+    server's message), "Voice all unvoiced lines" in the Voice panel (one request after another,
+    each line's state listed; a 503, a 409 or an unsaved cut stops the run), and the QA handle's
+    `voiceLine`. The server voices the cut on disk, so it saves first when the cut is dirty, as
+    Render does, and finds the line again by its place when the save hands back new objects. It
+    keeps `ctx.voiced` (`VoicedClip`: words, voice, file, length): seeded from the session's
+    `voiced`, merged with each answer and the re-fetched session, replaced after a render (which
+    prunes the cache). After a voicing it takes `cut.json` back as after a render (`load`/`setDisk`
+    with `rendered`), so the voice the first voicing pinned survives an undo.
   - `recorder.ts` brings audio into narration lines: `attachRecording(blob, atSec, line?)`
     (upload to `/api/recordings`, then set the line's `audio` or add a line; `line` is an index
     or the line itself), microphone capture, the views (the Record buttons, the file picker, the
     banner over the picture), and deleting recordings. See **Recording narration** below.
   - The pure modules have vitest tests beside them (`format.test.ts`, `preview.test.ts`,
-    `state.test.ts`, `recorder.test.ts`). They run under node, so nothing in them may touch the
+    `state.test.ts`, `recorder.test.ts`, `voice.test.ts`). They run under node, so nothing in them may touch the
     DOM at import time.
 - The client imports the cut model straight from `edit/cut.ts` (and the burn's `wrapCaption`
   from `video/srt.ts`), so the editor computes output times, captions and line placement exactly
@@ -290,9 +305,14 @@ sidecar doesn't exist yet.
   The browser-platform bundle fails the build on a Node import. Constants the render and the
   preview share live in `cut.ts` (`TAIL_PAD_SEC`), not in `render.ts`.
 - **The preview** (`preview.ts`) never renders. `analyze` does what `renderCutVideo` does —
-  `planCut`, `layoutLines` (line durations: the recording's, else the last render's
-  `result.lines` by text, else 2.6 words a second), `extendTail` for an overrunning last line,
-  then `outputCaptions` — and adds `parseCut`'s error and caption-length hints. The engine's
+  `planCut`, `layoutLines`, `extendTail` for an overrunning last line, then `outputCaptions` — and
+  adds `parseCut`'s error and caption-length hints. A line's duration is its recording's length,
+  else its voiced clip's (`voicedClip`), else the last render's `result.lines` by text, else 2.6
+  words a second. A clip applies only to a TTS line with exactly the words it was made from, in
+  the cut's narrator, voice name and speed (no name is "", no speed 1, the render's cache key) and
+  only once a narrator is pinned; nothing is removed from `ctx.voiced` when a line changes, so an
+  edit puts the line back to an estimate and an undo brings the clip back. A voiced line plays its
+  clip (`durations[i].clip`) in the preview exactly as a recorded line plays its file. The engine's
   `tick(model, state, { now, since, dt })` is called every animation frame while the preview
   plays and answers play (at what rate), hold (pause on the frame, the output clock runs on
   wall time), skip (seek to the next kept frame) or end; `previewModel(plan)` derives the gaps,
@@ -357,16 +377,21 @@ sidecar doesn't exist yet.
   is one tab stop (a roving tabindex: the focused item, else the selected one, else the first at
   or after the playhead); ↑/↓ move between a track's items in time order, ←/→ still nudge.
 - **QA handle.** `window.dailiesEditor` is `{ getCut, setCut, addRecording, recording, save,
-  render, seek }` (`addRecording` is `attachRecording`; `recording()` is the recorder's `{ phase,
-  problem? }`, the problem's `where` a narration line's index or `"new"`; `save` and `render`
-  resolve when the request answers, `save` after the orphan deletes; `seek` takes source
-  seconds). The stage's clocks carry `data-clock="source"` and
-  `data-clock="output"`, `.stage[data-holding]` says whether a hold is playing, and
-  `.editor[data-recording]` is the recorder's phase — drive it with `dailies exec` scripts, never
-  another browser tool.
+  render, seek, voiceLine }` (`addRecording` is `attachRecording`; `recording()` is the recorder's
+  `{ phase, problem? }`, the problem's `where` a narration line's index or `"new"`; `save` and
+  `render` resolve when the request answers, `save` after the orphan deletes; `seek` takes source
+  seconds; `voiceLine(index)` saves if needed, voices the line and resolves with the
+  `VoiceLineResponse` or `{ error, status? }`). The stage's clocks carry `data-clock="source"` and
+  `data-clock="output"`, `.stage[data-holding]` says whether a hold is playing, the narration's
+  `<audio>` elements sit in the stage as `audio[data-line=<index>]`, `.editor[data-recording]` is
+  the recorder's phase and `.editor[data-voicing]` whether a line is being voiced, a narration
+  bar's `data-source` is where its length comes from (`recording`, `voiced`, `render`,
+  `estimate`) and `.voice-line[data-state]` is the inspector's voicing state — drive it with
+  `dailies exec` scripts, never another browser tool.
 - Recordings live in the session's `recordings/` (`rec-<UTC timestamp>.<ext>`), never in `cut/`
   or `video/`: the artifact scanner (`packages/runtime/src/artifacts.ts`) doesn't read it, and
-  the render's cache prune removes only its own `tts-*` / `rec-*` clips from `cut/`.
+  the render's cache prune removes only its own `tts-*` / `rec-*` clips from `cut/`. The editor
+  serves only the cache's finished clips from `cut/` (`FINISHED_CLIP`).
 - A browser's MediaRecorder writes webm with no duration in its header; `audioDurationSec`
   decodes such a file to measure it, and believes the decode's last `time=` only when ffmpeg
   exited 0 — one killed for a timeout or an overflow, or interrupted (ffmpeg traps SIGINT and
@@ -389,15 +414,17 @@ All times are SOURCE seconds, as in `cut.json`.
 | Route | Answer |
 | --- | --- |
 | `GET /` | The HTML shell, `Cache-Control: no-store`. `GET /editor.js`, `GET /editor.css`: the bundle and stylesheet. |
-| `GET /api/session` | 200 `EditorSession`: `{ id, name?, cut, source: { durationSec, fps, width, height }, caption: { bandPx, fontPx, lineMax }, steps: [{ name, at, ok, skim?, error?, durationMs, screenshot? }], narrators, video: { url, path }, recordings: [{ file, durationSec }] }`. `steps` come from the session record in order (`at` = `precinematicVideoTime ?? videoTime`, else the same-named `cut.steps` entry by occurrence); a step with no time is left out. `screenshot` is `/screenshots/<sessionStepSlug(name)>.png` when that file exists. `video.url` is `/video.webm?v=<mtimeMs>` and changes after every render; `video.path` is `cut.video`. `recordings` lists `recordings/` files with a known audio extension and a readable duration. 409 if `cut.json` on disk doesn't parse. |
-| `PUT /api/cut` | Body: a `Cut` as JSON (5 MB cap → 413). Parsed with `parseCut`: 400 with the parser's message, or for bad JSON — and again in the `formatCut` form it is written in, so a cut that only parses before its times are rounded to the millisecond (a range shorter than that) is a 400 too, not a file `GET /api/session` then refuses. 400 if `video` differs from the cut on disk (`version` must be 1, the parser's rule). 409 while a render runs (the render pins the voice into `cut.json` when it finishes). Otherwise writes `formatCut` and answers 200 `{ cut }`, normalized as written (times rounded to the millisecond). |
-| `POST /api/render` | Starts `renderCut` in-process; 202 with the `RenderStatus`. 409 if one is running. |
+| `GET /api/session` | 200 `EditorSession`: `{ id, name?, cut, source: { durationSec, fps, width, height }, caption: { bandPx, fontPx, lineMax }, steps: [{ name, at, ok, skim?, error?, durationMs, screenshot? }], narrators, video: { url, path }, recordings: [{ file, durationSec }], voiced: [{ index, file, durationSec }] }`. `steps` come from the session record in order (`at` = `precinematicVideoTime ?? videoTime`, else the same-named `cut.steps` entry by occurrence); a step with no time is left out. `screenshot` is `/screenshots/<sessionStepSlug(name)>.png` when that file exists. `video.url` is `/video.webm?v=<mtimeMs>` and changes after every render; `video.path` is `cut.video`. `recordings` lists `recordings/` files with a known audio extension and a readable duration. `voiced` lists the TTS lines of the cut on disk whose clip is in `cut/` under its pinned voice and speed (`cut/tts-….m4a`, keyed by `ttsClipName`); empty while no narrator is pinned. 409 if `cut.json` on disk doesn't parse. |
+| `PUT /api/cut` | Body: a `Cut` as JSON (5 MB cap → 413). Parsed with `parseCut`: 400 with the parser's message, or for bad JSON — and again in the `formatCut` form it is written in, so a cut that only parses before its times are rounded to the millisecond (a range shorter than that) is a 400 too, not a file `GET /api/session` then refuses. 400 if `video` differs from the cut on disk (`version` must be 1, the parser's rule). 409 while a render runs or a line is being voiced (either pins the voice into `cut.json` when it finishes). Otherwise writes `formatCut` and answers 200 `{ cut }`, normalized as written (times rounded to the millisecond). |
+| `POST /api/render` | Starts `renderCut` in-process; 202 with the `RenderStatus`. 409 if one is running or a line is being voiced. |
+| `POST /api/voice` | Body: `{ "index": n }` (1 KB cap → 413). Voices the TTS line at `cut.narration[n]` of the cut ON DISK through the render's cache (`voiceCutLines`): a cached clip is reused, else the voice is resolved (the pinned one, or a fresh pick that is then pinned into `cut.json`) and the clip made. 200 `{ file: "cut/tts-….m4a", durationSec, text, voice }` — the words it spoke and the cut's voice after the pin, what the clip is keyed by. 400 for a body that isn't `{ index }` with a whole number ≥ 0, an index the cut doesn't have, or a recorded line; 409 while a render runs or another line is being voiced; 503 when no narrator is available (or a pinned one isn't); 500 when the provider or `$DAILIES_SAY_COMMAND` fails. |
 | `GET /api/render` | 200 `RenderStatus`: `{ state: "idle" \| "running" \| "done" \| "error", progress: string[], result?, error? }`. `progress` is the current or last render's messages; `result` is the last successful `CutRenderResult`, kept while the next render runs; `error` is set when `state` is `"error"`. |
 | `POST /api/recordings` | Body: raw audio with `Content-Type` `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/mpeg`, `audio/wav` or `audio/x-wav` (parameters ignored; else 415). Saved as `recordings/rec-<timestamp>.<webm\|ogg\|m4a\|mp3\|wav>`. 201 `{ file: "recordings/rec-….webm", durationSec }`. 413 past 200 MB, 400 when empty, 422 when ffmpeg can't read a duration (the file is removed), 500 when the file can't be written (the partial file is removed and the connection closed). |
 | `DELETE /api/recordings/<name>` | 204. 400 unless `<name>` is a bare file name, 404 if missing, 409 while a narration line's `audio` names it — resolved against the session directory as the render resolves it, so a relative, `./`-prefixed or absolute spelling all count, symlinks followed. |
 | `GET /source.webm` | The clean condensed source every cut time points into. |
 | `GET /video.webm` | The rendered output, `video/<cut.video>`. |
 | `GET /recordings/<name>`, `GET /screenshots/<name>` | Those files. |
+| `GET /cut/<name>` | A finished clip from the render's cache (`tts-<16 hex>.m4a` or `rec-<16 hex>.m4a`); any other name there — a foreign file, a half-made `….part.m4a` — is 404. |
 
 File routes answer `GET` and `HEAD` with `Accept-Ranges: bytes`, a single `Range` (206 +
 `Content-Range`, 416 past the end; a multi-range gets the whole file), `ETag`/`If-None-Match`
